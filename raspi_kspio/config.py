@@ -1,0 +1,31 @@
+# GPIO pin mappings (BCM numbering)
+GLED = 7
+YLED = 6
+RLED = 5
+SASLED = 13
+RCSLED = 12
+CG1LED = 11
+
+SASPIN = 8
+RCSPIN = 9
+CG1PIN = 10
+THROTTLEPIN = 0  # For ADC
+
+THROTTLEDB = 4
+
+# Serial port
+SERIAL_PORT = '/dev/ttyUSB0'
+BAUDRATE = 115200
+
+# Timing
+IDLETIMER = 2000
+CONTROLREFRESH = 25
+
+# Warnings
+GWARN = 9
+GCAUTION = 5
+FUELCAUTION = 50.0
+FUELWARN = 5.0
+
+# Struct sizes
+VESSEL_DATA_SIZE = 200
