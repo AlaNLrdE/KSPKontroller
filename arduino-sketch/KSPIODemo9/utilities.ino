@@ -7,6 +7,15 @@ void Indicators() {
   caution += VData.LiquidFuelS/VData.LiquidFuelTotS*100 < FUELCAUTION;
   warning += VData.LiquidFuelS/VData.LiquidFuelTotS*100 < FUELWARN;
 
+  if (VData.NavballSASMode & 0x01)
+  {
+    digitalWrite(SASLED,HIGH);
+  }
+  else
+  {
+    digitalWrite(SASLED,HIGH);
+  }
+
   if (caution != 0)
     digitalWrite(YLED,HIGH);
   else

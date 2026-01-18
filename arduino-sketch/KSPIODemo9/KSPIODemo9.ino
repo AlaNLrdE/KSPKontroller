@@ -2,12 +2,12 @@
 #define GLED 7
 #define YLED 6
 #define RLED 5
-#define SASLED 13
+#define SASLED 8
 #define RCSLED 12
 #define CG1LED 11
 
 //pins for input
-#define SASPIN 8
+#define SASPIN 2
 #define RCSPIN 9
 #define CG1PIN 10
 #define THROTTLEPIN 0
@@ -120,7 +120,7 @@ struct VesselData {
     float TargetV;          // 54
     uint8_t NavballSASMode; // 55
 };
-#pragma pack(pop)
+
 
 static_assert(sizeof(VesselData) == 200, "VesselData struct size must be 200 bytes, the calculated size is %d");
 
@@ -147,6 +147,8 @@ struct ControlPacket {
   int TZ;                             //-1000 -> 1000
   int Throttle;                       //    0 -> 1000
 };
+
+#pragma pack(pop)
 
 HandShakePacket HPacket;
 VesselData VData;
