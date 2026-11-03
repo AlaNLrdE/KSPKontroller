@@ -1,3 +1,34 @@
+/**
+ * @file KSPIO.cs
+ * @brief KSP plugin that bridges Kerbal Space Program and an external serial controller (Arduino).
+ *
+ * The plugin has three cooperating parts:
+ *  - SettingsNStuff: loads config.xml once, when the main menu is shown.
+ *  - KSPSerialPort: owns the serial port, the packet framing/parsing and the shared packet state.
+ *  - KSPSerialIO: runs inside the flight scene, publishes vessel telemetry and applies the
+ *    controls received from the hardware to the active vessel.
+ *
+ * @par Wire protocol
+ * Every packet, in both directions, has the same framing:
+ * @code
+ * [0xBE][0xEF][size][payload ... size bytes][checksum]
+ * @endcode
+ * The first payload byte is the packet id (see the id constants in KSPSerialPort).
+ * The checksum is @c size XOR-ed with every payload byte. All multi-byte values are
+ * little-endian and the structs below are packed (no padding).
+ *
+ * @par Packet ids
+ *  - 0   HandShakePacket (both directions)
+ *  - 1   VesselData (KSP -> controller)
+ *  - 101 ControlPacket (controller -> KSP)
+ *
+ * @par Threading
+ * Bytes are read on a dedicated worker thread (KSPSerialPort::SerialWorker). Complete, checksum-valid
+ * packets are copied to a shared buffer under a mutex and consumed on Unity's main thread
+ * (KSPSerialPort::Update). The only exception is the handshake, which is processed directly on the
+ * worker thread because it happens during scene load, before Update() ever runs.
+ */
+
 
 using System;
 using System.Collections.Generic;
@@ -16,100 +47,135 @@ using KSP.UI.Screens;
 namespace KSPSerialIO
 {
     #region Structs
+
+    /**
+     * @brief Telemetry sent from KSP to the controller (packet id 1).
+     *
+     * The layout must match the @c VesselData struct in the Arduino sketch byte for byte
+     * (200 bytes, packed).
+     * Fields ending in @c Tot hold the maximum amount of a resource and the matching field
+     * without the suffix holds the current amount. Fields ending in @c S only account for
+     * the resources reachable by the currently active engines (the "stage" view).
+     */
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct VesselData
     {
-        public byte id;             //1
-        public float AP;            //2
-        public float PE;            //3
-        public float SemiMajorAxis; //4
-        public float SemiMinorAxis; //5
-        public float VVI;           //6
-        public float e;             //7
-        public float inc;           //8
-        public float G;             //9
-        public int TAp;             //10
-        public int TPe;             //11
-        public float TrueAnomaly;   //12
-        public float Density;       //13
-        public int period;          //14
-        public float RAlt;          //15
-        public float Alt;           //16
-        public float Vsurf;         //17
-        public float Lat;           //18
-        public float Lon;           //19
-        public float LiquidFuelTot; //20
-        public float LiquidFuel;    //21
-        public float OxidizerTot;   //22
-        public float Oxidizer;      //23
-        public float EChargeTot;    //24
-        public float ECharge;       //25
-        public float MonoPropTot;   //26
-        public float MonoProp;      //27
-        public float IntakeAirTot;  //28
-        public float IntakeAir;     //29
-        public float SolidFuelTot;  //30
-        public float SolidFuel;     //31
-        public float XenonGasTot;   //32
-        public float XenonGas;      //33
-        public float LiquidFuelTotS;//34
-        public float LiquidFuelS;   //35
-        public float OxidizerTotS;  //36
-        public float OxidizerS;     //37
-        public UInt32 MissionTime;  //38
-        public float deltaTime;     //39
-        public float VOrbit;        //40
-        public UInt32 MNTime;       //41
-        public float MNDeltaV;      //42
-        public float Pitch;         //43
-        public float Roll;          //44
-        public float Heading;       //45
-        public UInt16 ActionGroups; //46  status bit order:SAS, RCS, Light, Gear, Brakes, Abort, Custom01 - 10 
-        public byte SOINumber;      //47  SOI Number (decimal format: sun-planet-moon e.g. 130 = kerbin, 131 = mun)
-        public byte MaxOverHeat;    //48  Max part overheat (% percent)
-        public float MachNumber;    //49
-        public float IAS;           //50  Indicated Air Speed
-        public byte CurrentStage;   //51  Current stage number
-        public byte TotalStage;     //52  TotalNumber of stages
-        public float TargetDist;    //53  Distance to targeted vessel (m)
-        public float TargetV;       //54  Target vessel relative velocity (m/s)
-        public byte NavballSASMode; //55  Combined byte for navball target mode and SAS mode
-        // First four bits indicate AutoPilot mode:
-        // 0 SAS is off  //1 = Regular Stability Assist //2 = Prograde
-        // 3 = RetroGrade //4 = Normal //5 = Antinormal //6 = Radial In
-        // 7 = Radial Out //8 = Target //9 = Anti-Target //10 = Maneuver node
-        // Last 4 bits set navball mode. (0=ignore,1=ORBIT,2=SURFACE,3=TARGET)
+        public byte id;             ///< Packet id, always 1
+        public float AP;            ///< Apoapsis altitude (m)
+        public float PE;            ///< Periapsis altitude (m)
+        public float SemiMajorAxis; ///< Orbit semi-major axis (m)
+        public float SemiMinorAxis; ///< Orbit semi-minor axis (m)
+        public float VVI;           ///< Vertical speed (m/s)
+        public float e;             ///< Orbit eccentricity
+        public float inc;           ///< Orbit inclination (deg)
+        public float G;             ///< G-force
+        public int TAp;             ///< Time to apoapsis (s)
+        public int TPe;             ///< Time to periapsis (s)
+        public float TrueAnomaly;   ///< True anomaly (deg)
+        public float Density;       ///< Atmospheric density at the vessel
+        public int period;          ///< Orbital period (s)
+        public float RAlt;          ///< Radar altitude: the lower of altitude above terrain and above sea level (m)
+        public float Alt;           ///< Altitude above sea level (m)
+        public float Vsurf;         ///< Surface speed (m/s)
+        public float Lat;           ///< Latitude (deg)
+        public float Lon;           ///< Longitude (deg)
+        public float LiquidFuelTot; ///< Liquid fuel capacity, whole vessel
+        public float LiquidFuel;    ///< Liquid fuel amount, whole vessel
+        public float OxidizerTot;   ///< Oxidizer capacity, whole vessel
+        public float Oxidizer;      ///< Oxidizer amount, whole vessel
+        public float EChargeTot;    ///< Electric charge capacity
+        public float ECharge;       ///< Electric charge amount
+        public float MonoPropTot;   ///< Monopropellant capacity
+        public float MonoProp;      ///< Monopropellant amount
+        public float IntakeAirTot;  ///< Intake air capacity
+        public float IntakeAir;     ///< Intake air amount
+        public float SolidFuelTot;  ///< Solid fuel capacity
+        public float SolidFuel;     ///< Solid fuel amount
+        public float XenonGasTot;   ///< Xenon gas capacity
+        public float XenonGas;      ///< Xenon gas amount
+        public float LiquidFuelTotS;///< Liquid fuel capacity reachable by the active engines
+        public float LiquidFuelS;   ///< Liquid fuel amount reachable by the active engines
+        public float OxidizerTotS;  ///< Oxidizer capacity reachable by the active engines
+        public float OxidizerS;     ///< Oxidizer amount reachable by the active engines
+        public UInt32 MissionTime;  ///< Mission elapsed time (s)
+        public float deltaTime;     ///< Mission time elapsed since the previous packet (s)
+        public float VOrbit;        ///< Orbital speed (m/s)
+        public UInt32 MNTime;       ///< Time until the next maneuver node (s), 0 if none
+        public float MNDeltaV;      ///< Delta-v of the next maneuver node (m/s), 0 if none
+        public float Pitch;         ///< Pitch (deg)
+        public float Roll;          ///< Roll (deg)
+        public float Heading;       ///< Heading (deg)
+        /// Action group status bits. Bit order: SAS, RCS, Light, Gear, Brakes, Abort, Custom01 - 10 (see enumAG).
+        public UInt16 ActionGroups;
+        public byte SOINumber;      ///< Sphere of influence id, decimal form sun-planet-moon (e.g. 130 = Kerbin, 131 = Mun)
+        public byte MaxOverHeat;    ///< Highest part overheat (percent)
+        public float MachNumber;    ///< Mach number
+        public float IAS;           ///< Indicated air speed (m/s)
+        public byte CurrentStage;   ///< Current stage number
+        public byte TotalStage;     ///< Total number of stages
+        public float TargetDist;    ///< Distance to the targeted vessel (m), 0 if no target
+        public float TargetV;       ///< Velocity relative to the targeted vessel (m/s)
+        /**
+         * Combined navball and SAS mode.
+         *
+         * The low 4 bits hold the autopilot mode plus one: 0 SAS is off, 1 stability assist,
+         * 2 prograde, 3 retrograde, 4 normal, 5 anti-normal, 6 radial in, 7 radial out,
+         * 8 target, 9 anti-target, 10 maneuver node. The high 4 bits hold the navball
+         * speed display mode plus one: 0 ignore, 1 orbit, 2 surface, 3 target.
+         */
+        public byte NavballSASMode;
     }
 
+    /**
+     * @brief Handshake packet (packet id 0), used in both directions.
+     *
+     * KSP sends it with M1/M2/M3 = 1/2/3 to probe a port. A compatible controller answers with
+     * 3/1/4, which is how the plugin recognizes its display (see KSPSerialPort::InboundPacketHandler).
+     */
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct HandShakePacket
     {
-        public byte id;
-        public byte M1;
-        public byte M2;
-        public byte M3;
+        public byte id;  ///< Packet id, always 0
+        public byte M1;  ///< First handshake magic byte
+        public byte M2;  ///< Second handshake magic byte
+        public byte M3;  ///< Third handshake magic byte
     }
 
+    /**
+     * @brief Controls sent from the controller to KSP (packet id 101).
+     *
+     * The layout must match the @c ControlPacket struct in the Arduino sketch (25 bytes, packed).
+     * The Arduino side must use fixed-width types: on a UNO R4 a plain @c int is 32 bits wide.
+     */
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct ControlPacket
     {
-        public byte id;
-        public byte MainControls;                  //SAS RCS Lights Gear Brakes Precision Abort Stage 
-        public byte Mode;                          //0 = stage, 1 = docking, 2 = map
-        public ushort ControlGroup;                //control groups 1-10 in 2 bytes
-        public byte NavballSASMode;                //AutoPilot mode (See above for AutoPilot modes)(Ignored if the equal to zero or out of bounds (>10)) //Navball mode
-        public byte AdditionalControlByte1;
-        public short Pitch;                        //-1000 -> 1000
-        public short Roll;                         //-1000 -> 1000
-        public short Yaw;                          //-1000 -> 1000
-        public short TX;                           //-1000 -> 1000
-        public short TY;                           //-1000 -> 1000
-        public short TZ;                           //-1000 -> 1000
-        public short WheelSteer;                   //-1000 -> 1000
-        public short Throttle;                     // 0 -> 1000
-        public short WheelThrottle;                // 0 -> 1000
+        public byte id;                            ///< Packet id, always 101
+        /// Main toggles, one per bit (bit 7 down to bit 0): SAS, RCS, Lights, Gear, Brakes, Precision, Abort, Stage.
+        public byte MainControls;
+        public byte Mode;                          ///< 0 = stage, 1 = docking, 2 = map
+        public ushort ControlGroup;                ///< Custom action groups 1-10; bit n is group n
+        /// AutoPilot mode in the low 4 bits and navball mode in the high 4 bits (see VesselData::NavballSASMode).
+        /// Ignored when zero or out of range (> 10).
+        public byte NavballSASMode;
+        public byte AdditionalControlByte1;        ///< Reserved for future use
+        public short Pitch;                        ///< Pitch axis, -1000 -> 1000
+        public short Roll;                         ///< Roll axis, -1000 -> 1000
+        public short Yaw;                          ///< Yaw axis, -1000 -> 1000
+        public short TX;                           ///< Translation X (RCS), -1000 -> 1000
+        public short TY;                           ///< Translation Y (RCS), -1000 -> 1000
+        public short TZ;                           ///< Translation Z (RCS), -1000 -> 1000
+        public short WheelSteer;                   ///< Wheel steering, -1000 -> 1000
+        public short Throttle;                     ///< Main throttle, 0 -> 1000
+        public short WheelThrottle;                ///< Wheel throttle, 0 -> 1000
     };
 
+    /**
+     * @brief Decoded, KSP-friendly version of the last received ControlPacket.
+     *
+     * Toggles are booleans and axes are scaled to the -1..1 (or 0..1) range KSP expects.
+     * Filled by KSPSerialPort::VesselControls and consumed by KSPSerialIO::Update and KSPSerialIO::AxisInput.
+     */
     public struct VesselControls
     {
         public Boolean SAS;
@@ -121,20 +187,21 @@ namespace KSPSerialIO
         public Boolean Abort;
         public Boolean Stage;
         public int Mode;
-        public int SASMode;
-        public int SpeedMode;
-        public Boolean[] ControlGroup;
-        public float Pitch;
-        public float Roll;
-        public float Yaw;
-        public float TX;
-        public float TY;
-        public float TZ;
-        public float WheelSteer;
-        public float Throttle;
-        public float WheelThrottle;
+        public int SASMode;            ///< Requested autopilot mode plus one (0 = no change)
+        public int SpeedMode;          ///< Requested navball speed mode plus one (0 = no change)
+        public Boolean[] ControlGroup; ///< Custom action groups, indexed 1-10 (index 0 is unused)
+        public float Pitch;            ///< -1 to 1
+        public float Roll;             ///< -1 to 1
+        public float Yaw;              ///< -1 to 1
+        public float TX;               ///< -1 to 1
+        public float TY;               ///< -1 to 1
+        public float TZ;               ///< -1 to 1
+        public float WheelSteer;       ///< -1 to 1
+        public float Throttle;         ///< 0 to 1
+        public float WheelThrottle;    ///< 0 to 1
     };
 
+    /// @brief Current and maximum amount of a vessel resource.
     public struct IOResource
     {
         public float Max;
@@ -143,6 +210,7 @@ namespace KSPSerialIO
 
     #endregion
 
+    /// @brief Bit positions of the action groups inside VesselData::ActionGroups.
     enum enumAG : int
     {
         SAS,
@@ -163,32 +231,45 @@ namespace KSPSerialIO
         Custom10,
     };
 
+    /**
+     * @brief Loads the plugin settings from config.xml.
+     *
+     * Runs once at the main menu. Every setting is exposed as a static field so the flight
+     * scene components can read it. The axis settings (@c PitchEnable ... @c WheelThrottleEnable)
+     * choose how the controller value is combined with KSP's own value:
+     *  - 0: always use KSP's value (controller ignored)
+     *  - 1: always use the controller's value
+     *  - 2: use KSP's value unless it is zero, then use the controller's
+     *  - 3: use the controller's value unless it is zero, then use KSP's
+     */
     [KSPAddon(KSPAddon.Startup.MainMenu, false)]
     public class SettingsNStuff : MonoBehaviour
     {
 
+        /// Settings file handle, bound to the plugin's PluginData folder.
         public static PluginConfiguration cfg = PluginConfiguration.CreateForType<SettingsNStuff>();
-        public static string DefaultPort;
-        public static double refreshrate;
-        public static int HandshakeDelay;
-        public static int HandshakeDisable;
-        public static int BaudRate;
+        public static string DefaultPort;     ///< Serial port tried first (e.g. COM3)
+        public static double refreshrate;     ///< Minimum seconds between telemetry packets
+        public static int HandshakeDelay;     ///< Milliseconds to wait after opening a port before talking (boards that reset on open)
+        public static int HandshakeDisable;   ///< 1 = skip the handshake and trust DefaultPort
+        public static int BaudRate;           ///< Serial baud rate; must match the firmware
         // Throttle and axis controls have the following settings:
         // 0: The internal value (supplied by KSP) is always used.
         // 1: The external value (read from serial packet) is always used.
         // 2: If the internal value is not zero use it, otherwise use the external value.
-        // 3: If the external value is not zero use it, otherwise use the internal value.        
-        public static int PitchEnable;
-        public static int RollEnable;
-        public static int YawEnable;
-        public static int TXEnable;
-        public static int TYEnable;
-        public static int TZEnable;
-        public static int WheelSteerEnable;
-        public static int ThrottleEnable;
-        public static int WheelThrottleEnable;
-        public static double SASTol;
+        // 3: If the external value is not zero use it, otherwise use the internal value.
+        public static int PitchEnable;        ///< Axis mode for pitch (see class description)
+        public static int RollEnable;         ///< Axis mode for roll
+        public static int YawEnable;          ///< Axis mode for yaw
+        public static int TXEnable;           ///< Axis mode for translation X
+        public static int TYEnable;           ///< Axis mode for translation Y
+        public static int TZEnable;           ///< Axis mode for translation Z
+        public static int WheelSteerEnable;   ///< Axis mode for wheel steering
+        public static int ThrottleEnable;     ///< Axis mode for the main throttle
+        public static int WheelThrottleEnable;///< Axis mode for the wheel throttle
+        public static double SASTol;          ///< Axis deflection above which SAS is temporarily disabled while steering
 
+        /// @brief Reads every setting from config.xml into the static fields.
         void Awake()
         {
             //cfg["refresh"] = 0.08;
@@ -244,22 +325,32 @@ namespace KSPSerialIO
         }
     }
 
+    /**
+     * @brief Owns the serial port and the packet protocol.
+     *
+     * In the flight scene, Awake() either finds the controller (handshake on every candidate port)
+     * or, when it was already found in an earlier flight, just recreates the port. The port is
+     * then opened by KSPSerialIO::Start. A background thread reads bytes, a state machine
+     * (ReceivedDataEvent) assembles packets, and Update() dispatches them on the main thread.
+     */
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public class KSPSerialPort : MonoBehaviour
     {
-        public static SerialPort Port;
-        public static string PortNumber;
-        public static Boolean DisplayFound = false;
-        public static Boolean ControlReceived = false;
+        public static SerialPort Port;            ///< The serial port in use
+        public static string PortNumber;          ///< Name of the port currently being probed or used
+        public static Boolean DisplayFound = false;   ///< True once a controller answered the handshake
+        public static Boolean ControlReceived = false;///< Set when a new ControlPacket was decoded, cleared by KSPSerialIO::Update
 
-        public static VesselData VData;
-        public static ControlPacket CPacket;
-        private static HandShakePacket HPacket;
+        public static VesselData VData;           ///< Telemetry being filled and sent to the controller
+        public static ControlPacket CPacket;      ///< Last raw ControlPacket received
+        private static HandShakePacket HPacket;   ///< Handshake packet, sent and received
 
-        public static VesselControls VControls = new VesselControls();
-        public static VesselControls VControlsOld = new VesselControls();
+        public static VesselControls VControls = new VesselControls();    ///< Decoded controls, latest values
+        public static VesselControls VControlsOld = new VesselControls(); ///< Controls already applied to the vessel (change detection)
 
-        private const int MaxPayloadSize = 255;
+        private const int MaxPayloadSize = 255;   ///< Largest payload a packet can carry (size is one byte)
+
+        /// @brief States of the packet parser, in the order a packet is received.
         enum ReceiveStates: byte {
             FIRSTHEADER, // Waiting for first header
             SECONDHEADER, // Waiting for second header
@@ -268,8 +359,8 @@ namespace KSPSerialIO
             CS // Waiting for checksum
         }
         private static ReceiveStates CurrentState = ReceiveStates.FIRSTHEADER;
-        private static byte CurrentPacketLength;
-        private static byte CurrentBytesRead;
+        private static byte CurrentPacketLength;  ///< Payload size announced by the packet being parsed
+        private static byte CurrentBytesRead;     ///< Payload bytes stored so far for the packet being parsed
         // Guards access to data shared between threads
         private static Mutex SerialMutex = new Mutex();
         // Serial worker uses this buffer to read bytes
@@ -279,10 +370,16 @@ namespace KSPSerialIO
         private static volatile byte[] NewPacketBuffer = new byte[MaxPayloadSize];
         // Semaphore to indicate whether the serial worker should do work
         private static volatile bool doSerialRead = true;
-        private static Thread SerialThread;
+        private static Thread SerialThread;       ///< Background thread running SerialWorker
 
         private const byte HSPid = 0, VDid = 1, Cid = 101; //hard coded values for packet IDS
 
+        /**
+         * @brief Dispatches the packet waiting in NewPacketBuffer according to its id.
+         *
+         * Called from Update() on the main thread, and from the worker thread while the handshake
+         * is still pending. Takes SerialMutex and always releases it before running the handler.
+         */
         public static void InboundPacketHandler()
         {
             SerialMutex.WaitOne();
@@ -313,6 +410,10 @@ namespace KSPSerialIO
 
         }
 
+        /**
+         * @brief Serializes a struct, wraps it in the wire framing and writes it to the port.
+         * @param anything A packed packet struct (VesselData or HandShakePacket).
+         */
         public static void sendPacket(object anything)
         {
             byte[] Payload = StructureToByteArray(anything);
@@ -341,6 +442,7 @@ namespace KSPSerialIO
             Port.Write(Packet, 0, Packet.Length);
         }
 
+        /// @brief Creates the SerialPort object and starts the background reader thread.
         private void Begin()
         {
             Port = new SerialPort(PortNumber, SettingsNStuff.BaudRate, Parity.None, 8, StopBits.One);
@@ -349,6 +451,7 @@ namespace KSPSerialIO
             while (!SerialThread.IsAlive);
         }
 
+        /// @brief Unity per-frame callback: processes a packet completed by the worker thread, if any.
         private void Update()
         {
             if (NewPacketFlag)
@@ -357,6 +460,12 @@ namespace KSPSerialIO
             }
         }
 
+        /**
+         * @brief Background thread body: keeps reading from the port until doSerialRead is cleared.
+         *
+         * Reads are issued one at a time (EndRead blocks), so ReceivedDataEvent and the parser
+         * state are only ever touched by this thread. If the port is closed the thread sleeps and retries.
+         */
         private void SerialWorker()
         {
             byte[] buffer = new byte[MaxPayloadSize + 4];
@@ -398,6 +507,15 @@ namespace KSPSerialIO
             Debug.Log("KSPSerialIO: Serial worker thread shutting down.");
         }
 
+        /**
+         * @brief Feeds received bytes through the packet state machine.
+         *
+         * Implements the framing @c [0xBE][0xEF][size][payload][checksum]. On a valid checksum the
+         * payload is copied to NewPacketBuffer and NewPacketFlag is raised; on any framing error the
+         * parser drops back to FIRSTHEADER and resynchronizes on the next 0xBE 0xEF.
+         * @param ReadBuffer Bytes just read from the port.
+         * @param BufferLength Number of valid bytes in @p ReadBuffer.
+         */
         private void ReceivedDataEvent(byte[] ReadBuffer, int BufferLength)
         {
             for (int x=0; x<BufferLength; x++)
@@ -453,6 +571,11 @@ namespace KSPSerialIO
             }
         }
 
+        /**
+         * @brief Verifies the checksum of the packet in PayloadBuffer.
+         * @param readCS Checksum byte received from the wire.
+         * @return True if it equals the packet size XOR-ed with every payload byte.
+         */
         private static Boolean CompareChecksum(byte readCS)
         {
             byte calcCS = CurrentPacketLength;
@@ -464,6 +587,7 @@ namespace KSPSerialIO
         }
 
         //these are copied from the intarwebs, converts struct to byte array
+        /// @brief Copies a packed struct into a new byte array (marshalling).
         private static byte[] StructureToByteArray(object obj)
         {
             int len = Marshal.SizeOf(obj);
@@ -475,6 +599,7 @@ namespace KSPSerialIO
             return arr;
         }
 
+        /// @brief Rebuilds a packed struct of the same type as @p obj from the first bytes of @p bytearray.
         private static object ByteArrayToStructure(byte[] bytearray, object obj)
         {
             int len = Marshal.SizeOf(obj);
@@ -501,6 +626,7 @@ namespace KSPSerialIO
           }
           }
         */
+        /// @brief Creates the packet instances and pre-fills their ids and the handshake bytes (1, 2, 3).
         void initializeDataPackets()
         {
             VData = new VesselData();
@@ -518,6 +644,14 @@ namespace KSPSerialIO
             VControlsOld.ControlGroup = new Boolean[11];
         }
 
+        /**
+         * @brief Unity Awake: locates the controller.
+         *
+         * Normally runs a handshake on the default port and then on every serial port found in the
+         * registry, keeping the first one that answers. The port is closed again afterwards because
+         * KSPSerialIO::Start reopens it. If the controller was already found in an earlier flight,
+         * only the port object and reader thread are recreated.
+         */
         void Awake()
         {
             if (DisplayFound)
@@ -636,11 +770,13 @@ namespace KSPSerialIO
             }
         }
 
+        /// @brief Logs the handshake reply received from the controller.
         private static void HandShake()
         {
             Debug.Log("KSPSerialIO: Handshake received - " + HPacket.M1.ToString() + HPacket.M2.ToString() + HPacket.M3.ToString());
         }
 
+        /// @brief Decodes the latest ControlPacket into VControls and flags ControlReceived.
         private static void VesselControls()
         {
 
@@ -673,27 +809,36 @@ namespace KSPSerialIO
             //Debug.Log("KSPSerialIO: ControlPacket received");
         }
 
+        /// @brief Returns bit @p n of @p x.
         private static Boolean BitMathByte(byte x, int n)
         {
             return ((x >> n) & 1) == 1;
         }
 
+        /// @brief Returns bit @p n of a 16-bit value.
         private static Boolean BitMathUshort(ushort x, int n)
         {
             return ((x >> n) & 1) == 1;
         }
 
+        /// @brief Logs that a packet type has no handler.
         private static void Unimplemented()
         {
             Debug.Log("KSPSerialIO: Packet id unimplemented");
         }
 
+        /// @brief Debug helper: logs the number of bytes waiting in the port's input buffer.
         private static void debug()
         {
             Debug.Log(Port.BytesToRead.ToString() + "BTR");
         }
 
 
+        /**
+         * @brief Sets or clears bit @p n of VData.ActionGroups.
+         * @param n Bit index (see enumAG).
+         * @param s New state of the bit.
+         */
         public static void ControlStatus(int n, Boolean s)
         {
             if (s)
@@ -702,6 +847,7 @@ namespace KSPSerialIO
                 VData.ActionGroups &= (UInt16)~(1 << n);      // forces nth bit of x to be 0.  all other bits left alone.
         }
 
+        /// @brief Stops the reader thread and closes and disposes the port.
         public static void PortCleanup()
         {
             if (KSPSerialPort.Port.IsOpen)
@@ -714,6 +860,13 @@ namespace KSPSerialIO
         }
     }
 
+    /**
+     * @brief Flight-scene component that exchanges data with the controller.
+     *
+     * Every refresh interval it samples the active vessel into KSPSerialPort::VData and sends it.
+     * Every frame it applies any newly received controls (toggles, action groups, SAS and navball
+     * modes) to the vessel, and AxisInput is hooked into the autopilot to inject the analog axes.
+     */
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public class KSPSerialIO : MonoBehaviour
     {
@@ -734,12 +887,18 @@ namespace KSPSerialIO
 
         private ScreenMessageStyle KSPIOScreenStyle = ScreenMessageStyle.UPPER_RIGHT;
 
+        /// @brief Unity Awake: shows a debug message and reads the telemetry refresh rate.
         void Awake()
         {
             ScreenMessages.PostScreenMessage("IO awake", 10f, KSPIOScreenStyle);
             refreshrate = SettingsNStuff.refreshrate;
         }
 
+        /**
+         * @brief Unity Start: opens the port, hooks AxisInput into the active vessel and syncs the initial control state.
+         *
+         * Does nothing but show a message if no controller was found during KSPSerialPort::Awake.
+         */
         void Start()
         {
             if (KSPSerialPort.DisplayFound)
@@ -800,6 +959,12 @@ namespace KSPSerialIO
             }
         }
 
+        /**
+         * @brief Unity per-frame callback: sends telemetry and applies received controls.
+         *
+         * Runs only while a vessel is active and the port is open. It follows vessel switches by
+         * moving the AxisInput hook to the new vessel.
+         */
         void Update()
         {
             if (FlightGlobals.ActiveVessel != null && KSPSerialPort.Port.IsOpen)
@@ -823,6 +988,7 @@ namespace KSPSerialIO
                 }
 
                 #region outputs
+                // Throttle outgoing telemetry to the configured refresh rate (real time, unaffected by time warp)
                 theTime = Time.unscaledTime;
                 if ((theTime - lastUpdate) > refreshrate)
                 {
@@ -830,6 +996,7 @@ namespace KSPSerialIO
 
                     lastUpdate = theTime;
 
+                    // Engines currently burning; used for the per-stage ("S") resource totals
                     List<Part> ActiveEngines = new List<Part>();
                     ActiveEngines = GetListOfActivatedEngines(ActiveVessel);
 
@@ -848,6 +1015,7 @@ namespace KSPSerialIO
                     KSPSerialPort.VData.period = (int)Math.Round(ActiveVessel.orbit.period);
 
                     //Debug.Log("KSPSerialIO: 3");
+                    // Altitudes: ASL comes from the body, AGL is derived from terrain altitude; RAlt reports the lower one
                     double ASL = ActiveVessel.mainBody.GetAltitude(ActiveVessel.CoM);
                     double AGL = (ASL - ActiveVessel.terrainAltitude);
 
@@ -861,6 +1029,7 @@ namespace KSPSerialIO
                     KSPSerialPort.VData.Lat = (float)ActiveVessel.latitude;
                     KSPSerialPort.VData.Lon = (float)ActiveVessel.longitude;
 
+                    // Resource totals for the whole vessel (Tot = capacity) and for the active engines' feed network ("S")
                     TempR = GetResourceTotal(ActiveVessel, "LiquidFuel");
                     KSPSerialPort.VData.LiquidFuelTot = TempR.Max;
                     KSPSerialPort.VData.LiquidFuel = TempR.Current;
@@ -891,6 +1060,7 @@ namespace KSPSerialIO
                     KSPSerialPort.VData.XenonGasTot = TempR.Max;
                     KSPSerialPort.VData.XenonGas = TempR.Current;
 
+                    // Mission time and its delta since the previous packet
                     missionTime = ActiveVessel.missionTime;
                     deltaT = missionTime - missionTimeOld;
                     missionTimeOld = missionTime;
@@ -902,6 +1072,7 @@ namespace KSPSerialIO
 
                     //Debug.Log("KSPSerialIO: 4");
 
+                    // Maneuver node data, left at 0 when there is no node
                     KSPSerialPort.VData.MNTime = 0;
                     KSPSerialPort.VData.MNDeltaV = 0;
 
@@ -921,12 +1092,14 @@ namespace KSPSerialIO
 
                     //Debug.Log("KSPSerialIO: 5");
 
+                    // Attitude relative to the local surface, converted to the signed ranges the firmware expects
                     Quaternion attitude = updateHeadingPitchRollField(ActiveVessel);
 
                     KSPSerialPort.VData.Roll = (float)((attitude.eulerAngles.z > 180) ? (attitude.eulerAngles.z - 360.0) : attitude.eulerAngles.z);
                     KSPSerialPort.VData.Pitch = (float)((attitude.eulerAngles.x > 180) ? (360.0 - attitude.eulerAngles.x) : -attitude.eulerAngles.x);
                     KSPSerialPort.VData.Heading = (float)attitude.eulerAngles.y;
 
+                    // Pack the action group states into VData.ActionGroups (bit order in enumAG)
                     KSPSerialPort.ControlStatus((int)enumAG.SAS, ActiveVessel.ActionGroups[KSPActionGroup.SAS]);
                     KSPSerialPort.ControlStatus((int)enumAG.RCS, ActiveVessel.ActionGroups[KSPActionGroup.RCS]);
                     KSPSerialPort.ControlStatus((int)enumAG.Light, ActiveVessel.ActionGroups[KSPActionGroup.Light]);
@@ -968,6 +1141,7 @@ namespace KSPSerialIO
                     }
 
 
+                    // Navball/SAS byte: high nibble = speed display mode + 1, low nibble = autopilot mode + 1 (only while SAS is on)
                     KSPSerialPort.VData.NavballSASMode = (byte)(((int)FlightGlobals.speedDisplayMode + 1) << 4); //get navball speed display mode
                     if (ActiveVessel.ActionGroups[KSPActionGroup.SAS])
                     {
@@ -1010,10 +1184,13 @@ namespace KSPSerialIO
                     ScreenMessages.PostScreenMessage("TargetDist " + KSPSerialPort.VData.TargetDist.ToString() + " TargetV " + KSPSerialPort.VData.TargetV.ToString());
                      */
                     #endregion
+                    // Send the telemetry packet
                     KSPSerialPort.sendPacket(KSPSerialPort.VData);
                 } //end refresh
                 #endregion
                 #region inputs
+                // Apply the controls from the last ControlPacket. Only values that changed (VControls vs VControlsOld)
+                // are pushed to the vessel, so KSP's own UI can still toggle things between packets.
                 if (KSPSerialPort.ControlReceived)
                 {
                     /*
@@ -1208,11 +1385,13 @@ namespace KSPSerialIO
 
         #region utilities
 
+        /// @brief True if a target vessel is selected.
         private Boolean TargetExists()
         {
             return (FlightGlobals.fetch.VesselTarget != null) && (FlightGlobals.fetch.VesselTarget.GetVessel() != null); //&& is short circuiting
         }
 
+        /// @brief Highest overheat ratio of any part (internal or skin temperature) as a percentage.
         private byte GetMaxOverHeat(Vessel V)
         {
             byte percent = 0;
@@ -1240,6 +1419,7 @@ namespace KSPSerialIO
         }
 
 
+        /// @brief Sums the current and maximum amount of a resource over all parts of a vessel.
         private IOResource GetResourceTotal(Vessel V, string resourceName)
         {
             IOResource R = new IOResource();
@@ -1264,6 +1444,12 @@ namespace KSPSerialIO
             return R;
         }
 
+        /**
+         * @brief Autopilot callback that merges the controller axes into KSP's control state.
+         *
+         * Each axis is combined according to its SettingsNStuff mode (0-3, see SettingsNStuff).
+         * @param s Control state about to be applied to the vessel; modified in place.
+         */
         private void AxisInput(FlightCtrlState s)
         {
             switch (SettingsNStuff.ThrottleEnable)
@@ -1433,6 +1619,7 @@ namespace KSPSerialIO
             }
         }
 
+        /// @brief Maps a celestial body name to the SOI id used in VesselData::SOINumber (0 if unknown).
         private byte GetSOINumber(string name)
         {
             byte SOI;
@@ -1497,6 +1684,7 @@ namespace KSPSerialIO
             return SOI;
         }
 
+        /// @brief Returns the parts that hold an engine module with an active ignition.
         // this recursive stage look up stuff stolen and modified from KOS and others
         public static List<Part> GetListOfActivatedEngines(Vessel vessel)
         {
@@ -1529,6 +1717,13 @@ namespace KSPSerialIO
             return retList;
         }
 
+        /**
+         * @brief Total amount of a resource available to a set of engines.
+         *
+         * Follows stack-attached parts that allow fuel cross-feed, counting every part only once.
+         * @param resourceName Resource name (case insensitive).
+         * @param engines Parts holding the active engines.
+         */
         public static double ProspectForResource(String resourceName, List<Part> engines)
         {
             List<Part> visited = new List<Part>();
@@ -1542,6 +1737,7 @@ namespace KSPSerialIO
             return total;
         }
 
+        /// @brief Amount of a resource reachable from a single engine part (see the list overload).
         public static double ProspectForResource(String resourceName, Part engine)
         {
             List<Part> visited = new List<Part>();
@@ -1549,6 +1745,7 @@ namespace KSPSerialIO
             return ProspectForResource(resourceName, engine, ref visited);
         }
 
+        /// @brief Recursive worker: sums the resource in @p part and in the parts that can feed it; @p visited prevents counting a part twice.
         public static double ProspectForResource(String resourceName, Part part, ref List<Part> visited)
         {
             double ret = 0;
@@ -1586,6 +1783,7 @@ namespace KSPSerialIO
             return ret;
         }
 
+        /// @brief Like ProspectForResource, but sums the maximum capacity instead of the current amount.
         public static double ProspectForResourceMax(String resourceName, List<Part> engines)
         {
             List<Part> visited = new List<Part>();
@@ -1599,6 +1797,7 @@ namespace KSPSerialIO
             return total;
         }
 
+        /// @brief Maximum capacity of a resource reachable from a single engine part.
         public static double ProspectForResourceMax(String resourceName, Part engine)
         {
             List<Part> visited = new List<Part>();
@@ -1606,6 +1805,7 @@ namespace KSPSerialIO
             return ProspectForResourceMax(resourceName, engine, ref visited);
         }
 
+        /// @brief Recursive worker for ProspectForResourceMax.
         public static double ProspectForResourceMax(String resourceName, Part part, ref List<Part> visited)
         {
             double ret = 0;
@@ -1643,6 +1843,7 @@ namespace KSPSerialIO
             return ret;
         }
 
+        /// @brief Computes the vessel's orientation relative to the local surface (north/up), used to derive heading, pitch and roll.
         //Borrowed from MechJeb2
         private Quaternion updateHeadingPitchRollField(Vessel v)
         {
@@ -1657,10 +1858,12 @@ namespace KSPSerialIO
 
         #endregion
 
+        /// @brief Unity FixedUpdate callback, intentionally empty.
         void FixedUpdate()
         {
         }
 
+        /// @brief Unity OnDestroy: closes the serial port when the flight scene is unloaded.
         void OnDestroy()
         {
             if (KSPSerialPort.Port.IsOpen)
