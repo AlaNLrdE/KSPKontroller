@@ -14,6 +14,7 @@ over a USB serial link. The plugin is based on `hugopeeters/KSPSerialIO
    overview
    architecture
    protocol
+   vesseldata
    plugin
    firmware
    building

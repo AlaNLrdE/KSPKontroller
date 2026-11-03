@@ -71,7 +71,7 @@ namespace KSPSerialIO
         public float G;             ///< G-force
         public int TAp;             ///< Time to apoapsis (s)
         public int TPe;             ///< Time to periapsis (s)
-        public float TrueAnomaly;   ///< True anomaly (deg)
+        public float TrueAnomaly;   ///< True anomaly (rad)
         public float Density;       ///< Atmospheric density at the vessel
         public int period;          ///< Orbital period (s)
         public float RAlt;          ///< Radar altitude: the lower of altitude above terrain and above sea level (m)

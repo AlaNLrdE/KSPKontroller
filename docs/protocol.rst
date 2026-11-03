@@ -116,8 +116,8 @@ ControlPacket
 VesselData
 ~~~~~~~~~~
 
-The 55 fields and their units are documented on the ``VesselData`` struct in ``KSPIO.cs`` (see
-the Doxygen API reference). Fields ending in ``Tot`` are capacities, and fields ending in ``S``
+The 55 fields, with offsets, units and the KSP member each one comes from, are listed in
+:doc:`vesseldata`. Fields ending in ``Tot`` are capacities, and fields ending in ``S``
 only count what the active engines can reach. ``ActionGroups`` is a bit field in the order
 SAS, RCS, Light, Gear, Brakes, Abort, Custom01 to Custom10. ``NavballSASMode`` uses the same
 nibble encoding as ``ControlPacket``.
