@@ -1,0 +1,56 @@
+name: Documentation
+
+# Builds the Sphinx site (with the Doxygen API reference embedded) and publishes it to GitHub Pages.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "KSPSerialIO/KSPSerialIO/KSPIO.cs"
+      - "arduino-sketch/**"
+      - "Doxyfile"
+      - "README.md"
+      - "ci"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Doxygen and Java
+        run: sudo apt-get update && sudo apt-get install -y doxygen default-jre-headless
+
+      - name: Build the site
+        run: ./ci sphinx
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/sphinx
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

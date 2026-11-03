@@ -2,6 +2,10 @@
 
 KSPKontroller is a physical controller system for [Kerbal Space Program (KSP)](https://kerbalspaceprogram.com/), enabling real-time interaction with the game using custom hardware. This project is based on and extends the work from [hugopeeters/KSPSerialIO](https://github.com/hugopeeters/KSPSerialIO).
 
+## Documentation
+
+Full documentation (architecture, serial protocol, UML diagrams and the generated API reference) is published at **<https://alanlrde.github.io/KSPKontroller/>**. It is built with Sphinx and PlantUML from the [docs/](docs/) folder; see [Building with `./ci`](#building-with-ci-cicmd-in-powershellcmd) to build it locally with `./ci sphinx`.
+
 ## Project Structure
 
 - **arduino-sketch/**  
