@@ -24,15 +24,18 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Render every PlantUML diagram to SVG in ``build/diagrams``.
    * - ``./ci sphinx``
      - Build this site into ``build/sphinx`` (includes the Doxygen output under ``api/``).
+   * - ``./ci upload_sketch [PORT]``
+     - Upload the compiled sketch to the board (run ``build_sketch`` first). Finds the board by its FQBN when PORT is missing.
    * - ``./ci test_arduino [PORT]``
-     - Hardware test of the flashed board over USB serial (see below).
+     - Compile, upload and test the board over USB serial (see below).
    * - ``./ci clean``
      - Remove build output.
 
 Testing the board
 -----------------
 
-``./ci test_arduino`` (script: ``tools/test_arduino.py``) talks to the flashed Arduino with the
+``./ci test_arduino`` compiles the sketch, uploads it to the board and then runs
+``tools/test_arduino.py``, which talks to the Arduino with the
 real wire protocol, without KSP. It needs Python 3; ``pyserial`` is installed into
 ``build/venv`` automatically.
 
@@ -55,7 +58,8 @@ not answer there, or no port was given, every USB serial port is tried, Arduino 
 ``0x2341``) first. Bluetooth and other non-USB COM ports are skipped. The exit code is 0 when all
 tests pass, 1 when one fails and 2 when no board answered.
 
-The board must already run the sketch: ``./ci build_sketch`` only compiles it. Close the Arduino
+Every run flashes the board. Set ``NO_UPLOAD=1`` to test the firmware that is already on it.
+The board is found by the ``FQBN`` setting (UNO R4 WiFi by default), or pass the port. Close the Arduino
 IDE's serial monitor and KSP first, since only one program can hold the port.
 
 Requirements for the documentation

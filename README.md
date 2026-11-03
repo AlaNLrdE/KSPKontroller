@@ -135,7 +135,8 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE)
 ./ci build_KSPSerialIO   # compile the KSP plugin (msbuild, xbuild or dotnet)
 ./ci build_all           # both
 KSPDIR=/path/to/KSP ./ci install   # copy the plugin into GameData/KSPSerialIO
-./ci test_arduino [PORT]   # talk to the flashed board over USB serial (scans USB COM ports)
+./ci upload_sketch [PORT]   # upload the compiled sketch to the board
+./ci test_arduino [PORT]   # compile + upload + test the board over USB serial (NO_UPLOAD=1 skips the upload)
 ./ci clean
 ```
 

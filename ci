@@ -8,7 +8,8 @@
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
 #   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
-#   ./ci test_arduino [PORT] Test the flashed Arduino over serial; scans USB COM ports if PORT is missing or silent
+#   ./ci upload_sketch [PORT] Upload the compiled sketch (build_sketch first); finds the board if PORT is missing
+#   ./ci test_arduino [PORT] Compile, upload and test the board over serial (NO_UPLOAD=1 skips the upload)
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -17,7 +18,8 @@
 #   CONFIG  Plugin configuration   (default: Release)
 #   KSPDIR  KSP install directory  (required for `install`)
 #   PLANTUML_JAR  Path to plantuml.jar (default: build/tools/plantuml.jar, downloaded if missing)
-#   ARDUINO_PORT  Port for test_arduino, same as passing PORT (optional)
+#   ARDUINO_PORT  Port for upload_sketch and test_arduino, same as passing PORT (optional)
+#   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
 
 set -euo pipefail
 
@@ -213,12 +215,36 @@ sphinx() {
   log "Output: $BUILD/sphinx/index.html"
 }
 
-# Talk to the Arduino with the real protocol; with no PORT (or if it does not answer) every USB COM port is tried
+# Upload the compiled sketch (build/sketch) to the board on PORT, or on the first board that matches FQBN
+upload_sketch() {
+  local cli port="${1:-${ARDUINO_PORT:-}}"
+  cli="$(find_arduino_cli)"
+  if [ -z "$port" ]; then
+    port="$("$cli" board list | awk -v fqbn="$FQBN" 'index($0, fqbn) { print $1; exit }')"
+    [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci upload_sketch COM5)"
+  fi
+  log "Uploading to $port"
+  "$cli" upload -p "$port" --fqbn "$FQBN" --input-dir "$BUILD/sketch"
+  echo "$port" > "$BUILD/last_upload_port"
+}
+
+# Compile and upload the firmware (unless NO_UPLOAD=1), then test the board with the real protocol.
+# With no PORT, or if the board does not answer there, every USB COM port is tried.
 test_arduino() {
-  local venv_bin
+  local venv_bin port="${1:-${ARDUINO_PORT:-}}"
   venv_bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
+
+  if [ "${NO_UPLOAD:-0}" != "1" ]; then
+    build_sketch
+    upload_sketch "$port"
+    port="$(cat "$BUILD/last_upload_port")"
+    # The board reboots into the new sketch and may re-enumerate under another COM number
+    log "Waiting for the board to restart"
+    sleep 4
+  fi
+
   log "Testing the Arduino controller"
-  "$venv_bin/python" "$ROOT/tools/test_arduino.py" ${1:-${ARDUINO_PORT:-}}
+  "$venv_bin/python" "$ROOT/tools/test_arduino.py" $port
 }
 
 clean() {
@@ -226,7 +252,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,20p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,21p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -236,6 +262,7 @@ case "${1:-help}" in
   docs)              docs ;;
   diagrams)          diagrams ;;
   sphinx)            sphinx ;;
+  upload_sketch)     shift; upload_sketch "$@" ;;
   test_arduino)      shift; test_arduino "$@" ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
