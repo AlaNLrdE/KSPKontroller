@@ -40,7 +40,7 @@ class "utilities.ino" as Util <<sketch file>> {
   +InitTxPackets()
 }
 
-struct VesselData <<packed, 200 bytes>>
+struct VesselData <<packed, 214 bytes>>
 struct ControlPacket <<packed, 25 bytes>>
 struct HandShakePacket <<packed, 4 bytes>>
 

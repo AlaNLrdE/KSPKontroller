@@ -22,7 +22,7 @@ IO -> IO ++ : Update()
 IO -> IO ++ : sample the active vessel into VData
 return
 IO -> SP ++ : sendPacket(VData)
-SP -> Port ++ : Write([BE][EF][200][VData][checksum])
+SP -> Port ++ : Write([BE][EF][214][VData][checksum])
 return
 return
 return

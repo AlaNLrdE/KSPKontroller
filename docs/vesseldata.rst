@@ -2,7 +2,7 @@ VesselData reference
 ====================
 
 ``VesselData`` is the telemetry packet (id 1) that KSP sends to the controller. It is a packed,
-little-endian struct of **55 fields and 200 bytes**. The plugin fills it in
+little-endian struct of **62 fields and 214 bytes**. The plugin fills it in
 ``KSPSerialIO.Update`` and sends it at most once every ``refresh`` seconds (``config.xml``,
 0.2 s by default). The firmware keeps the latest copy in the global ``VData``.
 
@@ -15,7 +15,7 @@ little-endian struct of **55 fields and 200 bytes**. The plugin fills it in
 Field table
 -----------
 
-*Offset* is the byte position inside the 200-byte payload (the id byte is offset 0). *Source* is
+*Offset* is the byte position inside the 214-byte payload (the id byte is offset 0). *Source* is
 the KSP API member the plugin reads. Resource amounts are in KSP resource *units*, not kilograms.
 
 .. list-table::
@@ -414,8 +414,57 @@ the KSP API member the plugin reads. Resource amounts are in KSP resource *units
      - bits
      - speedDisplayMode and Autopilot.Mode
      - Combined navball and SAS mode, see below.
+   * - 56
+     - 200
+     - ``ProgradePitch``
+     - int16
+     - deg x 50
+     - navball prograde (srf_velocity, obt_velocity or ship_tgtVelocity, by speed mode)
+     - Pitch of the prograde vector of the current navball speed mode.
+   * - 57
+     - 202
+     - ``ProgradeHeading``
+     - int16
+     - deg x 50
+     - navball prograde
+     - Heading of the prograde vector of the current navball speed mode.
+   * - 58
+     - 204
+     - ``ManeuverPitch``
+     - int16
+     - deg x 50
+     - node.GetBurnVector(patch)
+     - Pitch of the first maneuver node's burn vector; 0 if there is no node.
+   * - 59
+     - 206
+     - ``ManeuverHeading``
+     - int16
+     - deg x 50
+     - node.GetBurnVector(patch)
+     - Heading of the first maneuver node's burn vector; 0 if there is no node.
+   * - 60
+     - 208
+     - ``TargetPitch``
+     - int16
+     - deg x 50
+     - targetObject position - vessel position
+     - Pitch towards the targeted object; 0 if there is no target.
+   * - 61
+     - 210
+     - ``TargetHeading``
+     - int16
+     - deg x 50
+     - targetObject position - vessel position
+     - Heading towards the targeted object; 0 if there is no target.
+   * - 62
+     - 212
+     - ``NormalHeading``
+     - int16
+     - deg x 50
+     - cross(obt_velocity, up)
+     - Heading of the orbit normal. Its pitch is always 0, so there is no field for it.
 
-The last field ends at offset 199, so the struct is 200 bytes.
+The last field ends at offset 213, so the struct is 214 bytes.
 
 Resource groups
 ---------------
@@ -546,6 +595,23 @@ The low nibble is only filled while SAS is on. In the sketch:
    uint8_t sasMode    = VData.NavballSASMode & 0x0F;  // 0 = SAS off
    uint8_t speedMode  = VData.NavballSASMode >> 4;    // 1 orbit, 2 surface, 3 target
 
+Navball vector angles
+---------------------
+
+Fields 56 to 62 (``ProgradePitch`` to ``NormalHeading``, added in upstream 0.19.1) give the direction
+of the navball markers relative to the local horizon. Each one is an ``int16`` holding the angle in
+degrees **times 50** (the fixed-point format of upstream 0.19.2), so divide by 50:
+
+.. code-block:: c
+
+   float progradeHeading = VData.ProgradeHeading / 50.0f;   // 0 to 360 degrees
+   float progradePitch   = VData.ProgradePitch   / 50.0f;   // -90 to 90 degrees
+
+Pitch is positive above the horizon. Heading is the compass heading: 0 north, 90 east. A marker that
+does not exist (no maneuver node, no target) reports 0 for both angles. The prograde marker follows the
+navball speed mode: surface, orbit or target velocity. The orbit normal only has a heading, because
+its pitch is always 0.
+
 Sphere of influence (SOINumber)
 -------------------------------
 
@@ -611,7 +677,8 @@ Behavior to keep in mind
   its temperature limit, and values above 255 do not fit in the byte.
 * **Target fields**: ``TargetDist`` and ``TargetV`` are 0 when no vessel is targeted.
 * **Angles**: ``TrueAnomaly`` is in radians, while ``inc``, ``Lat``, ``Lon``, ``Pitch``, ``Roll``
-  and ``Heading`` are in degrees. ``Roll`` is -180 to 180 and ``Heading`` is 0 to 360.
+  and ``Heading`` are in degrees. ``Roll`` is -180 to 180 and ``Heading`` is 0 to 360. The navball vector
+  fields are degrees times 50.
 * **Updates**: the firmware only replaces ``VData`` when a complete packet with a valid checksum
   arrives, so between packets (and after a dropped one) it keeps the previous values.
 

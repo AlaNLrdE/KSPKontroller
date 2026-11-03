@@ -43,7 +43,7 @@ Settings (``config.xml``)
      - ``1`` skips the handshake and uses ``DefaultPort`` directly.
    * - ``SASTol``
      - double
-     - Axis deflection above which SAS is switched off while steering.
+     - Obsolete since 0.19.3. It is still read so existing files load, but SAS is no longer switched off while steering.
    * - ``PitchEnable``, ``RollEnable``, ``YawEnable``, ``TXEnable``, ``TYEnable``,
        ``TZEnable``, ``WheelSteerEnable``, ``ThrottleEnable``, ``WheelThrottleEnable``
      - int

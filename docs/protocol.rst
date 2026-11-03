@@ -37,7 +37,7 @@ Packets
    * - 1
      - ``VesselData``
      - KSP to controller
-     - 200 bytes
+     - 214 bytes
      - Telemetry
    * - 101
      - ``ControlPacket``
@@ -116,7 +116,7 @@ ControlPacket
 VesselData
 ~~~~~~~~~~
 
-The 55 fields, with offsets, units and the KSP member each one comes from, are listed in
+The 62 fields, with offsets, units and the KSP member each one comes from, are listed in
 :doc:`vesseldata`. Fields ending in ``Tot`` are capacities, and fields ending in ``S``
 only count what the active engines can reach. ``ActionGroups`` is a bit field in the order
 SAS, RCS, Light, Gear, Brakes, Abort, Custom01 to Custom10. ``NavballSASMode`` uses the same

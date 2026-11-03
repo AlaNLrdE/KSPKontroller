@@ -72,12 +72,13 @@ enum enumAG {
   Custom01 ... Custom10
 }
 
-struct VesselData <<packed, 200 bytes>> {
+struct VesselData <<packed, 214 bytes>> {
   id = 1
   AP, PE, Alt, RAlt, VVI ...
   resources (Tot / current / S)
   ActionGroups : UInt16
   NavballSASMode : byte
+  ProgradePitch ... NormalHeading : short (degrees x 50)
 }
 
 struct ControlPacket <<packed, 25 bytes>> {
@@ -85,6 +86,7 @@ struct ControlPacket <<packed, 25 bytes>> {
   MainControls : byte
   ControlGroup : ushort
   NavballSASMode : byte
+  ProgradePitch ... NormalHeading : short (degrees x 50)
   Pitch, Roll, Yaw, TX, TY, TZ : short
   WheelSteer, Throttle, WheelThrottle : short
 }
