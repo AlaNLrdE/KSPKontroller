@@ -135,7 +135,8 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE)
 ./ci build_KSPSerialIO   # compile the KSP plugin (msbuild, xbuild or dotnet)
 ./ci build_all           # both
 KSPDIR=/path/to/KSP ./ci install   # copy the plugin into GameData/KSPSerialIO
+./ci test_arduino [PORT]   # talk to the flashed board over USB serial (scans USB COM ports)
 ./ci clean
 ```
 
-Set `FQBN` to target another board (default `arduino:renesas_uno:minima`, use `arduino:renesas_uno:unor4wifi` for the WiFi variant) and `CONFIG=Debug` for a debug plugin build.
+Set `FQBN` to target another board (default `arduino:renesas_uno:unor4wifi`, use `arduino:renesas_uno:minima` for the Minima) and `CONFIG=Debug` for a debug plugin build.

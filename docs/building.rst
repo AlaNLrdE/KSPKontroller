@@ -24,8 +24,39 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Render every PlantUML diagram to SVG in ``build/diagrams``.
    * - ``./ci sphinx``
      - Build this site into ``build/sphinx`` (includes the Doxygen output under ``api/``).
+   * - ``./ci test_arduino [PORT]``
+     - Hardware test of the flashed board over USB serial (see below).
    * - ``./ci clean``
      - Remove build output.
+
+Testing the board
+-----------------
+
+``./ci test_arduino`` (script: ``tools/test_arduino.py``) talks to the flashed Arduino with the
+real wire protocol, without KSP. It needs Python 3; ``pyserial`` is installed into
+``build/venv`` automatically.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Test
+     - Passes when
+   * - handshake
+     - The plugin's probe ``1, 2, 3`` is answered with ``3, 1, 4``.
+   * - telemetry
+     - After one ``VesselData`` packet the board streams at least 3 ``ControlPacket`` frames per
+       second (id 101, exactly 25 bytes, valid checksum) with a throttle in 0 to 1000.
+   * - idle timeout
+     - With no more telemetry the board stops sending after about 2 seconds.
+
+Port selection: pass a port (``./ci test_arduino COM5``) or set ``ARDUINO_PORT``. If the board does
+not answer there, or no port was given, every USB serial port is tried, Arduino boards (vendor id
+``0x2341``) first. Bluetooth and other non-USB COM ports are skipped. The exit code is 0 when all
+tests pass, 1 when one fails and 2 when no board answered.
+
+The board must already run the sketch: ``./ci build_sketch`` only compiles it. Close the Arduino
+IDE's serial monitor and KSP first, since only one program can hold the port.
 
 Requirements for the documentation
 ----------------------------------
