@@ -76,6 +76,19 @@ size, and any exception in the worker is logged and resets the parser instead of
 stuck. A completed packet is handed to the main thread through ``NewPacketBuffer`` guarded by
 ``SerialMutex``.
 
+Port discovery and failures
+---------------------------
+
+Discovery probes ``DefaultPort`` first and then every COM port in the registry. Each port is probed
+in isolation: an error opening it, a write timeout or a missing reply only closes that port and moves
+on to the next one. Bluetooth modem ports (``\Device\BthModem*``) are skipped because they open but
+never answer, and a port equal to ``DefaultPort`` is not probed twice.
+
+Telemetry is only sent while a controller was found (``DisplayFound``). If sending fails three times in
+a row, the port is closed, ``LinkFailed`` stops further attempts for the rest of the flight and a single
+line per failure is logged, instead of blocking the main thread and logging a stack trace on every
+packet. The write timeout is 250 ms.
+
 State exposed to other code
 ---------------------------
 

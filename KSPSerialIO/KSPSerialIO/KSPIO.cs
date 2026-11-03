@@ -442,10 +442,44 @@ namespace KSPSerialIO
             Port.Write(Packet, 0, Packet.Length);
         }
 
+        /// True once sending failed repeatedly; telemetry stops until the next flight scene.
+        public static Boolean LinkFailed = false;
+        private static int SendFailures = 0;
+        private const int MaxSendFailures = 3;
+
+        /**
+         * @brief Sends a packet from the main thread without ever throwing.
+         *
+         * A write that times out blocks the game for the whole timeout, so after MaxSendFailures
+         * consecutive failures the port is closed and LinkFailed stops further attempts. Only the
+         * failure message is logged, not a stack trace for every packet.
+         */
+        public static void TrySendPacket(object anything)
+        {
+            try
+            {
+                sendPacket(anything);
+                SendFailures = 0;
+            }
+            catch (Exception e)
+            {
+                SendFailures++;
+                Debug.Log("KSPSerialIO: send failed (" + SendFailures + "/" + MaxSendFailures + "): " + e.Message);
+                if (SendFailures >= MaxSendFailures)
+                {
+                    LinkFailed = true;
+                    Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
+                    try { Port.Close(); } catch (Exception) { }
+                }
+            }
+        }
+
         /// @brief Creates the SerialPort object and starts the background reader thread.
         private void Begin()
         {
             Port = new SerialPort(PortNumber, SettingsNStuff.BaudRate, Parity.None, 8, StopBits.One);
+            // Bound how long a stuck port can block the main thread
+            Port.WriteTimeout = 250;
             SerialThread = new Thread(SerialWorker);
             SerialThread.Start();
             while (!SerialThread.IsAlive);
@@ -654,6 +688,10 @@ namespace KSPSerialIO
          */
         void Awake()
         {
+            // Static state survives scene changes: give every flight a clean link
+            LinkFailed = false;
+            SendFailures = 0;
+
             if (DisplayFound)
             {
                 Debug.Log("KSPSerialIO: running...");
@@ -707,6 +745,13 @@ namespace KSPSerialIO
                         else
                         {
                             PortNumber = (string)SerialCOMSKey.GetValue(PortNames[j]);
+                            // Bluetooth modems open fine but never answer, and the default port was already tried
+                            if (PortNames[j].IndexOf("Bth", StringComparison.OrdinalIgnoreCase) >= 0
+                                || PortNumber == SettingsNStuff.DefaultPort)
+                            {
+                                Debug.Log("KSPSerialIO: skipping port " + PortNames[j] + " - " + PortNumber);
+                                continue;
+                            }
                             Debug.Log("KSPSerialIO: trying port " + PortNames[j] + " - " + PortNumber);
                         }
                         Port.PortName = PortNumber;
@@ -725,21 +770,32 @@ namespace KSPSerialIO
                             //secret handshake
                             if (Port.IsOpen && (SettingsNStuff.HandshakeDisable == 0))
                             {
-                                Thread.Sleep(SettingsNStuff.HandshakeDelay);
-                                //Port.DiscardOutBuffer();
-                                //Port.DiscardInBuffer();
-                                
-                                sendPacket(HPacket);
-
-                                //wait for reply
-                                int k = 0;
-                                while (k < 15 && !DisplayFound)
+                                // A port that fails here must not abort the scan or stay open
+                                try
                                 {
-                                    Thread.Sleep(100);
-                                    k++;
+                                    Thread.Sleep(SettingsNStuff.HandshakeDelay);
+                                    //Port.DiscardOutBuffer();
+                                    //Port.DiscardInBuffer();
+
+                                    sendPacket(HPacket);
+
+                                    //wait for reply
+                                    int k = 0;
+                                    while (k < 15 && !DisplayFound)
+                                    {
+                                        Thread.Sleep(100);
+                                        k++;
+                                    }
+                                }
+                                catch (Exception e)
+                                {
+                                    Debug.Log("KSPSerialIO: handshake failed on " + Port.PortName + ": " + e.Message);
+                                }
+                                finally
+                                {
+                                    try { Port.Close(); } catch (Exception) { }
                                 }
 
-                                Port.Close();
                                 if (DisplayFound)
                                 {
                                     Debug.Log("KSPSerialIO-hp: found KSP Display at " + Port.PortName);
@@ -967,7 +1023,9 @@ namespace KSPSerialIO
          */
         void Update()
         {
-            if (FlightGlobals.ActiveVessel != null && KSPSerialPort.Port.IsOpen)
+            // Without a controller (or after the link failed) there is nothing to send, even if a port was left open
+            if (FlightGlobals.ActiveVessel != null && KSPSerialPort.DisplayFound && !KSPSerialPort.LinkFailed
+                && KSPSerialPort.Port.IsOpen)
             {
                 //Debug.Log("KSPSerialIO: 1");
                 //If the current active vessel is not what we were using, we need to remove controls from the old 
@@ -1185,7 +1243,7 @@ namespace KSPSerialIO
                      */
                     #endregion
                     // Send the telemetry packet
-                    KSPSerialPort.sendPacket(KSPSerialPort.VData);
+                    KSPSerialPort.TrySendPacket(KSPSerialPort.VData);
                 } //end refresh
                 #endregion
                 #region inputs
