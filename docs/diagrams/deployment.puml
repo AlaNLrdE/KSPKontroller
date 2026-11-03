@@ -1,0 +1,28 @@
+@startuml deployment
+title Deployment view
+
+node "Gaming PC (Windows)" as PC {
+  component "Kerbal Space Program" as KSP
+  component "KSPSerialIO.dll\n(plugin)" as Plugin
+  component "PsimaxSerial.dll\n(serial port library)" as Psimax
+  artifact "config.xml" as Cfg
+}
+
+node "Arduino UNO R4" as MCU {
+  component "KSPIODemo9\n(firmware)" as FW
+}
+
+node "Control panel" as Panel {
+  component "Switches\nSAS, RCS, action group 1" as Switches
+  component "Throttle potentiometer" as Pot
+  component "LEDs\ngreen, yellow, red, SAS, RCS, group 1" as Leds
+}
+
+KSP --> Plugin : loads at startup
+Plugin --> Psimax : uses
+Plugin ..> Cfg : reads settings
+Plugin <--> FW : USB serial (CDC)\nframed binary packets
+Switches --> FW : digital inputs
+Pot --> FW : analog input
+FW --> Leds : digital outputs
+@enduml

@@ -1,0 +1,34 @@
+@startuml activity_plugin_update
+title KSPSerialIO.Update (runs every frame in the flight scene)
+
+start
+if (active vessel exists and port is open?) then (yes)
+  if (active vessel changed?) then (yes)
+    :move the AxisInput hook to the new vessel;
+    :sync RCS and SAS from VControls;
+  endif
+  if (more than refreshrate seconds since the last packet?) then (yes)
+    :sample orbit, altitude, speeds,\nresources, attitude, action groups,\nstage, target and navball mode into VData;
+    :KSPSerialPort.sendPacket(VData);
+  endif
+  if (ControlReceived?) then (yes)
+    :apply changed toggles: RCS, SAS, lights,\ngear, brakes, abort;
+    if (stage button pressed?) then (yes)
+      :StageManager.ActivateNextStage();
+    endif
+    :apply changed custom groups 1-10;
+    :apply SAS mode and navball speed mode\nif they changed;
+    if (pitch, roll or yaw above SASTol?) then (yes)
+      :temporarily switch SAS off;
+    else (no)
+      if (SAS switch on?) then (yes)
+        :switch SAS on;
+      endif
+    endif
+    :ControlReceived = false;
+  endif
+else (no)
+  :do nothing;
+endif
+stop
+@enduml

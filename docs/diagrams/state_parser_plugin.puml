@@ -1,0 +1,20 @@
+@startuml state_parser_plugin
+title Plugin packet parser (KSPSerialPort.ReceivedDataEvent)
+
+[*] --> FIRSTHEADER
+
+FIRSTHEADER --> SECONDHEADER : byte == 0xBE
+FIRSTHEADER --> FIRSTHEADER : any other byte (discarded)
+
+SECONDHEADER --> SIZE : byte == 0xEF
+SECONDHEADER --> FIRSTHEADER : any other byte
+
+SIZE --> PAYLOAD : size > 0\nCurrentBytesRead = 0
+SIZE --> FIRSTHEADER : size == 0 (invalid, resync)
+
+PAYLOAD --> PAYLOAD : store byte in PayloadBuffer
+PAYLOAD --> CS : CurrentBytesRead >= size
+
+CS --> FIRSTHEADER : checksum good:\ncopy to NewPacketBuffer,\nNewPacketFlag = true
+CS --> FIRSTHEADER : checksum bad:\npacket dropped
+@enduml

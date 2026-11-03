@@ -1,0 +1,12 @@
+@startuml state_connection
+title Firmware link state (Connected flag)
+
+[*] --> Disconnected : setup(): all LEDs off
+
+state Disconnected : Connected = false\nLEDs off\nno ControlPacket is sent
+state Connected : Connected = true\ngreen LED on\nControlPacket sent every 25 ms
+
+Disconnected --> Connected : valid packet received\n(handshake or telemetry)
+Connected --> Connected : valid packet received\n(deadtimeOld = now)
+Connected --> Disconnected : no valid packet for\nmore than 2000 ms (IDLETIMER)
+@enduml

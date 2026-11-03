@@ -1,0 +1,18 @@
+@startuml state_parser_firmware
+title Firmware packet receiver (KSPBoardReceiveData)
+
+[*] --> Idle
+
+state Idle : rx_len == 0
+state Header : read until 0xBE, then 0xEF,\nthen size and id
+state Payload : accumulate bytes into buffer\nuntil rx_len bytes + checksum
+state Verify : XOR of size and payload\nvs received checksum
+
+Idle --> Header : more than 3 bytes available
+Header --> Idle : second byte is not 0xEF\nor size != sizeof(struct for that id)\n(rx_len reset to 0)
+Header --> Payload : size matches the expected struct
+Payload --> Payload : bytes still missing\n(function returns false, call again)
+Payload --> Verify : all bytes received
+Verify --> Idle : checksum good:\nmemcpy into HPacket or VData,\nreturn true
+Verify --> Idle : checksum bad:\ndrop packet, return false
+@enduml

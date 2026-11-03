@@ -1,0 +1,65 @@
+@startuml classes_firmware
+title Firmware - structure of the sketch
+!pragma layout smetana
+hide empty members
+
+class "KSPIODemo9.ino" as Main <<sketch file>> {
+  +setup()
+  +loop()
+  pin and bit #defines
+  Connected : boolean
+  deadtime, controlTime : unsigned long
+}
+
+class "Input.ino" as Input <<sketch file>> {
+  +input() : int
+  +ControlStatus(bit) : byte
+}
+
+class "output.ino" as Output <<sketch file>> {
+  +output()
+  +controls()
+  +controlsInit()
+  +MainControls(bit, state)
+  +ControlGroups(group, state)
+}
+
+class "SerialCOMS.ino" as Serial <<sketch file>> {
+  +KSPBoardReceiveData() : boolean
+  +KSPBoardSendData(address, length)
+}
+
+class "HandShake.ino" as HandShake <<sketch file>> {
+  +Handshake()
+}
+
+class "utilities.ino" as Util <<sketch file>> {
+  +Indicators()
+  +initLEDS()
+  +LEDSAllOff()
+  +InitTxPackets()
+}
+
+struct VesselData <<packed, 200 bytes>>
+struct ControlPacket <<packed, 25 bytes>>
+struct HandShakePacket <<packed, 4 bytes>>
+
+Main --> Input : loop() calls
+Main --> Output : loop() calls
+Main --> Util : setup() calls
+Main *-- VesselData : VData
+Main *-- ControlPacket : CPacket
+Main *-- HandShakePacket : HPacket
+
+Input ..> Serial : receives with
+Input ..> HandShake : probe received
+Input ..> Util : telemetry received
+Input ..> VesselData : reads
+Output ..> Serial : sends with
+Output ..> ControlPacket : fills
+HandShake ..> HandShakePacket : fills
+HandShake ..> Serial : sends with
+Util ..> VesselData : reads
+Serial ..> VesselData : writes
+Serial ..> HandShakePacket : writes
+@enduml

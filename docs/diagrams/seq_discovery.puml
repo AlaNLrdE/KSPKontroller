@@ -1,0 +1,43 @@
+@startuml seq_discovery
+title Controller discovery when the flight scene loads
+
+participant "KSPSerialPort\n(Awake, main thread)" as Awake
+participant "SerialWorker\n(reader thread)" as Worker
+participant "Serial port" as Port
+participant "Arduino firmware" as FW
+participant "KSPSerialIO\n(Start)" as Start
+
+== KSPSerialPort.Awake (controller not found yet) ==
+Awake -> Awake : initializeDataPackets()\nHPacket = 1, 2, 3
+Awake -> Worker : Begin(): create SerialPort,\nstart thread
+activate Worker
+loop for each candidate port\n(DefaultPort first, then the registry list)
+  Awake -> Port : Open()
+  alt port opened and HandshakeDisable = 0
+    Awake -> Awake : sleep HandshakeDelay
+    Awake -> Port : sendPacket(HandShakePacket 1, 2, 3)
+    Port -> FW : bytes
+    FW -> FW : KSPBoardReceiveData() -> id 0
+    FW -> Port : Handshake(): packet 3, 1, 4
+    Port -> Worker : bytes (EndRead)
+    Worker -> Worker : ReceivedDataEvent():\nparse, verify checksum
+    Worker -> Worker : InboundPacketHandler()\n(runs here because DisplayFound is false)
+    Worker -> Worker : M1, M2, M3 = 3, 1, 4\n-> DisplayFound = true
+    Awake -> Awake : wait up to 15 x 100 ms\nfor DisplayFound
+    Awake -> Port : Close()
+    opt DisplayFound
+      Awake -> Awake : stop scanning ports
+    end
+  else port opened and HandshakeDisable = 1
+    Awake -> Awake : DisplayFound = true\n(port stays open)
+  else open failed
+    Awake -> Awake : log error, try next port
+  end
+end
+
+== KSPSerialIO.Start ==
+Start -> Port : Open() if closed
+Start -> Start : sleep HandshakeDelay + 200 ms
+Start -> Start : hook AxisInput on the active vessel
+Start -> Start : sync RCS, SAS, lights, gear, brakes,\nabort, stage and groups from VControls
+@enduml

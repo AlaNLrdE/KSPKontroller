@@ -1,0 +1,124 @@
+@startuml classes_plugin
+title KSP plugin - class diagram
+!pragma layout smetana
+hide empty members
+
+class MonoBehaviour <<Unity>>
+
+class SettingsNStuff <<KSPAddon: MainMenu>> {
+  +{static} cfg : PluginConfiguration
+  +{static} DefaultPort : string
+  +{static} refreshrate : double
+  +{static} HandshakeDelay : int
+  +{static} HandshakeDisable : int
+  +{static} BaudRate : int
+  +{static} PitchEnable ... WheelThrottleEnable : int
+  +{static} SASTol : double
+  ~Awake()
+}
+
+class KSPSerialPort <<KSPAddon: Flight>> {
+  +{static} Port : SerialPort
+  +{static} DisplayFound : bool
+  +{static} ControlReceived : bool
+  +{static} VData : VesselData
+  +{static} CPacket : ControlPacket
+  +{static} VControls : VesselControls
+  +{static} VControlsOld : VesselControls
+  -{static} CurrentState : ReceiveStates
+  -{static} SerialMutex : Mutex
+  -{static} NewPacketBuffer : byte[]
+  ~Awake()
+  -Begin()
+  -Update()
+  -SerialWorker()
+  -ReceivedDataEvent(bytes, length)
+  +{static} InboundPacketHandler()
+  +{static} sendPacket(packet)
+  +{static} ControlStatus(bit, state)
+  +{static} PortCleanup()
+}
+
+class KSPSerialIO <<KSPAddon: Flight>> {
+  +{static} ActiveVessel : Vessel
+  +refreshrate : double
+  ~Awake()
+  ~Start()
+  ~Update()
+  -AxisInput(FlightCtrlState)
+  -GetResourceTotal(vessel, name)
+  -GetSOINumber(body)
+  -GetMaxOverHeat(vessel)
+  +{static} ProspectForResource(...)
+  +{static} ProspectForResourceMax(...)
+  ~OnDestroy()
+}
+
+enum ReceiveStates {
+  FIRSTHEADER
+  SECONDHEADER
+  SIZE
+  PAYLOAD
+  CS
+}
+
+enum enumAG {
+  SAS
+  RCS
+  Light
+  Gear
+  Brakes
+  Abort
+  Custom01 ... Custom10
+}
+
+struct VesselData <<packed, 200 bytes>> {
+  id = 1
+  AP, PE, Alt, RAlt, VVI ...
+  resources (Tot / current / S)
+  ActionGroups : UInt16
+  NavballSASMode : byte
+}
+
+struct ControlPacket <<packed, 25 bytes>> {
+  id = 101
+  MainControls : byte
+  ControlGroup : ushort
+  NavballSASMode : byte
+  Pitch, Roll, Yaw, TX, TY, TZ : short
+  WheelSteer, Throttle, WheelThrottle : short
+}
+
+struct HandShakePacket <<packed, 4 bytes>> {
+  id = 0
+  M1, M2, M3 : byte
+}
+
+struct VesselControls {
+  SAS, RCS, Lights, Gear, Brakes ... : bool
+  ControlGroup : bool[11]
+  Pitch ... WheelThrottle : float
+}
+
+struct IOResource {
+  Max : float
+  Current : float
+}
+
+MonoBehaviour <|-- SettingsNStuff
+MonoBehaviour <|-- KSPSerialPort
+MonoBehaviour <|-- KSPSerialIO
+
+KSPSerialPort *-- VesselData
+KSPSerialPort *-- ControlPacket
+KSPSerialPort *-- HandShakePacket
+KSPSerialPort *-- "2" VesselControls
+KSPSerialPort +-- ReceiveStates
+KSPSerialPort ..> VesselControls : decodes ControlPacket into
+
+KSPSerialIO ..> KSPSerialPort : sends VData,\nreads VControls
+KSPSerialIO ..> SettingsNStuff : reads axis modes
+KSPSerialIO ..> IOResource : creates
+KSPSerialIO ..> enumAG : bit order
+KSPSerialPort ..> SettingsNStuff : reads port settings
+@enduml

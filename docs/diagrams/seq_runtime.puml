@@ -1,0 +1,37 @@
+@startuml seq_runtime
+title Steady-state exchange during flight
+
+participant "KSPSerialIO.Update\n(main thread)" as IO
+participant "KSPSerialPort\n(main thread)" as SP
+participant "SerialWorker\n(reader thread)" as Worker
+participant "Serial port" as Port
+participant "Arduino loop()" as FW
+
+== Telemetry: KSP -> controller (every refresh interval) ==
+IO -> IO : sample the active vessel\ninto VData
+IO -> SP : sendPacket(VData)
+SP -> Port : [BE][EF][200][VData][checksum]
+Port -> FW : bytes
+FW -> FW : input(): KSPBoardReceiveData()\nvalid -> Indicators()
+FW -> FW : Connected = true,\ndeadtimeOld = now
+
+== Controls: controller -> KSP (every 25 ms while Connected) ==
+FW -> FW : output(): controls()\nread switches and throttle
+FW -> Port : [BE][EF][25][ControlPacket][checksum]
+Port -> Worker : bytes (BeginRead / EndRead)
+Worker -> Worker : ReceivedDataEvent():\nstate machine + checksum
+Worker -> SP : copy payload to NewPacketBuffer\nunder SerialMutex, NewPacketFlag = true
+... next frame ...
+SP -> SP : Update(): NewPacketFlag set
+SP -> SP : InboundPacketHandler():\nid 101 -> VesselControls()
+SP -> IO : ControlReceived = true
+IO -> IO : apply changed toggles, groups,\nSAS and navball modes to the vessel
+
+== Axes ==
+note over IO
+  KSP autopilot calls AxisInput(FlightCtrlState)
+  every physics step: pitch, roll, yaw, translation,
+  wheels and throttle are merged using the
+  per-axis mode from config.xml.
+end note
+@enduml

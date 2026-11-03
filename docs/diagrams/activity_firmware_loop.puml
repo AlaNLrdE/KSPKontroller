@@ -1,0 +1,33 @@
+@startuml activity_firmware_loop
+title Firmware main loop
+
+start
+:setup(): Serial.begin(115200),\ninitLEDS(), InitTxPackets(),\ncontrolsInit(), LEDSAllOff();
+repeat
+  partition "input()" {
+    :now = millis();
+    if (KSPBoardReceiveData() returned a packet?) then (yes)
+      :deadtimeOld = now;
+      if (packet id) then (0 handshake)
+        :Handshake(): reply 3, 1, 4;
+      else (1 telemetry)
+        :Indicators(): update LEDs;
+      endif
+      :green LED on, Connected = true;
+    else (no)
+      if (now - deadtimeOld > 2000 ms?) then (yes)
+        :Connected = false;
+        :LEDSAllOff();
+      endif
+    endif
+  }
+  partition "output()" {
+    if (now - controlTimeOld > 25 ms?) then (yes)
+      if (Connected?) then (yes)
+        :read SAS, RCS, group 1 switches\nand the throttle potentiometer;
+        :KSPBoardSendData(CPacket);
+      endif
+    endif
+  }
+repeat while (forever)
+@enduml
