@@ -1,5 +1,20 @@
 # Changelog
 
+* **0.19.3.7**: 20261103
+  The stage button now behaves exactly like the space bar: it only calls `StageManager.ActivateNextStage()`
+  and no longer toggles the Stage action group (before and 150 ms after the press), which could confuse
+  other mods such as MechJeb's ascent autopilot. Each press logs a `KSPSerialIO[CTRL]` line with the stage
+  and the current throttle.
+* **0.19.3.6**: 20261103
+  Every port open, close and shutdown step now logs a line starting with `KSPSerialIO[PORT]` (with thread
+  and time), including `OnDestroy` and `OnApplicationQuit`. A `closing port` line without a following
+  `closed in N ms` line means `Close()` hung. Used to find why the board stops answering after KSP exits.
+* **0.19.3.5**: 20261103
+  The stage button (Arduino pin 2) stages the vessel once per press; the first packet after connecting only
+  seeds the button state, so a button that is already down no longer stages by itself. New throttle mode 4
+  (`ThrottleEnable`): keyboard throttle works and the potentiometer takes over only when it moves. The
+  default is now 0 (keyboard only) because a floating analog input read a constant 18 % that came back
+  whenever the throttle was cut. The initial action group sync no longer aborts on a failing part module.
 * **0.19.3.4**: 20261103
   Telemetry is written by a background thread. The first performance run showed that each
   `Port.Write` blocked the main thread for about 20 ms, five times a second, costing 9 % of every frame.

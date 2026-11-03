@@ -6,7 +6,7 @@
   <int name="HandshakeDelay">2500</int>
   <int name="HandshakeDisable">0</int>
   <int name="PerfLog">1</int>
-  <int name="ThrottleEnable">2</int>
+  <int name="ThrottleEnable">0</int>
   <int name="PitchEnable">2</int>
   <int name="RollEnable">2</int>
   <int name="YawEnable">2</int>

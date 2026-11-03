@@ -276,6 +276,8 @@ namespace KSPSerialIO
         // 1: The external value (read from serial packet) is always used.
         // 2: If the internal value is not zero use it, otherwise use the external value.
         // 3: If the external value is not zero use it, otherwise use the internal value.
+        // 4: The internal value is used until the external value moves; then the external value takes over.
+        //    Only for throttle: the keyboard (Z, X, Ctrl, Shift) keeps working next to a potentiometer.
         public static int PitchEnable;        ///< Axis mode for pitch (see class description)
         public static int RollEnable;         ///< Axis mode for roll
         public static int YawEnable;          ///< Axis mode for yaw
@@ -361,6 +363,7 @@ namespace KSPSerialIO
         public static SerialPort Port;            ///< The serial port in use
         public static string PortNumber;          ///< Name of the port currently being probed or used
         public static Boolean DisplayFound = false;   ///< True once a controller answered the handshake
+        public static Boolean StageSeeded = false;   ///< False until the first ControlPacket of a flight has seeded the stage button state
         public static Boolean ControlReceived = false;///< Set when a new ControlPacket was decoded, cleared by KSPSerialIO::Update
 
         public static VesselData VData;           ///< Telemetry being filled and sent to the controller
@@ -545,6 +548,7 @@ namespace KSPSerialIO
                     {
                         LinkFailed = true;
                         Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
+                        PortLog("closing port after repeated send failures");
                         try { Port.Close(); } catch (Exception) { }
                     }
                 }
@@ -867,7 +871,9 @@ namespace KSPSerialIO
                         {
                             try
                             {
+                                PortLog("opening port for discovery");
                                 Port.Open();
+                                PortLog("opened for discovery");
                             }
                             catch (Exception e)
                             {
@@ -900,7 +906,9 @@ namespace KSPSerialIO
                                 }
                                 finally
                                 {
+                                    PortLog("closing port after discovery handshake");
                                     try { Port.Close(); } catch (Exception) { }
+                                    PortLog("closed after discovery handshake");
                                 }
 
                                 if (DisplayFound)
@@ -951,6 +959,12 @@ namespace KSPSerialIO
             VControls.Precision = BitMathByte(CPacket.MainControls, 2);
             VControls.Abort = BitMathByte(CPacket.MainControls, 1);
             VControls.Stage = BitMathByte(CPacket.MainControls, 0);
+            if (!StageSeeded)
+            {
+                // The first packet after connecting only seeds the state: a button already down must not stage
+                VControlsOld.Stage = VControls.Stage;
+                StageSeeded = true;
+            }
             VControls.Pitch = (float)CPacket.Pitch / 1000.0F;
             VControls.Roll = (float)CPacket.Roll / 1000.0F;
             VControls.Yaw = (float)CPacket.Yaw / 1000.0F;
@@ -1010,17 +1024,38 @@ namespace KSPSerialIO
                 VData.ActionGroups &= (UInt16)~(1 << n);      // forces nth bit of x to be 0.  all other bits left alone.
         }
 
+        /**
+         * @brief Writes one easily searchable port lifecycle line: grep the KSP log for "KSPSerialIO[PORT]".
+         *
+         * Every open, close and shutdown step goes through here, so a hang or a board that stops answering
+         * can be matched against the exact moment (and thread) of the last port operation.
+         */
+        public static void PortLog(string what)
+        {
+            bool open = false;
+            try { open = Port != null && Port.IsOpen; } catch (Exception) { }
+            Debug.Log("KSPSerialIO[PORT] " + what + " | port=" + PortNumber + " open=" + open +
+                      " thread=" + Thread.CurrentThread.ManagedThreadId + " t=" +
+                      DateTime.Now.ToString("HH:mm:ss.fff"));
+        }
+
         /// @brief Stops the reader thread and closes and disposes the port.
         public static void PortCleanup()
         {
+            PortLog("cleanup begin: stopping writer");
             StopSender();
+            PortLog("cleanup: writer stopped");
             if (KSPSerialPort.Port.IsOpen)
             {
                 doSerialRead = false;
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                PortLog("closing port (Close() about to be called; no 'closed' line after this means Close() hung)");
                 KSPSerialPort.Port.Close();
                 KSPSerialPort.Port.Dispose();
+                PortLog("closed in " + ((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency).ToString("F1") + " ms");
                 Debug.Log("KSPSerialIO: Port closed");
             }
+            else PortLog("cleanup: port was already closed");
         }
     }
 
@@ -1190,6 +1225,13 @@ namespace KSPSerialIO
             refreshrate = SettingsNStuff.refreshrate;
         }
 
+        /// @brief SetGroup that never throws: a broken part module (seen with solar panels) must not abort the initial sync.
+        private static void SafeSetGroup(KSPActionGroup group, bool state)
+        {
+            try { ActiveVessel.ActionGroups.SetGroup(group, state); }
+            catch (Exception e) { Debug.Log("KSPSerialIO: SetGroup " + group + " failed: " + e.Message); }
+        }
+
         /**
          * @brief Unity Start: opens the port, hooks AxisInput into the active vessel and syncs the initial control state.
          *
@@ -1205,7 +1247,9 @@ namespace KSPSerialIO
 
                     try
                     {
+                        KSPSerialPort.PortLog("opening port for the flight");
                         KSPSerialPort.Port.Open();
+                        KSPSerialPort.PortLog("opened for the flight");
                         Thread.Sleep(SettingsNStuff.HandshakeDelay);
                     }
                     catch (Exception e)
@@ -1227,26 +1271,26 @@ namespace KSPSerialIO
                 ActiveVessel.OnPostAutopilotUpdate -= AxisInput;
                 ActiveVessel = FlightGlobals.ActiveVessel;
                 ActiveVessel.OnPostAutopilotUpdate += AxisInput;
+                KSPSerialPort.StageSeeded = false;
 
                 //sync inputs at start
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Light, KSPSerialPort.VControls.Lights);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Gear, KSPSerialPort.VControls.Gear);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Brakes, KSPSerialPort.VControls.Brakes);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Abort, KSPSerialPort.VControls.Abort);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Stage, KSPSerialPort.VControls.Stage);
+                SafeSetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
+                SafeSetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
+                SafeSetGroup(KSPActionGroup.Light, KSPSerialPort.VControls.Lights);
+                SafeSetGroup(KSPActionGroup.Gear, KSPSerialPort.VControls.Gear);
+                SafeSetGroup(KSPActionGroup.Brakes, KSPSerialPort.VControls.Brakes);
+                SafeSetGroup(KSPActionGroup.Abort, KSPSerialPort.VControls.Abort);
 
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom01, KSPSerialPort.VControls.ControlGroup[1]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom02, KSPSerialPort.VControls.ControlGroup[2]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom03, KSPSerialPort.VControls.ControlGroup[3]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom04, KSPSerialPort.VControls.ControlGroup[4]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom05, KSPSerialPort.VControls.ControlGroup[5]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom06, KSPSerialPort.VControls.ControlGroup[6]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom07, KSPSerialPort.VControls.ControlGroup[7]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom08, KSPSerialPort.VControls.ControlGroup[8]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom09, KSPSerialPort.VControls.ControlGroup[9]);
-                ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Custom10, KSPSerialPort.VControls.ControlGroup[10]);
+                SafeSetGroup(KSPActionGroup.Custom01, KSPSerialPort.VControls.ControlGroup[1]);
+                SafeSetGroup(KSPActionGroup.Custom02, KSPSerialPort.VControls.ControlGroup[2]);
+                SafeSetGroup(KSPActionGroup.Custom03, KSPSerialPort.VControls.ControlGroup[3]);
+                SafeSetGroup(KSPActionGroup.Custom04, KSPSerialPort.VControls.ControlGroup[4]);
+                SafeSetGroup(KSPActionGroup.Custom05, KSPSerialPort.VControls.ControlGroup[5]);
+                SafeSetGroup(KSPActionGroup.Custom06, KSPSerialPort.VControls.ControlGroup[6]);
+                SafeSetGroup(KSPActionGroup.Custom07, KSPSerialPort.VControls.ControlGroup[7]);
+                SafeSetGroup(KSPActionGroup.Custom08, KSPSerialPort.VControls.ControlGroup[8]);
+                SafeSetGroup(KSPActionGroup.Custom09, KSPSerialPort.VControls.ControlGroup[9]);
+                SafeSetGroup(KSPActionGroup.Custom10, KSPSerialPort.VControls.ControlGroup[10]);
 
             }
             else
@@ -1596,10 +1640,15 @@ namespace KSPSerialIO
 
                     if (KSPSerialPort.VControls.Stage != KSPSerialPort.VControlsOld.Stage)
                     {
+                        // Same as the space bar: only ActivateNextStage. The Stage action group is deliberately
+                        // not toggled, so no other mod sees extra group events (e.g. MechJeb's ascent autopilot).
                         if (KSPSerialPort.VControls.Stage)
+                        {
+                            Debug.Log("KSPSerialIO[CTRL] stage button: stage " + StageManager.CurrentStage +
+                                      " -> next, vessel throttle=" + FlightInputHandler.state.mainThrottle.ToString("F2") +
+                                      " t=" + DateTime.Now.ToString("HH:mm:ss.fff"));
                             StageManager.ActivateNextStage();
-
-                        ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.Stage, KSPSerialPort.VControls.Stage);
+                        }
                         KSPSerialPort.VControlsOld.Stage = KSPSerialPort.VControls.Stage;
                     }
 
@@ -1807,6 +1856,8 @@ namespace KSPSerialIO
          * Each axis is combined according to its SettingsNStuff mode (0-3, see SettingsNStuff).
          * @param s Control state about to be applied to the vessel; modified in place.
          */
+        private static float lastPotThrottle = float.NaN;   ///< Last throttle value seen from the controller (mode 4)
+
         private void AxisInput(FlightCtrlState s)
         {
             switch (SettingsNStuff.ThrottleEnable)
@@ -1824,6 +1875,16 @@ namespace KSPSerialIO
                     if (KSPSerialPort.VControls.Throttle != 0)
                     {
                         s.mainThrottle = KSPSerialPort.VControls.Throttle;
+                    }
+                    break;
+                case 4:
+                    // Follow the potentiometer only when it moves more than a small threshold
+                    if (float.IsNaN(lastPotThrottle))
+                        lastPotThrottle = KSPSerialPort.VControls.Throttle;
+                    else if (Math.Abs(KSPSerialPort.VControls.Throttle - lastPotThrottle) > 0.02f)
+                    {
+                        lastPotThrottle = KSPSerialPort.VControls.Throttle;
+                        s.mainThrottle = lastPotThrottle;
                     }
                     break;
                 default:
@@ -2220,9 +2281,16 @@ namespace KSPSerialIO
         {
         }
 
+        /// @brief Unity OnApplicationQuit: logs that the game is exiting (the port is closed by OnDestroy / the process exit).
+        void OnApplicationQuit()
+        {
+            KSPSerialPort.PortLog("OnApplicationQuit (KSP is exiting)");
+        }
+
         /// @brief Unity OnDestroy: closes the serial port when the flight scene is unloaded.
         void OnDestroy()
         {
+            KSPSerialPort.PortLog("OnDestroy (flight scene unloading)");
             if (KSPSerialPort.Port.IsOpen)
             {
                 KSPSerialPort.PortCleanup();
