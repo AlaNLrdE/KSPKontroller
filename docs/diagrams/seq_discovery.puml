@@ -1,43 +1,92 @@
 @startuml seq_discovery
 title Controller discovery when the flight scene loads
 
-participant "KSPSerialPort\n(Awake, main thread)" as Awake
-participant "SerialWorker\n(reader thread)" as Worker
-participant "Serial port" as Port
-participant "Arduino firmware" as FW
-participant "KSPSerialIO\n(Start)" as Start
+skinparam style strictuml
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
 
-== KSPSerialPort.Awake (controller not found yet) ==
-Awake -> Awake : initializeDataPackets()\nHPacket = 1, 2, 3
-Awake -> Worker : Begin(): create SerialPort,\nstart thread
+participant "KSPSerialPort.Awake\n(main thread)" as Awake
+participant "Serial port" as Port
+participant "SerialWorker\n(reader thread)" as Worker
+participant "Arduino firmware\n(loop)" as FW
+participant "KSPSerialIO.Start\n(main thread)" as Start
+
+note over FW : loop() runs continuously
+activate FW
+
+== KSPSerialPort.Awake: controller not found yet ==
+activate Awake
+Awake -> Awake ++ : initializeDataPackets()
+return HPacket = 1, 2, 3
+
+Awake -> Awake ++ : Begin()
+Awake ->> Worker : Thread.Start(SerialWorker)
 activate Worker
-loop for each candidate port\n(DefaultPort first, then the registry list)
-  Awake -> Port : Open()
-  alt port opened and HandshakeDisable = 0
-    Awake -> Awake : sleep HandshakeDelay
-    Awake -> Port : sendPacket(HandShakePacket 1, 2, 3)
-    Port -> FW : bytes
-    FW -> FW : KSPBoardReceiveData() -> id 0
-    FW -> Port : Handshake(): packet 3, 1, 4
-    Port -> Worker : bytes (EndRead)
-    Worker -> Worker : ReceivedDataEvent():\nparse, verify checksum
-    Worker -> Worker : InboundPacketHandler()\n(runs here because DisplayFound is false)
-    Worker -> Worker : M1, M2, M3 = 3, 1, 4\n-> DisplayFound = true
-    Awake -> Awake : wait up to 15 x 100 ms\nfor DisplayFound
-    Awake -> Port : Close()
+note right of Worker
+  Lives until PortCleanup().
+  Sleeps 500 ms while the port is closed.
+end note
+deactivate Awake
+
+loop for each candidate port (DefaultPort first, then the registry list)
+  Awake -> Port ++ : Open()
+  return opened, or an exception
+
+  alt opened and HandshakeDisable = 0
+    Awake -> Awake ++ : Thread.Sleep(HandshakeDelay)
+    return
+
+    Awake -> Awake ++ : sendPacket(HandShakePacket 1, 2, 3)
+    Awake -> Port ++ : Write(frame)
+    return
+    return
+
+    Port ->> FW : bytes over USB
+    FW -> FW ++ : input()
+    FW -> FW ++ : KSPBoardReceiveData()
+    return true, id = 0
+    FW -> FW ++ : Handshake()
+    FW -> Port ++ : KSPBoardSendData(HPacket 3, 1, 4)
+    return
+    return
+    return
+
+    Port ->> Worker : bytes (EndRead returns)
+    Worker -> Worker ++ : ReceivedDataEvent(bytes)
+    Worker -> Worker ++ : InboundPacketHandler()
+    note right of Worker : Runs on this thread because\nDisplayFound is still false
+    Worker -> Worker ++ : HandShake()
+    return
+    note right of Worker : M1, M2, M3 = 3, 1, 4\nDisplayFound = true
+    return
+    return
+
+    Awake -> Awake ++ : wait for DisplayFound\n(up to 15 x 100 ms)
+    return DisplayFound
+
+    Awake -> Port ++ : Close()
+    return
+
     opt DisplayFound
-      Awake -> Awake : stop scanning ports
+      note over Awake : stop scanning ports
     end
-  else port opened and HandshakeDisable = 1
-    Awake -> Awake : DisplayFound = true\n(port stays open)
+  else opened and HandshakeDisable = 1
+    note over Awake : DisplayFound = true\nport stays open
   else open failed
-    Awake -> Awake : log error, try next port
+    note over Awake : log the error,\ntry the next port
   end
 end
+deactivate Awake
 
 == KSPSerialIO.Start ==
-Start -> Port : Open() if closed
-Start -> Start : sleep HandshakeDelay + 200 ms
-Start -> Start : hook AxisInput on the active vessel
-Start -> Start : sync RCS, SAS, lights, gear, brakes,\nabort, stage and groups from VControls
+activate Start
+Start -> Port ++ : Open() if it is closed
+return
+Start -> Start ++ : Thread.Sleep(HandshakeDelay + 200 ms)
+return
+Start -> Start ++ : hook AxisInput on the active vessel
+return
+Start -> Start ++ : sync RCS, SAS, lights, gear, brakes,\nabort, stage and groups from VControls
+return
+deactivate Start
 @enduml
