@@ -4,7 +4,9 @@
 #   ./ci build_sketch        Compile the Arduino sketch (arduino-cli)
 #   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild)
 #   ./ci build_all           Both of the above
-#   ./ci install             Copy plugin + config.xml into $KSPDIR/GameData/KSPSerialIO
+#   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO)
+#   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
+#   ./ci ksp_list            List the KSP installs found on this machine
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
 #   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
@@ -16,7 +18,7 @@
 # Environment overrides:
 #   FQBN    Arduino board          (default: arduino:renesas_uno:unor4wifi)
 #   CONFIG  Plugin configuration   (default: Release)
-#   KSPDIR  KSP install directory  (required for `install`)
+#   KSPDIR  KSP install directory  (skips the question when several installs are found)
 #   PLANTUML_JAR  Path to plantuml.jar (default: build/tools/plantuml.jar, downloaded if missing)
 #   ARDUINO_PORT  Port for upload_sketch and test_arduino, same as passing PORT (optional)
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
@@ -121,20 +123,134 @@ build_KSPSerialIO() {
   log "Output: $PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
 }
 
-install_plugin() {
-  [ -n "${KSPDIR:-}" ] || die "set KSPDIR to your KSP install directory"
-  local dll="$PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
-  [ -f "$dll" ] || die "plugin not built; run ./ci build_KSPSerialIO first"
+# A KSP install has a GameData folder next to the game executable
+is_kspdir() {
+  [ -d "$1/GameData" ] && { [ -f "$1/KSP_x64.exe" ] || [ -f "$1/KSP.x86_64" ] || [ -d "$1/KSP.app" ]; }
+}
 
-  local dest="$KSPDIR/GameData/KSPSerialIO"
+# Print every KSP install found, one per line as "<path><TAB><how it was found>", without duplicates.
+# The install that was launched last comes first: Unity logs the game's Managed folder in Player.log
+# as "Mono path[0] = '<install>/KSP_x64_Data/Managed'". Then Steam libraries and common GOG folders.
+ksp_candidates() {
+  local seen="|" log p key c steam lib root pf86
+  pf86="$(printenv "ProgramFiles(x86)" 2>/dev/null || true)"
+  add() {
+    is_kspdir "$1" || return 0
+    key="$(cd "$1" && pwd -P)"
+    case "$seen" in *"|$key|"*) return 0 ;; esac
+    seen="$seen$key|"
+    printf '%s\t%s\n' "$(cd "$1" && { pwd -W 2>/dev/null || pwd -P; })" "$2"
+  }
+
+  for log in "${LOCALAPPDATA:-}/../LocalLow/Squad/Kerbal Space Program/Player.log" \
+             "$HOME/.config/unity3d/Squad/Kerbal Space Program/Player.log" \
+             "$HOME/Library/Logs/Squad/Kerbal Space Program/Player.log"; do
+    [ -f "$log" ] || continue
+    c="$(sed -n "s#^Mono path\[0\] = '\(.*\)/KSP[^/]*_Data/Managed'.*#\1#p" "$log" | head -1 | tr -d '\r')"
+    [ -n "$c" ] && add "$c" "last launched"
+  done
+
+  for steam in "${ProgramFiles:-}/Steam" "$pf86/Steam" "$HOME/.steam/steam" \
+               "$HOME/Library/Application Support/Steam"; do
+    [ -f "$steam/steamapps/libraryfolders.vdf" ] || continue
+    while IFS= read -r lib; do
+      add "$lib/steamapps/common/Kerbal Space Program" "Steam"
+    done < <({ echo "$steam"; sed -n 's#.*"path"[[:space:]]*"\(.*\)".*#\1#p' "$steam/steamapps/libraryfolders.vdf" | sed 's#\\#/#g'; } | tr -d '\r')
+  done
+
+  # GOG and plain "Games" folders on any Windows drive
+  for root in /c /d /e /f /g /h; do
+    [ -d "$root" ] || continue
+    for p in "$root"/GOG*/"Kerbal Space Program" "$root"/GOG*/*/"Kerbal Space Program" \
+             "$root"/"Program Files"*/"GOG Galaxy"/Games/"Kerbal Space Program" \
+             "$root"/Games/"Kerbal Space Program"; do
+      add "$p" "GOG / other"
+    done
+  done
+}
+
+# Print the KSP install to use: $KSPDIR if set, else the only one found, else ask which one
+find_kspdir() {
+  if [ -n "${KSPDIR:-}" ]; then
+    is_kspdir "$KSPDIR" || die "KSPDIR=$KSPDIR is not a KSP install (no GameData folder and game executable)"
+    echo "$KSPDIR"
+    return
+  fi
+
+  local paths=() labels=() path label i choice
+  while IFS=$'\t' read -r path label; do
+    paths+=("$path"); labels+=("$label")
+  done < <(ksp_candidates)
+
+  [ "${#paths[@]}" -gt 0 ] || die "no KSP install found; set KSPDIR to the folder that contains GameData"
+  if [ "${#paths[@]}" -eq 1 ]; then
+    echo "${paths[0]}"
+    return
+  fi
+
+  # More than one: list them (stderr, because stdout is captured) and let the user pick
+  {
+    echo "KSP installs found:"
+    for i in "${!paths[@]}"; do
+      printf '  %d) %s  [%s]\n' "$((i + 1))" "${paths[$i]}" "${labels[$i]}"
+    done
+  } >&2
+  if [ ! -t 0 ]; then
+    die "several KSP installs found and there is no terminal to ask; set KSPDIR to one of them"
+  fi
+  while true; do
+    read -r -p "Install into which one? [1-${#paths[@]}, Enter = 1]: " choice < /dev/tty >&2
+    choice="${choice:-1}"
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#paths[@]}" ]; then
+      echo "${paths[$((choice - 1))]}"
+      return
+    fi
+    echo "Enter a number between 1 and ${#paths[@]}" >&2
+  done
+}
+
+# Show the KSP installs that deploy/install can target
+ksp_list() {
+  local path label
+  while IFS=$'\t' read -r path label; do
+    printf '%s  [%s]\n' "$path" "$label"
+  done < <(ksp_candidates)
+}
+
+ksp_running() {
+  if command -v tasklist >/dev/null 2>&1; then tasklist 2>/dev/null | grep -qi "KSP_x64.exe"
+  else pgrep -f "KSP.x86_64|KSP.app" >/dev/null 2>&1; fi
+}
+
+# Copy the built plugin into a KSP install (the one from find_kspdir)
+install_plugin() {
+  local dll="$PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
+  [ -f "$dll" ] || die "plugin not built; run ./ci build_KSPSerialIO first (or use ./ci deploy)"
+
+  local ksp dest
+  ksp="$(find_kspdir)"
+  ! ksp_running || die "KSP is running and keeps the plugin DLL locked; close it and try again"
+
+  dest="$ksp/GameData/KSPSerialIO"
+  log "Installing into $ksp"
   mkdir -p "$dest/PluginData/KSPSerialIO"
   cp "$dll" "$dest/"
   cp "$ROOT/KSPSerialIO/Includes/PsimaxSerial.dll" "$dest/"
   # Never overwrite a config the user has already edited
   if [ ! -f "$dest/PluginData/KSPSerialIO/config.xml" ]; then
     cp "$ROOT/KSPSerialIO/config.xml" "$dest/PluginData/KSPSerialIO/"
+    log "Copied the default config.xml (edit DefaultPort for your system)"
+  else
+    log "Kept the existing config.xml"
   fi
-  log "Installed to $dest"
+  log "Installed: $dest"
+}
+
+# Build the plugin and install it into the local KSP
+deploy() {
+  build_KSPSerialIO
+  install_plugin
+  log "Start KSP and look for 'KSPSerialIO:' lines in KSP.log / Player.log"
 }
 
 docs() {
@@ -252,13 +368,15 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,21p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,23p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
   build_KSPSerialIO) build_KSPSerialIO ;;
   build_all)         build_KSPSerialIO; build_sketch ;;
   install)           install_plugin ;;
+  deploy)            deploy ;;
+  ksp_list)          ksp_list ;;
   docs)              docs ;;
   diagrams)          diagrams ;;
   sphinx)            sphinx ;;

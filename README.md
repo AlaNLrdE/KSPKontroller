@@ -134,7 +134,8 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE)
 ./ci build_sketch        # compile the Arduino sketch (downloads arduino-cli + UNO R4 core if missing)
 ./ci build_KSPSerialIO   # compile the KSP plugin (msbuild, xbuild or dotnet)
 ./ci build_all           # both
-KSPDIR=/path/to/KSP ./ci install   # copy the plugin into GameData/KSPSerialIO
+./ci deploy               # build the plugin and install it into a local KSP (lists installs and asks which)
+./ci ksp_list             # list the KSP installs found on this machine
 ./ci upload_sketch [PORT]   # upload the compiled sketch to the board
 ./ci test_arduino [PORT]   # compile + upload + test the board over USB serial (NO_UPLOAD=1 skips the upload)
 ./ci clean

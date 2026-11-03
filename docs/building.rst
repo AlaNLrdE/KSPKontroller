@@ -16,8 +16,12 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Compile the plugin with msbuild, xbuild or dotnet.
    * - ``./ci build_all``
      - Both of the above.
+   * - ``./ci deploy``
+     - Build the plugin and install it into a local KSP. Lists the installs it finds and asks which one (see below).
+   * - ``./ci ksp_list``
+     - List the KSP installs found on this machine.
    * - ``./ci install``
-     - Copy the plugin and ``config.xml`` to ``$KSPDIR/GameData/KSPSerialIO``.
+     - Install the already built plugin (same selection as ``deploy``). Needs ``./ci build_KSPSerialIO`` first.
    * - ``./ci docs``
      - Doxygen API reference into ``build/docs/html``.
    * - ``./ci diagrams``
@@ -61,6 +65,34 @@ tests pass, 1 when one fails and 2 when no board answered.
 Every run flashes the board. Set ``NO_UPLOAD=1`` to test the firmware that is already on it.
 The board is found by the ``FQBN`` setting (UNO R4 WiFi by default), or pass the port. Close the Arduino
 IDE's serial monitor and KSP first, since only one program can hold the port.
+
+Deploying to KSP
+----------------
+
+``./ci deploy`` builds the plugin and copies ``KSPSerialIO.dll``, ``PsimaxSerial.dll`` and, the first
+time, ``config.xml`` to ``GameData/KSPSerialIO`` of a local KSP install. An existing ``config.xml`` is
+never overwritten. It refuses to run while KSP is open, because the game keeps the DLL locked.
+
+The installs are detected, not guessed, and ``./ci ksp_list`` shows them:
+
+* the one launched last, read from Unity's ``Player.log`` (``Mono path[0]``), listed first;
+* every Steam library in ``libraryfolders.vdf``;
+* common GOG and ``Games`` folders on drives C: to H:.
+
+With one install it is used directly. With several, ``ci`` prints a numbered list and asks which to
+use (Enter picks the first). Without a terminal it stops instead of choosing, so scripts must set
+``KSPDIR``, which also skips the question:
+
+.. code-block:: text
+
+   KSP installs found:
+     1) C:/Users/alanl/wk/wk-rea/Kerbal Space Program  [last launched]
+     2) D:/SteamLibrary/steamapps/common/Kerbal Space Program  [Steam]
+   Install into which one? [1-2, Enter = 1]:
+
+The default ``config.xml`` ships a macOS ``DefaultPort`` and a 38400 baud rate. Edit
+``GameData/KSPSerialIO/PluginData/KSPSerialIO/config.xml`` in the install for your port (for
+example ``COM5``) and ``BaudRate`` 115200 so KSP does not have to scan every serial port.
 
 Requirements for the documentation
 ----------------------------------
