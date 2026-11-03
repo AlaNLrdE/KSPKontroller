@@ -70,6 +70,16 @@ Axis modes
    * - 3
      - Use the controller's value unless it is zero, then use KSP's.
 
+Writing without blocking the game
+---------------------------------
+
+A serial write can block for tens of milliseconds: the first performance run measured about 20 ms per
+telemetry packet, five times a second, which took 9 % of every frame. ``KSPSerialPort.TrySendPacket``
+therefore only builds the frame and queues it. A background thread (``SenderWorker``) writes it. Only the
+newest frame is kept, because an older telemetry packet is useless. After three consecutive failed writes
+the thread closes the port and sets ``LinkFailed``. The handshake still writes synchronously, because it
+runs once during scene load.
+
 Reading the port safely
 -----------------------
 
@@ -101,7 +111,7 @@ script or a profiler can parse it:
 
 .. code-block:: text
 
-   KSPSerialIO: perf window_s=10.0 parts=142 frames=600 frame_ms=16.67 fps=60.0 upd_avg_ms=0.021 upd_max_ms=0.85 upd_share_pct=0.126 samples=50 sample_avg_ms=0.310 sample_max_ms=0.85 send_avg_ms=0.004 send_max_ms=0.05 ws_mb=27700 private_mb=28100 gc_heap_mb=1200 gc0=12 gc1=3 gc2=0 proc_cpu_pct=96
+   KSPSerialIO: perf window_s=10.0 parts=142 frames=600 frame_ms=16.67 fps=60.0 upd_avg_ms=0.021 upd_max_ms=0.85 upd_share_pct=0.126 samples=50 sample_avg_ms=0.310 sample_max_ms=0.85 send_avg_ms=0.004 send_max_ms=0.05 writes=50 write_avg_ms=19.80 write_max_ms=20.4 ws_mb=27700 private_mb=28100 gc_heap_mb=1200 gc0=12 gc1=3 gc2=0 proc_cpu_pct=96
 
 .. list-table::
    :header-rows: 1
@@ -122,9 +132,13 @@ script or a profiler can parse it:
      - Telemetry samples taken and the time to read the vessel into ``VData``. This is the only part
        that grows with the number of parts.
    * - ``send_avg_ms``, ``send_max_ms``
-     - Time to write the packet. A value near the 250 ms write timeout means the board is not reading.
+     - Time the main thread spends queueing the packet for the writer thread. Should be a few microseconds.
+   * - ``writes``, ``write_avg_ms``, ``write_max_ms``
+     - Writes done by the background writer thread and how long each took. This time is **not** spent
+       in the game's frame; a value near the 250 ms write timeout means the board is not reading.
    * - ``ws_mb``, ``private_mb``
-     - Working set and private memory of the whole KSP process, in MB.
+     - Working set and private memory of the whole KSP process, in MB (read with the Windows API;
+       Mono's ``Process.WorkingSet64`` returns 0).
    * - ``gc_heap_mb``, ``gc0``, ``gc1``, ``gc2``
      - Managed heap size and the garbage collections of each generation during the window.
    * - ``proc_cpu_pct``

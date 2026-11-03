@@ -1,5 +1,10 @@
 # Changelog
 
+* **0.19.3.4**: 20261103
+  Telemetry is written by a background thread. The first performance run showed that each
+  `Port.Write` blocked the main thread for about 20 ms, five times a second, costing 9 % of every frame.
+  The main thread now only queues the packet (newest wins). The perf line gains `writes`, `write_avg_ms`
+  and `write_max_ms` and reads process memory with the Windows API, because Mono returned 0.
 * **0.19.3.3**: 20261103
   The `PerfLog` line is now a list of `key=value` pairs for easy parsing, and adds process memory
   (working set, private), managed heap size, garbage collections per generation and process CPU usage.

@@ -438,6 +438,13 @@ namespace KSPSerialIO
          */
         public static void sendPacket(object anything)
         {
+            byte[] Packet = BuildFrame(anything);
+            Port.Write(Packet, 0, Packet.Length);
+        }
+
+        /// @brief Serializes a struct and wraps it in the wire framing, ready to be written to the port.
+        private static byte[] BuildFrame(object anything)
+        {
             byte[] Payload = StructureToByteArray(anything);
             byte header1 = 0xBE;
             byte header2 = 0xEF;
@@ -461,38 +468,113 @@ namespace KSPSerialIO
             Packet[2] = size;
             Packet[Packet.Length - 1] = checksum;
 
-            Port.Write(Packet, 0, Packet.Length);
+            return Packet;
         }
 
+        // ---- Background writer ------------------------------------------------------------------
+        // A serial write can block for tens of milliseconds (measured: about 20 ms per telemetry packet on
+        // Windows), which on the main thread is a dropped frame five times a second. The main thread only
+        // queues the frame; this thread writes it. Only the newest frame is kept: an older one is useless.
+        private static byte[] pendingFrame;
+        private static readonly object sendLock = new object();
+        private static readonly AutoResetEvent sendEvent = new AutoResetEvent(false);
+        private static Thread SenderThread;
+        private static volatile bool senderRun = false;
+        private static int WriteCount;                 // guarded by sendLock
+        private static double WriteMsSum, WriteMsMax;  // guarded by sendLock
+
         /// True once sending failed repeatedly; telemetry stops until the next flight scene.
-        public static Boolean LinkFailed = false;
+        public static volatile Boolean LinkFailed = false;
         private static int SendFailures = 0;
         private const int MaxSendFailures = 3;
 
         /**
-         * @brief Sends a packet from the main thread without ever throwing.
+         * @brief Queues a packet for the background writer and returns immediately; never throws.
          *
-         * A write that times out blocks the game for the whole timeout, so after MaxSendFailures
-         * consecutive failures the port is closed and LinkFailed stops further attempts. Only the
-         * failure message is logged, not a stack trace for every packet.
+         * The frame is built on the calling thread (cheap) and replaces any frame still waiting to be
+         * written. The writer closes the port after MaxSendFailures consecutive failed writes and sets
+         * LinkFailed, so a dead port costs one log line per failure instead of blocking the game.
          */
         public static void TrySendPacket(object anything)
         {
             try
             {
-                sendPacket(anything);
-                SendFailures = 0;
+                byte[] frame = BuildFrame(anything);
+                lock (sendLock) { pendingFrame = frame; }
+                EnsureSender();
+                sendEvent.Set();
             }
             catch (Exception e)
             {
-                SendFailures++;
-                Debug.Log("KSPSerialIO: send failed (" + SendFailures + "/" + MaxSendFailures + "): " + e.Message);
-                if (SendFailures >= MaxSendFailures)
+                Debug.Log("KSPSerialIO: could not queue the packet: " + e.Message);
+            }
+        }
+
+        /// @brief Starts the writer thread if it is not running.
+        private static void EnsureSender()
+        {
+            if (SenderThread != null && SenderThread.IsAlive && senderRun) return;
+            senderRun = true;
+            SenderThread = new Thread(SenderWorker);
+            SenderThread.IsBackground = true;
+            SenderThread.Start();
+        }
+
+        /// @brief Writer thread body: writes the newest queued frame, one at a time, until senderRun is cleared.
+        private static void SenderWorker()
+        {
+            while (senderRun)
+            {
+                sendEvent.WaitOne(500);
+
+                byte[] frame;
+                lock (sendLock) { frame = pendingFrame; pendingFrame = null; }
+                if (frame == null || LinkFailed || Port == null || !Port.IsOpen) continue;
+
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
                 {
-                    LinkFailed = true;
-                    Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
-                    try { Port.Close(); } catch (Exception) { }
+                    Port.Write(frame, 0, frame.Length);
+                    SendFailures = 0;
                 }
+                catch (Exception e)
+                {
+                    SendFailures++;
+                    Debug.Log("KSPSerialIO: send failed (" + SendFailures + "/" + MaxSendFailures + "): " + e.Message);
+                    if (SendFailures >= MaxSendFailures)
+                    {
+                        LinkFailed = true;
+                        Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
+                        try { Port.Close(); } catch (Exception) { }
+                    }
+                }
+                double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                lock (sendLock)
+                {
+                    WriteCount++;
+                    WriteMsSum += ms;
+                    if (ms > WriteMsMax) WriteMsMax = ms;
+                }
+            }
+        }
+
+        /// @brief Stops the writer thread (waits briefly for a write in progress; writes are bounded by the write timeout).
+        private static void StopSender()
+        {
+            senderRun = false;
+            sendEvent.Set();
+            try { if (SenderThread != null) SenderThread.Join(1000); } catch (Exception) { }
+        }
+
+        /// @brief Returns and resets the statistics of the background writes (used by the perf log).
+        public static void TakeWriteStats(out int count, out double avgMs, out double maxMs)
+        {
+            lock (sendLock)
+            {
+                count = WriteCount;
+                avgMs = WriteCount > 0 ? WriteMsSum / WriteCount : 0;
+                maxMs = WriteMsMax;
+                WriteCount = 0; WriteMsSum = 0; WriteMsMax = 0;
             }
         }
 
@@ -931,6 +1013,7 @@ namespace KSPSerialIO
         /// @brief Stops the reader thread and closes and disposes the port.
         public static void PortCleanup()
         {
+            StopSender();
             if (KSPSerialPort.Port.IsOpen)
             {
                 doSerialRead = false;
@@ -976,6 +1059,44 @@ namespace KSPSerialIO
         private static System.Diagnostics.Process perfProc;
         private static double perfCpuStartMs;
         private static int perfGc0, perfGc1, perfGc2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessMemoryCounters
+        {
+            public uint cb;
+            public uint PageFaultCount;
+            public UIntPtr PeakWorkingSetSize;
+            public UIntPtr WorkingSetSize;
+            public UIntPtr QuotaPeakPagedPoolUsage;
+            public UIntPtr QuotaPagedPoolUsage;
+            public UIntPtr QuotaPeakNonPagedPoolUsage;
+            public UIntPtr QuotaNonPagedPoolUsage;
+            public UIntPtr PagefileUsage;
+            public UIntPtr PeakPagefileUsage;
+            public UIntPtr PrivateUsage;
+        }
+
+        [DllImport("psapi.dll")]
+        private static extern bool GetProcessMemoryInfo(IntPtr process, out ProcessMemoryCounters counters, uint size);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        /// @brief Working set and private memory of this process in MB, read with the Windows API (-1 if unavailable).
+        private static void PerfProcessMemory(out double workingSetMb, out double privateMb)
+        {
+            workingSetMb = privateMb = -1;
+            try
+            {
+                ProcessMemoryCounters c;
+                if (GetProcessMemoryInfo(GetCurrentProcess(), out c, (uint)Marshal.SizeOf(typeof(ProcessMemoryCounters))))
+                {
+                    workingSetMb = c.WorkingSetSize.ToUInt64() / 1048576.0;
+                    privateMb = c.PrivateUsage.ToUInt64() / 1048576.0;
+                }
+            }
+            catch (Exception) { }
+        }
 
         /// @brief Milliseconds elapsed since a Stopwatch timestamp.
         private static double PerfMs(long start)
@@ -1030,12 +1151,13 @@ namespace KSPSerialIO
             if (window < 10.0) return;
 
             double frameMs = window * 1000.0 / perfFrames;
-            double ws = -1, priv = -1, cpuPct = -1;
+            double ws, priv, cpuPct = -1;
+            PerfProcessMemory(out ws, out priv);
+            int writes; double writeAvg, writeMax;
+            KSPSerialPort.TakeWriteStats(out writes, out writeAvg, out writeMax);
             try
             {
                 perfProc.Refresh();
-                ws = perfProc.WorkingSet64 / 1048576.0;
-                priv = perfProc.PrivateMemorySize64 / 1048576.0;
                 if (perfCpuStartMs >= 0)
                     cpuPct = (perfProc.TotalProcessorTime.TotalMilliseconds - perfCpuStartMs) / (window * 1000.0) * 100.0;
             }
@@ -1045,13 +1167,15 @@ namespace KSPSerialIO
                 "KSPSerialIO: perf window_s={0:F1} parts={1} frames={2} frame_ms={3:F2} fps={4:F1} " +
                 "upd_avg_ms={5:F3} upd_max_ms={6:F2} upd_share_pct={7:F3} " +
                 "samples={8} sample_avg_ms={9:F3} sample_max_ms={10:F2} send_avg_ms={11:F3} send_max_ms={12:F2} " +
+                "writes={20} write_avg_ms={21:F2} write_max_ms={22:F2} " +
                 "ws_mb={13:F0} private_mb={14:F0} gc_heap_mb={15:F0} gc0={16} gc1={17} gc2={18} proc_cpu_pct={19:F0}",
                 window, parts, perfFrames, frameMs, 1000.0 / frameMs,
                 perfUpdateSum / perfFrames, perfUpdateMax, perfUpdateSum / (window * 1000.0) * 100.0,
                 perfSamples, perfSamples > 0 ? perfSampleSum / perfSamples : 0, perfSampleMax,
                 perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax,
                 ws, priv, GC.GetTotalMemory(false) / 1048576.0,
-                GC.CollectionCount(0) - perfGc0, GC.CollectionCount(1) - perfGc1, GC.CollectionCount(2) - perfGc2, cpuPct));
+                GC.CollectionCount(0) - perfGc0, GC.CollectionCount(1) - perfGc1, GC.CollectionCount(2) - perfGc2, cpuPct,
+                writes, writeAvg, writeMax));
 
             perfFrames = perfSamples = 0;
             perfUpdateSum = perfUpdateMax = perfSampleSum = perfSampleMax = perfSendSum = perfSendMax = 0;
