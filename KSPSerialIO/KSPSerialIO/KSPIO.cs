@@ -388,6 +388,16 @@ namespace KSPSerialIO
         private static byte CurrentBytesRead;     ///< Payload bytes stored so far for the packet being parsed
         // Guards access to data shared between threads
         private static Mutex SerialMutex = new Mutex();
+        private static long RxBytes;      ///< Bytes received from the board since the last perf window (Interlocked)
+        private static long LastRxTicks;  ///< Stopwatch timestamp of the last received chunk, 0 = never
+
+        /// @brief Returns and resets the bytes received from the board, and the milliseconds since the last chunk (-1 = never).
+        public static void TakeRxStats(out long bytes, out double ageMs)
+        {
+            bytes = Interlocked.Exchange(ref RxBytes, 0);
+            long last = Interlocked.Read(ref LastRxTicks);
+            ageMs = last == 0 ? -1 : (System.Diagnostics.Stopwatch.GetTimestamp() - last) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        }
         // Serial worker uses this buffer to read bytes
         private static byte[] PayloadBuffer = new byte[MaxPayloadSize];
         // Buffer for sharing packets from serial worker to main thrad
@@ -624,6 +634,8 @@ namespace KSPSerialIO
                     int actualLength = Port.BaseStream.EndRead(ar);
                     if (actualLength > 0)
                     {
+                        Interlocked.Add(ref RxBytes, actualLength);
+                        Interlocked.Exchange(ref LastRxTicks, System.Diagnostics.Stopwatch.GetTimestamp());
                         byte[] received = new byte[actualLength];
                         Buffer.BlockCopy(buffer, 0, received, 0, actualLength);
                         ReceivedDataEvent(received, actualLength);
@@ -1190,6 +1202,8 @@ namespace KSPSerialIO
             PerfProcessMemory(out ws, out priv);
             int writes; double writeAvg, writeMax;
             KSPSerialPort.TakeWriteStats(out writes, out writeAvg, out writeMax);
+            long rxBytes; double rxAge;
+            KSPSerialPort.TakeRxStats(out rxBytes, out rxAge);
             try
             {
                 perfProc.Refresh();
@@ -1202,7 +1216,7 @@ namespace KSPSerialIO
                 "KSPSerialIO: perf window_s={0:F1} parts={1} frames={2} frame_ms={3:F2} fps={4:F1} " +
                 "upd_avg_ms={5:F3} upd_max_ms={6:F2} upd_share_pct={7:F3} " +
                 "samples={8} sample_avg_ms={9:F3} sample_max_ms={10:F2} send_avg_ms={11:F3} send_max_ms={12:F2} " +
-                "writes={20} write_avg_ms={21:F2} write_max_ms={22:F2} " +
+                "writes={20} write_avg_ms={21:F2} write_max_ms={22:F2} rx_bytes={23} rx_age_ms={24:F0} " +
                 "ws_mb={13:F0} private_mb={14:F0} gc_heap_mb={15:F0} gc0={16} gc1={17} gc2={18} proc_cpu_pct={19:F0}",
                 window, parts, perfFrames, frameMs, 1000.0 / frameMs,
                 perfUpdateSum / perfFrames, perfUpdateMax, perfUpdateSum / (window * 1000.0) * 100.0,
@@ -1210,7 +1224,7 @@ namespace KSPSerialIO
                 perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax,
                 ws, priv, GC.GetTotalMemory(false) / 1048576.0,
                 GC.CollectionCount(0) - perfGc0, GC.CollectionCount(1) - perfGc1, GC.CollectionCount(2) - perfGc2, cpuPct,
-                writes, writeAvg, writeMax));
+                writes, writeAvg, writeMax, rxBytes, rxAge));
 
             perfFrames = perfSamples = 0;
             perfUpdateSum = perfUpdateMax = perfSampleSum = perfSampleMax = perfSendSum = perfSendMax = 0;

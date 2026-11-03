@@ -1,5 +1,9 @@
 # Changelog
 
+* **0.19.3.8**: 20261103
+  The perf line gains `rx_bytes` and `rx_age_ms` (bytes received from the board in the window and time since
+  the last chunk), so a board that stops talking can be told apart from a plugin that stops reading.
+  The firmware now has a 2 s watchdog: if its loop stalls the board resets itself.
 * **0.19.3.7**: 20261103
   The stage button now behaves exactly like the space bar: it only calls `StageManager.ActivateNextStage()`
   and no longer toggles the Stage action group (before and 150 ms after the press), which could confuse

@@ -20,6 +20,8 @@
  * KSPIO.cs byte for byte, which is why they use fixed-width types and no padding.
  */
 
+#include <WDT.h>   // watchdog timer of the UNO R4 (resets the board if loop() stalls)
+
 //pins for LEDs
 #define GLED 12     ///< Green LED: lit while telemetry is being received
 #define YLED 6      ///< Yellow LED: caution (high G or low fuel)
@@ -34,6 +36,7 @@
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
 
+#define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
 
@@ -218,6 +221,9 @@ ControlPacket CPacket;   ///< Controls being built and sent to KSP
 /// @brief Arduino entry point: opens the serial link and initializes LEDs, packets and inputs.
 void setup(){
   Serial.begin(115200);
+  // Watchdog: if loop() ever stops running (for example a blocked USB write) the board resets itself
+  // after WATCHDOGMS instead of staying frozen until someone presses RESET.
+  WDT.begin(WATCHDOGMS);
 
   initLEDS();
   InitTxPackets();
@@ -229,6 +235,7 @@ void setup(){
 /// @brief Main loop: process incoming packets, then send our controls if it is time.
 void loop()
 {
+  WDT.refresh();
   input();
   output();
 }

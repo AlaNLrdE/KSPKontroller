@@ -276,6 +276,14 @@ def check_log(ctx):
         share, wavg = vals("upd_share_pct"), vals("write_avg_ms")
         worst = max(share) if share else 0
         report("FAIL" if worst > 2 else "PASS", "log: plugin frame share", "max %.2f%% over %d windows" % (worst, len(perf)))
+        rx = vals("rx_bytes")
+        if rx:
+            # the board sends a ControlPacket 40 times a second; a window with writes but no bytes means it went silent
+            silent = [i for i, (r, w) in enumerate(zip(rx, vals("writes"))) if r == 0 and w > 0]
+            if silent:
+                report("FAIL", "log: board kept talking", "%d window(s) of %d with writes but 0 bytes received (first at window %d)" % (len(silent), len(rx), silent[0] + 1))
+            else:
+                report("PASS", "log: board kept talking", "bytes received in every window")
         if wavg and max(wavg) > 5:
             report("WARN", "log: serial write time", "max avg write %.1f ms (background thread, so it does not cost frames)" % max(wavg))
     else:
