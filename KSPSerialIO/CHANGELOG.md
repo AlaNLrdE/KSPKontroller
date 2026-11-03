@@ -1,5 +1,18 @@
 # Changelog
 
+* **0.19.3.0**: 20261103
+  Merged the functional changes of upstream zitron-git/KSPSerialIO 0.19.0 to 0.19.3b into this
+  cross-platform (PsimaxSerial) fork:
+  * Seven navball vector fields in `VesselData` (prograde, maneuver, target and normal headings;
+    upstream 0.19.1). The packet grows from 200 to 214 bytes, so the Arduino struct must be updated.
+  * Those angles are 16-bit fixed point, degrees times 50 (upstream 0.19.2).
+  * Removed the "disengage SAS while steering" block, which fought with the axis input (upstream
+    0.19.3b). `SASTol` in config.xml is now unused.
+  * Not ported: the `\.\COMn` port name workaround (PsimaxSerial already adds that prefix), the
+    OpenNETCF serial code and the always-on checksum debug logging.
+  Fork fixes since 0.18.7: single-reader serial thread and parser hardening, 25-byte ControlPacket,
+  per-port isolation during discovery, Bluetooth ports skipped and bounded send failures.
+
 * **0.20.0.0**: 20180105
   This is my first edit, removing stuff I don't need and testing the build process.
 * **0.18.6.1**: 20170304

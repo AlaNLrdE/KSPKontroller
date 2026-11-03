@@ -52,7 +52,7 @@ namespace KSPSerialIO
      * @brief Telemetry sent from KSP to the controller (packet id 1).
      *
      * The layout must match the @c VesselData struct in the Arduino sketch byte for byte
-     * (200 bytes, packed).
+     * (214 bytes, packed).
      * Fields ending in @c Tot hold the maximum amount of a resource and the matching field
      * without the suffix holds the current amount. Fields ending in @c S only account for
      * the resources reachable by the currently active engines (the "stage" view).
@@ -124,6 +124,18 @@ namespace KSPSerialIO
          * speed display mode plus one: 0 ignore, 1 orbit, 2 surface, 3 target.
          */
         public byte NavballSASMode;
+        /**
+         * Navball vector directions (fields 56 to 62), added in upstream 0.19.1. Every angle is a
+         * signed 16-bit fixed-point value: the angle in degrees times 50, so divide by 50 to get
+         * degrees (pitch -90 to 90, heading 0 to 360). A direction that does not exist is 0.
+         */
+        public short ProgradePitch;   ///< Pitch of the prograde vector of the current navball mode (orbit, surface or target)
+        public short ProgradeHeading; ///< Heading of the prograde vector of the current navball mode
+        public short ManeuverPitch;   ///< Pitch of the maneuver node burn vector, 0 if there is no node
+        public short ManeuverHeading; ///< Heading of the maneuver node burn vector, 0 if there is no node
+        public short TargetPitch;     ///< Pitch towards the targeted vessel, 0 if there is no target
+        public short TargetHeading;   ///< Heading towards the targeted vessel, 0 if there is no target
+        public short NormalHeading;   ///< Heading of the orbit normal (its pitch is always 0)
     }
 
     /**
@@ -208,6 +220,12 @@ namespace KSPSerialIO
         public float Current;
     }
 
+    /// @brief A direction relative to the local horizon, in degrees.
+    public struct NavHeading
+    {
+        public float Pitch, Heading;
+    }
+
     #endregion
 
     /// @brief Bit positions of the action groups inside VesselData::ActionGroups.
@@ -267,7 +285,7 @@ namespace KSPSerialIO
         public static int WheelSteerEnable;   ///< Axis mode for wheel steering
         public static int ThrottleEnable;     ///< Axis mode for the main throttle
         public static int WheelThrottleEnable;///< Axis mode for the wheel throttle
-        public static double SASTol;          ///< Axis deflection above which SAS is temporarily disabled while steering
+        public static double SASTol;          ///< Obsolete since 0.19.3: no longer used, still read so existing config.xml files load
 
         /// @brief Reads every setting from config.xml into the static fields.
         void Awake()
@@ -939,7 +957,6 @@ namespace KSPSerialIO
 
         IOResource TempR = new IOResource();
 
-        private static Boolean wasSASOn = false;
 
         private ScreenMessageStyle KSPIOScreenStyle = ScreenMessageStyle.UPPER_RIGHT;
 
@@ -1130,6 +1147,15 @@ namespace KSPSerialIO
 
                     //Debug.Log("KSPSerialIO: 4");
 
+                    // Local frame for the navball vector headings: up, north and east at the vessel
+                    Vector3d navCoM = ActiveVessel.CoM;
+                    Vector3d navUp = (navCoM - ActiveVessel.mainBody.position).normalized;
+                    Vector3d navNorth = Vector3d.Exclude(navUp, (ActiveVessel.mainBody.position + ActiveVessel.mainBody.transform.up * (float)ActiveVessel.mainBody.Radius) - navCoM).normalized;
+                    Vector3d navEast = Vector3d.Cross(navUp, navNorth);
+                    NavHeading navZero = new NavHeading();
+                    NavHeading navManeuver = navZero;
+                    NavHeading navTarget = navZero;
+
                     // Maneuver node data, left at 0 when there is no node
                     KSPSerialPort.VData.MNTime = 0;
                     KSPSerialPort.VData.MNDeltaV = 0;
@@ -1144,9 +1170,13 @@ namespace KSPSerialIO
                                 //ScreenMessages.PostScreenMessage(KSPSerialPort.VData.MNTime.ToString());
                                 //KSPSerialPort.VData.MNDeltaV = (float)ActiveVessel.patchedConicSolver.maneuverNodes[0].DeltaV.magnitude;
                                 KSPSerialPort.VData.MNDeltaV = (float)ActiveVessel.patchedConicSolver.maneuverNodes[0].GetBurnVector(ActiveVessel.patchedConicSolver.maneuverNodes[0].patch).magnitude; //Added JS
+
+                                navManeuver = WorldVecToNavHeading(navUp, navNorth, navEast, ActiveVessel.patchedConicSolver.maneuverNodes[0].GetBurnVector(ActiveVessel.patchedConicSolver.maneuverNodes[0].patch));
                             }
                         }
                     }
+                    KSPSerialPort.VData.ManeuverHeading = FloatAngleToFixed_16(navManeuver.Heading);
+                    KSPSerialPort.VData.ManeuverPitch = FloatAngleToFixed_16(navManeuver.Pitch);
 
                     //Debug.Log("KSPSerialIO: 5");
 
@@ -1196,7 +1226,29 @@ namespace KSPSerialIO
                     {
                         KSPSerialPort.VData.TargetDist = (float)Vector3.Distance(FlightGlobals.fetch.VesselTarget.GetVessel().transform.position, ActiveVessel.transform.position);
                         KSPSerialPort.VData.TargetV = (float)FlightGlobals.ship_tgtVelocity.magnitude;
+                        navTarget = WorldVecToNavHeading(navUp, navNorth, navEast, ActiveVessel.targetObject.GetTransform().position - ActiveVessel.transform.position);
                     }
+                    KSPSerialPort.VData.TargetHeading = FloatAngleToFixed_16(navTarget.Heading);
+                    KSPSerialPort.VData.TargetPitch = FloatAngleToFixed_16(navTarget.Pitch);
+
+                    // Prograde of the current navball mode, and the orbit normal
+                    Vector3d navPrograde = new Vector3d(0, 0, 0);
+                    switch (FlightGlobals.speedDisplayMode)
+                    {
+                        case FlightGlobals.SpeedDisplayModes.Surface:
+                            navPrograde = ActiveVessel.srf_velocity.normalized;
+                            break;
+                        case FlightGlobals.SpeedDisplayModes.Orbit:
+                            navPrograde = ActiveVessel.obt_velocity.normalized;
+                            break;
+                        case FlightGlobals.SpeedDisplayModes.Target:
+                            navPrograde = FlightGlobals.ship_tgtVelocity;
+                            break;
+                    }
+                    NavHeading prograde = WorldVecToNavHeading(navUp, navNorth, navEast, navPrograde);
+                    KSPSerialPort.VData.ProgradeHeading = FloatAngleToFixed_16(prograde.Heading);
+                    KSPSerialPort.VData.ProgradePitch = FloatAngleToFixed_16(prograde.Pitch);
+                    KSPSerialPort.VData.NormalHeading = FloatAngleToFixed_16(WorldVecToNavHeading(navUp, navNorth, navEast, Vector3d.Cross(ActiveVessel.obt_velocity.normalized, navUp)).Heading);
 
 
                     // Navball/SAS byte: high nibble = speed display mode + 1, low nibble = autopilot mode + 1 (only while SAS is on)
@@ -1413,20 +1465,8 @@ namespace KSPSerialIO
                     }
 
 
-                    // temporarily disengage SAS while steering
-                    if (Math.Abs(KSPSerialPort.VControls.Pitch) > SettingsNStuff.SASTol ||
-                    Math.Abs(KSPSerialPort.VControls.Roll) > SettingsNStuff.SASTol ||
-                    Math.Abs(KSPSerialPort.VControls.Yaw) > SettingsNStuff.SASTol)
-                    {
-                        ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
-                    }
-                    else
-                    {
-                        if (KSPSerialPort.VControls.SAS == true)
-                        {
-                            ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, true);
-                        }
-                    }
+                    // Upstream 0.19.3b removed the old "disengage SAS while steering" block: it forced SAS back on
+                    // every packet and fought with the axis input. SAS now only follows the SAS toggle above.
 
                     KSPSerialPort.ControlReceived = false;
                 } //end ControlReceived
@@ -1442,6 +1482,34 @@ namespace KSPSerialIO
         }
 
         #region utilities
+
+        /// @brief Converts an angle in degrees (-360 to 360) to the 16-bit fixed-point format of the navball fields: degrees times 50.
+        private static short FloatAngleToFixed_16(float f)
+        {
+            return (short)Math.Round(f * 50.0f);
+        }
+
+        /**
+         * @brief Direction of a world-space vector relative to the local horizon.
+         * @param up Unit vector pointing away from the body.
+         * @param north Unit vector pointing north.
+         * @param east Unit vector pointing east.
+         * @param v The vector to convert.
+         * @return Pitch above the horizon and compass heading (0 to 360) in degrees.
+         */
+        private static NavHeading WorldVecToNavHeading(Vector3d up, Vector3d north, Vector3d east, Vector3d v)
+        {
+            NavHeading ret = new NavHeading();
+            ret.Pitch = (float)-((Vector3d.Angle(up, v)) - 90.0f);
+            Vector3d progradeFlat = Vector3d.Exclude(up, v);
+            float NAngle = (float)Vector3d.Angle(north, progradeFlat);
+            float EAngle = (float)Vector3d.Angle(east, progradeFlat);
+            if (EAngle < 90)
+                ret.Heading = NAngle;
+            else
+                ret.Heading = -NAngle + 360;
+            return ret;
+        }
 
         /// @brief True if a target vessel is selected.
         private Boolean TargetExists()

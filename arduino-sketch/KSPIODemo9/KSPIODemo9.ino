@@ -96,7 +96,7 @@ byte id;           ///< Id of the packet most recently received (see KSPBoardRec
 /**
  * @brief Telemetry received from KSP (packet id 1).
  *
- * Mirrors KSPSerialIO.VesselData in KSPIO.cs, which documents every field. The size is 200 bytes.
+ * Mirrors KSPSerialIO.VesselData in KSPIO.cs, which documents every field. The size is 214 bytes. The angle fields 56 to 62 are fixed point: degrees times 50.
  * Fields ending in @c Tot are resource capacities and the matching field without the suffix is the
  * current amount. Fields ending in @c S only count what the active engines can reach.
  */
@@ -156,10 +156,17 @@ struct VesselData {
     float TargetDist;       // 53
     float TargetV;          // 54
     uint8_t NavballSASMode; // 55
+    int16_t ProgradePitch;  // 56  degrees x 50, see the KSPIO.cs docs
+    int16_t ProgradeHeading;// 57
+    int16_t ManeuverPitch;  // 58  0 if there is no maneuver node
+    int16_t ManeuverHeading;// 59
+    int16_t TargetPitch;    // 60  0 if there is no target
+    int16_t TargetHeading;  // 61
+    int16_t NormalHeading;  // 62
 };
 
 
-static_assert(sizeof(VesselData) == 200, "VesselData struct size must be 200 bytes, the calculated size is %d");
+static_assert(sizeof(VesselData) == 214, "VesselData struct size must be 214 bytes");
 
 /**
  * @brief Handshake packet (id 0), exchanged in both directions.
