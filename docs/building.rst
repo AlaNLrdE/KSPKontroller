@@ -18,6 +18,8 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Both of the above.
    * - ``./ci deploy``
      - Build the plugin and install it into a local KSP. Lists the installs it finds and asks which one (see below).
+   * - ``./ci deploy_all [PORT]``
+     - Build the plugin and the sketch, install the plugin into a local KSP and flash the board, then run the board test (``NO_TEST=1`` skips it). Everything that can fail is checked first: the KSP install, that KSP is closed and that a board is connected.
    * - ``./ci ksp_list``
      - List the KSP installs found on this machine.
    * - ``./ci install``

@@ -7,6 +7,7 @@
 #   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO)
 #   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
 #   ./ci ksp_list            List the KSP installs found on this machine
+#   ./ci deploy_all [PORT]   Build everything, install the plugin into a local KSP and flash the board, then test it
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
 #   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
@@ -22,6 +23,7 @@
 #   PLANTUML_JAR  Path to plantuml.jar (default: build/tools/plantuml.jar, downloaded if missing)
 #   ARDUINO_PORT  Port for upload_sketch and test_arduino, same as passing PORT (optional)
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
+#   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
 
 set -euo pipefail
 
@@ -331,25 +333,36 @@ sphinx() {
   log "Output: $BUILD/sphinx/index.html"
 }
 
+# Print the port of the first connected board that matches FQBN (empty when there is none)
+find_board_port() {
+  local cli
+  cli="$(find_arduino_cli)"
+  "$cli" board list | awk -v fqbn="$FQBN" 'index($0, fqbn) { print $1; exit }'
+}
+
 # Upload the compiled sketch (build/sketch) to the board on PORT, or on the first board that matches FQBN
 upload_sketch() {
   local cli port="${1:-${ARDUINO_PORT:-}}"
   cli="$(find_arduino_cli)"
-  if [ -z "$port" ]; then
-    port="$("$cli" board list | awk -v fqbn="$FQBN" 'index($0, fqbn) { print $1; exit }')"
-    [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci upload_sketch COM5)"
-  fi
+  [ -n "$port" ] || port="$(find_board_port)"
+  [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci upload_sketch COM5)"
   log "Uploading to $port"
   "$cli" upload -p "$port" --fqbn "$FQBN" --input-dir "$BUILD/sketch"
   echo "$port" > "$BUILD/last_upload_port"
 }
 
-# Compile and upload the firmware (unless NO_UPLOAD=1), then test the board with the real protocol.
-# With no PORT, or if the board does not answer there, every USB COM port is tried.
-test_arduino() {
-  local venv_bin port="${1:-${ARDUINO_PORT:-}}"
+# Run the protocol tests against the board. With no PORT, or if the board does not answer there,
+# every USB COM port is tried.
+run_board_test() {
+  local venv_bin
   venv_bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
+  log "Testing the Arduino controller"
+  "$venv_bin/python" "$ROOT/tools/test_arduino.py" $1
+}
 
+# Compile and upload the firmware (unless NO_UPLOAD=1), then test the board with the real protocol
+test_arduino() {
+  local port="${1:-${ARDUINO_PORT:-}}"
   if [ "${NO_UPLOAD:-0}" != "1" ]; then
     build_sketch
     upload_sketch "$port"
@@ -358,9 +371,34 @@ test_arduino() {
     log "Waiting for the board to restart"
     sleep 4
   fi
+  run_board_test "$port"
+}
 
-  log "Testing the Arduino controller"
-  "$venv_bin/python" "$ROOT/tools/test_arduino.py" $port
+# Build everything, install the plugin into a local KSP and flash the board. Everything that can
+# fail (which KSP, KSP running, board missing) is checked first, so nothing is half done.
+deploy_all() {
+  local port="${1:-${ARDUINO_PORT:-}}"
+
+  KSPDIR="$(find_kspdir)"
+  export KSPDIR
+  ! ksp_running || die "KSP is running and keeps the plugin DLL locked; close it and try again"
+  [ -n "$port" ] || port="$(find_board_port)"
+  [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci deploy_all COM5)"
+  log "KSP: $KSPDIR"
+  log "Board: $port ($FQBN)"
+
+  build_KSPSerialIO
+  build_sketch
+  install_plugin
+  upload_sketch "$port"
+
+  if [ "${NO_TEST:-0}" != "1" ]; then
+    port="$(cat "$BUILD/last_upload_port")"
+    log "Waiting for the board to restart"
+    sleep 4
+    run_board_test "$port"
+  fi
+  log "Done: plugin installed in $KSPDIR, board flashed"
 }
 
 clean() {
@@ -368,7 +406,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,23p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,25p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -376,6 +414,7 @@ case "${1:-help}" in
   build_all)         build_KSPSerialIO; build_sketch ;;
   install)           install_plugin ;;
   deploy)            deploy ;;
+  deploy_all)        shift; deploy_all "$@" ;;
   ksp_list)          ksp_list ;;
   docs)              docs ;;
   diagrams)          diagrams ;;
