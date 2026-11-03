@@ -285,6 +285,7 @@ namespace KSPSerialIO
         public static int WheelSteerEnable;   ///< Axis mode for wheel steering
         public static int ThrottleEnable;     ///< Axis mode for the main throttle
         public static int WheelThrottleEnable;///< Axis mode for the wheel throttle
+        public static int PerfLog;            ///< 1 = log how much time the plugin takes per frame every 10 s (default 0)
         public static double SASTol;          ///< Obsolete since 0.19.3: no longer used, still read so existing config.xml files load
 
         /// @brief Reads every setting from config.xml into the static fields.
@@ -337,6 +338,9 @@ namespace KSPSerialIO
 
             WheelThrottleEnable = cfg.GetValue<int>("WheelThrottleEnable");
             print("KSPSerialIO: Wheel Throttle Enable = " + WheelThrottleEnable.ToString());
+
+            PerfLog = cfg.GetValue<int>("PerfLog");
+            print("KSPSerialIO: Perf Log = " + PerfLog.ToString());
 
             SASTol = cfg.GetValue<double>("SASTol");
             print("KSPSerialIO: SAS Tol = " + SASTol.ToString());
@@ -547,7 +551,8 @@ namespace KSPSerialIO
                 catch (Exception exc)
                 {
                     // Never let the parser die silently: reset it and keep reading
-                    Debug.Log("KSPSerialIO: Exception in SerialWorker: " + exc.ToString());
+                    // Closing the port aborts the read that is pending: expected, no stack trace needed
+                    Debug.Log("KSPSerialIO: SerialWorker read ended: " + exc.GetType().Name + ": " + exc.Message);
                     CurrentState = ReceiveStates.FIRSTHEADER;
                     Thread.Sleep(100);
                 }
@@ -962,6 +967,61 @@ namespace KSPSerialIO
 
         private ScreenMessageStyle KSPIOScreenStyle = ScreenMessageStyle.UPPER_RIGHT;
 
+        #region performance log
+        // Accumulated over a 10 s window when PerfLog = 1, then written to the log and reset
+        private static int perfFrames, perfSamples;
+        private static double perfUpdateSum, perfUpdateMax, perfSampleSum, perfSampleMax, perfSendSum, perfSendMax;
+        private static double perfWindowStart = -1;
+
+        /// @brief Milliseconds elapsed since a Stopwatch timestamp.
+        private static double PerfMs(long start)
+        {
+            return (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        }
+
+        /// @brief Records one telemetry sample: the time spent reading the vessel and the time spent sending the packet.
+        private static void PerfRecordSample(double sampleMs, double sendMs)
+        {
+            perfSamples++;
+            perfSampleSum += sampleMs;
+            if (sampleMs > perfSampleMax) perfSampleMax = sampleMs;
+            perfSendSum += sendMs;
+            if (sendMs > perfSendMax) perfSendMax = sendMs;
+        }
+
+        /**
+         * @brief Records the cost of one Update() call and, every 10 s, logs a summary.
+         *
+         * The share is the plugin's Update time over the wall time of the window, so it is the fraction
+         * of every frame the plugin takes. AxisInput and the reader thread are not included.
+         */
+        private static void PerfRecordFrame(long start, int parts)
+        {
+            double ms = PerfMs(start);
+            perfFrames++;
+            perfUpdateSum += ms;
+            if (ms > perfUpdateMax) perfUpdateMax = ms;
+
+            double now = Time.unscaledTime;
+            if (perfWindowStart < 0) { perfWindowStart = now; return; }
+            double window = now - perfWindowStart;
+            if (window < 10.0) return;
+
+            double frameMs = window * 1000.0 / perfFrames;
+            Debug.Log(String.Format(
+                "KSPSerialIO: perf [{0:F0} s, {1} parts] frame {2:F1} ms ({3:F0} fps) | plugin Update avg {4:F3} ms max {5:F2} ms = {6:F2}% of frame | " +
+                "sampling {7} x avg {8:F3} ms max {9:F2} ms | send avg {10:F3} ms max {11:F2} ms",
+                window, parts, frameMs, 1000.0 / frameMs, perfUpdateSum / perfFrames, perfUpdateMax,
+                perfUpdateSum / (window * 1000.0) * 100.0,
+                perfSamples, perfSamples > 0 ? perfSampleSum / perfSamples : 0, perfSampleMax,
+                perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax));
+
+            perfFrames = perfSamples = 0;
+            perfUpdateSum = perfUpdateMax = perfSampleSum = perfSampleMax = perfSendSum = perfSendMax = 0;
+            perfWindowStart = now;
+        }
+        #endregion
+
         /// @brief Unity Awake: shows a debug message and reads the telemetry refresh rate.
         void Awake()
         {
@@ -1042,6 +1102,8 @@ namespace KSPSerialIO
          */
         void Update()
         {
+            long perfStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+
             // Without a controller (or after the link failed) there is nothing to send, even if a port was left open
             if (FlightGlobals.ActiveVessel != null && KSPSerialPort.DisplayFound && !KSPSerialPort.LinkFailed
                 && KSPSerialPort.Port.IsOpen)
@@ -1072,6 +1134,7 @@ namespace KSPSerialIO
                     //Debug.Log("KSPSerialIO: 2");
 
                     lastUpdate = theTime;
+                    long perfSampleStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
                     // Engines currently burning; used for the per-stage ("S") resource totals
                     List<Part> ActiveEngines = new List<Part>();
@@ -1297,7 +1360,9 @@ namespace KSPSerialIO
                      */
                     #endregion
                     // Send the telemetry packet
+                    long perfSendStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
                     KSPSerialPort.TrySendPacket(KSPSerialPort.VData);
+                    if (SettingsNStuff.PerfLog == 1) PerfRecordSample(PerfMs(perfSampleStart) - PerfMs(perfSendStart), PerfMs(perfSendStart));
                 } //end refresh
                 #endregion
                 #region inputs
@@ -1480,6 +1545,9 @@ namespace KSPSerialIO
             {
                 //Debug.Log("KSPSerialIO: ActiveVessel not found");
             }
+
+            if (SettingsNStuff.PerfLog == 1 && FlightGlobals.ActiveVessel != null)
+                PerfRecordFrame(perfStart, FlightGlobals.ActiveVessel.parts.Count);
 
         }
 

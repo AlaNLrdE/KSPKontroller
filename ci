@@ -7,6 +7,7 @@
 #   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO)
 #   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
 #   ./ci ksp_list            List the KSP installs found on this machine
+#   ./ci disable_mod         Move the plugin out of GameData (to compare performance); enable_mod puts it back
 #   ./ci deploy_all [PORT]   Build everything, install the plugin into a local KSP and flash the board, then test it
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
@@ -256,6 +257,28 @@ install_plugin() {
   log "Installed: $dest"
 }
 
+# Take the plugin out of GameData without deleting it (KSP must be closed), to compare the game with and without it
+disable_mod() {
+  local ksp
+  ksp="$(find_kspdir)"
+  ! ksp_running || die "KSP is running; close it first"
+  [ -d "$ksp/GameData/KSPSerialIO" ] || die "the plugin is not installed in $ksp"
+  rm -rf "$ksp/KSPSerialIO.disabled"
+  mv "$ksp/GameData/KSPSerialIO" "$ksp/KSPSerialIO.disabled"
+  log "Plugin disabled (moved to $ksp/KSPSerialIO.disabled). Re-enable it with ./ci enable_mod"
+}
+
+# Put the plugin back into GameData after disable_mod
+enable_mod() {
+  local ksp
+  ksp="$(find_kspdir)"
+  ! ksp_running || die "KSP is running; close it first"
+  [ -d "$ksp/KSPSerialIO.disabled" ] || die "no disabled plugin found in $ksp"
+  [ ! -d "$ksp/GameData/KSPSerialIO" ] || die "$ksp/GameData/KSPSerialIO already exists"
+  mv "$ksp/KSPSerialIO.disabled" "$ksp/GameData/KSPSerialIO"
+  log "Plugin enabled again in $ksp/GameData/KSPSerialIO"
+}
+
 # Build the plugin and install it into the local KSP
 deploy() {
   build_KSPSerialIO
@@ -414,7 +437,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,26p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,27p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -423,6 +446,8 @@ case "${1:-help}" in
   install)           install_plugin ;;
   deploy)            deploy ;;
   deploy_all)        shift; deploy_all "$@" ;;
+  disable_mod)       disable_mod ;;
+  enable_mod)        enable_mod ;;
   ksp_list)          ksp_list ;;
   docs)              docs ;;
   diagrams)          diagrams ;;

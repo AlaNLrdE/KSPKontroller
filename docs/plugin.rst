@@ -41,6 +41,9 @@ Settings (``config.xml``)
    * - ``HandshakeDisable``
      - int
      - ``1`` skips the handshake and uses ``DefaultPort`` directly.
+   * - ``PerfLog``
+     - int
+     - ``1`` logs the plugin's cost per frame every 10 s (see below). Default 0 when the key is missing.
    * - ``SASTol``
      - double
      - Obsolete since 0.19.3. It is still read so existing files load, but SAS is no longer switched off while steering.
@@ -88,6 +91,32 @@ Telemetry is only sent while a controller was found (``DisplayFound``). If sendi
 a row, the port is closed, ``LinkFailed`` stops further attempts for the rest of the flight and a single
 line per failure is logged, instead of blocking the main thread and logging a stack trace on every
 packet. The write timeout is 250 ms.
+
+Measuring the plugin's cost
+---------------------------
+
+With ``PerfLog`` set to 1 in ``config.xml`` (the default file enables it) the plugin writes one line to
+``KSP.log`` every 10 seconds while a vessel is active:
+
+.. code-block:: text
+
+   KSPSerialIO: perf [10 s, 142 parts] frame 16.7 ms (60 fps) | plugin Update avg 0.021 ms max 0.85 ms = 0.13% of frame | sampling 50 x avg 0.310 ms max 0.85 ms | send avg 0.004 ms max 0.05 ms
+
+* **frame**: average frame time of the whole game in that window.
+* **plugin Update**: time spent in ``KSPSerialIO.Update`` per frame, and what share of the frame that is.
+  It includes sampling the vessel and sending the packet, but not ``AxisInput`` or the reader thread.
+* **sampling**: reading the vessel into ``VData``. This is the only part that grows with the number of parts.
+* **send**: writing the packet to the port. A value near the 250 ms write timeout means the board is not
+  reading.
+
+To compare the game with and without the plugin, fly the same craft in the same place both times:
+
+#. ``./ci deploy`` and fly for a minute; note the ``perf`` lines and the frame rate shown by an external overlay.
+#. Close KSP, run ``./ci disable_mod`` and fly the same craft again, reading the frame rate with the overlay.
+#. ``./ci enable_mod`` puts the plugin back.
+
+The frame time in the log only exists while the plugin runs, so the external overlay (the NVIDIA or Steam
+counter, for example) is what gives the number for the run without the plugin.
 
 State exposed to other code
 ---------------------------

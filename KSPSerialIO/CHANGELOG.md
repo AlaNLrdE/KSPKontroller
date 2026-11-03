@@ -1,5 +1,9 @@
 # Changelog
 
+* **0.19.3.2**: 20261103
+  Optional performance log (`PerfLog` in config.xml): every 10 s it writes how long the plugin takes per
+  frame, how much of that is vessel sampling and packet sending, and the game's own frame time. The
+  harmless read error when a port is closed no longer dumps a stack trace.
 * **0.19.3.1**: 20261103
   The plugin now asserts DTR on its serial port. Native-USB boards such as the Arduino UNO R4 only
   transmit while DTR is high, so without it the handshake never got a reply and no LED lit. The default
