@@ -15,6 +15,8 @@
 #   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
 #   ./ci upload_sketch [PORT] Upload the compiled sketch (build_sketch first); finds the board if PORT is missing
 #   ./ci test_arduino [PORT] Compile, upload and test the board over serial (NO_UPLOAD=1 skips the upload)
+#   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
+#                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -456,7 +458,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,28p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,30p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -474,6 +476,7 @@ case "${1:-help}" in
   sphinx)            sphinx ;;
   upload_sketch)     shift; upload_sketch "$@" ;;
   test_arduino)      shift; test_arduino "$@" ;;
+  verify)            shift; "$(ensure_venv "$ROOT/tools/requirements.txt")/python" "$ROOT/tools/verify.py" "$@" ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;
