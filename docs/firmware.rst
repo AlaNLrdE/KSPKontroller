@@ -65,3 +65,12 @@ Adding a control
 #. Read it in ``controls()`` and call ``MainControls()``, ``ControlGroups()`` or assign an axis
    field of ``CPacket``.
 #. Do not change the size or order of ``ControlPacket`` without changing ``KSPIO.cs`` too.
+
+USB serial requirements (UNO R4)
+--------------------------------
+
+The UNO R4 has native USB, and its ``Serial`` only transmits while the host asserts the **DTR** line.
+A program that opens the port without DTR never receives anything, which looks exactly like a dead
+board (no handshake reply, no LEDs). The plugin therefore sets ``DtrEnable`` on its port. The
+baud rate must also match the sketch (``Serial.begin(115200)``): in tests the board only answered at
+115200, so ``BaudRate`` in ``config.xml`` has to be 115200.

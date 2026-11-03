@@ -2,7 +2,7 @@
 <config>
   <double name="refresh">0.2</double>
   <string name="DefaultPort">/dev/cu.usbmodem30</string>
-  <int name="BaudRate">38400</int>
+  <int name="BaudRate">115200</int>
   <int name="HandshakeDelay">2500</int>
   <int name="HandshakeDisable">0</int>
   <int name="ThrottleEnable">2</int>

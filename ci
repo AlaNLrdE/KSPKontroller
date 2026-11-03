@@ -24,6 +24,7 @@
 #   ARDUINO_PORT  Port for upload_sketch and test_arduino, same as passing PORT (optional)
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
 #   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
+#   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
 
 set -euo pipefail
 
@@ -238,12 +239,19 @@ install_plugin() {
   mkdir -p "$dest/PluginData/KSPSerialIO"
   cp "$dll" "$dest/"
   cp "$ROOT/KSPSerialIO/Includes/PsimaxSerial.dll" "$dest/"
-  # Never overwrite a config the user has already edited
-  if [ ! -f "$dest/PluginData/KSPSerialIO/config.xml" ]; then
-    cp "$ROOT/KSPSerialIO/config.xml" "$dest/PluginData/KSPSerialIO/"
+  # Never overwrite a config the user has already edited, unless RESET_CONFIG=1 (the old one is kept as .bak)
+  local cfg="$dest/PluginData/KSPSerialIO/config.xml"
+  if [ ! -f "$cfg" ]; then
+    cp "$ROOT/KSPSerialIO/config.xml" "$cfg"
     log "Copied the default config.xml (edit DefaultPort for your system)"
+  elif [ "${RESET_CONFIG:-0}" = "1" ]; then
+    cp "$cfg" "$cfg.bak"
+    cp "$ROOT/KSPSerialIO/config.xml" "$cfg"
+    log "Replaced config.xml with the default (the previous one is config.xml.bak)"
+  elif ! cmp -s "$cfg" "$ROOT/KSPSerialIO/config.xml"; then
+    log "Kept the existing config.xml, which differs from the default (RESET_CONFIG=1 replaces it)"
   else
-    log "Kept the existing config.xml"
+    log "config.xml is up to date"
   fi
   log "Installed: $dest"
 }
@@ -406,7 +414,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,25p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,26p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;

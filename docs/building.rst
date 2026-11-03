@@ -92,7 +92,7 @@ use (Enter picks the first). Without a terminal it stops instead of choosing, so
      2) D:/SteamLibrary/steamapps/common/Kerbal Space Program  [Steam]
    Install into which one? [1-2, Enter = 1]:
 
-The default ``config.xml`` ships a macOS ``DefaultPort`` and a 38400 baud rate. Edit
+The default ``config.xml`` ships a macOS ``DefaultPort`` (discovery still finds the board on its own) and 115200 baud. An existing ``config.xml`` is never overwritten; ``RESET_CONFIG=1 ./ci deploy`` replaces it and keeps the old one as ``config.xml.bak``. Edit
 ``GameData/KSPSerialIO/PluginData/KSPSerialIO/config.xml`` in the install for your port (for
 example ``COM5``) and ``BaudRate`` 115200 so KSP does not have to scan every serial port.
 

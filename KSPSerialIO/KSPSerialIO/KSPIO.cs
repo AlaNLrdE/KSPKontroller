@@ -498,6 +498,8 @@ namespace KSPSerialIO
             Port = new SerialPort(PortNumber, SettingsNStuff.BaudRate, Parity.None, 8, StopBits.One);
             // Bound how long a stuck port can block the main thread
             Port.WriteTimeout = 250;
+            // Native-USB boards such as the Arduino UNO R4 only transmit while the host asserts DTR
+            Port.DtrEnable = true;
             SerialThread = new Thread(SerialWorker);
             SerialThread.Start();
             while (!SerialThread.IsAlive);

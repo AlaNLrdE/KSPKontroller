@@ -31,7 +31,7 @@ Settings (``config.xml``)
      - Port tried first, for example ``COM3``. Other ports are then scanned.
    * - ``BaudRate``
      - int
-     - Serial baud rate. USB CDC boards ignore it, but keep it equal to the firmware.
+     - Serial baud rate. It must be 115200 to match the sketch: the UNO R4 did not answer at other rates.
    * - ``refresh``
      - double
      - Minimum seconds between telemetry packets.

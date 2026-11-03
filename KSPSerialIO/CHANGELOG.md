@@ -1,5 +1,9 @@
 # Changelog
 
+* **0.19.3.1**: 20261103
+  The plugin now asserts DTR on its serial port. Native-USB boards such as the Arduino UNO R4 only
+  transmit while DTR is high, so without it the handshake never got a reply and no LED lit. The default
+  `BaudRate` in config.xml is now 115200 to match the sketch.
 * **0.19.3.0**: 20261103
   Merged the functional changes of upstream zitron-git/KSPSerialIO 0.19.0 to 0.19.3b into this
   cross-platform (PsimaxSerial) fork:
