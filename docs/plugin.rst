@@ -96,27 +96,49 @@ Measuring the plugin's cost
 ---------------------------
 
 With ``PerfLog`` set to 1 in ``config.xml`` (the default file enables it) the plugin writes one line to
-``KSP.log`` every 10 seconds while a vessel is active:
+``KSP.log`` every 10 seconds while a vessel is active. It is a list of ``key=value`` pairs so that a
+script or a profiler can parse it:
 
 .. code-block:: text
 
-   KSPSerialIO: perf [10 s, 142 parts] frame 16.7 ms (60 fps) | plugin Update avg 0.021 ms max 0.85 ms = 0.13% of frame | sampling 50 x avg 0.310 ms max 0.85 ms | send avg 0.004 ms max 0.05 ms
+   KSPSerialIO: perf window_s=10.0 parts=142 frames=600 frame_ms=16.67 fps=60.0 upd_avg_ms=0.021 upd_max_ms=0.85 upd_share_pct=0.126 samples=50 sample_avg_ms=0.310 sample_max_ms=0.85 send_avg_ms=0.004 send_max_ms=0.05 ws_mb=27700 private_mb=28100 gc_heap_mb=1200 gc0=12 gc1=3 gc2=0 proc_cpu_pct=96
 
-* **frame**: average frame time of the whole game in that window.
-* **plugin Update**: time spent in ``KSPSerialIO.Update`` per frame, and what share of the frame that is.
-  It includes sampling the vessel and sending the packet, but not ``AxisInput`` or the reader thread.
-* **sampling**: reading the vessel into ``VData``. This is the only part that grows with the number of parts.
-* **send**: writing the packet to the port. A value near the 250 ms write timeout means the board is not
-  reading.
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Key
+     - Meaning
+   * - ``window_s``, ``parts``, ``frames``
+     - Length of the window, parts of the active vessel and frames rendered in it.
+   * - ``frame_ms``, ``fps``
+     - Average frame time of the whole game in the window.
+   * - ``upd_avg_ms``, ``upd_max_ms``
+     - Time spent in ``KSPSerialIO.Update`` per frame. It includes sampling the vessel and sending the
+       packet, but not ``AxisInput`` or the reader thread.
+   * - ``upd_share_pct``
+     - The plugin's Update time as a percentage of the window: the fraction of every frame it takes.
+   * - ``samples``, ``sample_avg_ms``, ``sample_max_ms``
+     - Telemetry samples taken and the time to read the vessel into ``VData``. This is the only part
+       that grows with the number of parts.
+   * - ``send_avg_ms``, ``send_max_ms``
+     - Time to write the packet. A value near the 250 ms write timeout means the board is not reading.
+   * - ``ws_mb``, ``private_mb``
+     - Working set and private memory of the whole KSP process, in MB.
+   * - ``gc_heap_mb``, ``gc0``, ``gc1``, ``gc2``
+     - Managed heap size and the garbage collections of each generation during the window.
+   * - ``proc_cpu_pct``
+     - CPU used by the whole process in the window, where 100 is one full core.
 
 To compare the game with and without the plugin, fly the same craft in the same place both times:
 
-#. ``./ci deploy`` and fly for a minute; note the ``perf`` lines and the frame rate shown by an external overlay.
-#. Close KSP, run ``./ci disable_mod`` and fly the same craft again, reading the frame rate with the overlay.
+#. ``./ci deploy`` and fly for a minute; the ``perf`` lines are written to ``KSP.log``.
+#. Close KSP, run ``./ci disable_mod`` and fly the same craft again.
 #. ``./ci enable_mod`` puts the plugin back.
 
-The frame time in the log only exists while the plugin runs, so the external overlay (the NVIDIA or Steam
-counter, for example) is what gives the number for the run without the plugin.
+The log line only exists while the plugin runs, so the frame rate of the run without the plugin has to
+come from outside the plugin: an external overlay (the NVIDIA or Steam counter) or a profiler such as
+KSPPerf.
 
 State exposed to other code
 ---------------------------

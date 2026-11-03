@@ -972,6 +972,10 @@ namespace KSPSerialIO
         private static int perfFrames, perfSamples;
         private static double perfUpdateSum, perfUpdateMax, perfSampleSum, perfSampleMax, perfSendSum, perfSendMax;
         private static double perfWindowStart = -1;
+        // Process-wide counters at the start of the window, to report deltas
+        private static System.Diagnostics.Process perfProc;
+        private static double perfCpuStartMs;
+        private static int perfGc0, perfGc1, perfGc2;
 
         /// @brief Milliseconds elapsed since a Stopwatch timestamp.
         private static double PerfMs(long start)
@@ -989,11 +993,29 @@ namespace KSPSerialIO
             if (sendMs > perfSendMax) perfSendMax = sendMs;
         }
 
+        /// @brief Takes the process counters that the next summary is measured against.
+        private static void PerfStartWindow(double now)
+        {
+            perfWindowStart = now;
+            try
+            {
+                if (perfProc == null) perfProc = System.Diagnostics.Process.GetCurrentProcess();
+                perfProc.Refresh();
+                perfCpuStartMs = perfProc.TotalProcessorTime.TotalMilliseconds;
+            }
+            catch (Exception) { perfCpuStartMs = -1; }
+            perfGc0 = GC.CollectionCount(0);
+            perfGc1 = GC.CollectionCount(1);
+            perfGc2 = GC.CollectionCount(2);
+        }
+
         /**
-         * @brief Records the cost of one Update() call and, every 10 s, logs a summary.
+         * @brief Records the cost of one Update() call and, every 10 s, logs one summary line.
          *
-         * The share is the plugin's Update time over the wall time of the window, so it is the fraction
-         * of every frame the plugin takes. AxisInput and the reader thread are not included.
+         * The line is a list of key=value pairs so it can be parsed by a script. It covers the whole game
+         * (frame time, process memory, CPU, garbage collections) and the plugin (Update, sampling and
+         * sending time). upd_share_pct is the plugin's Update time over the wall time of the window, so it
+         * is the fraction of every frame the plugin takes; AxisInput and the reader thread are not included.
          */
         private static void PerfRecordFrame(long start, int parts)
         {
@@ -1003,22 +1025,37 @@ namespace KSPSerialIO
             if (ms > perfUpdateMax) perfUpdateMax = ms;
 
             double now = Time.unscaledTime;
-            if (perfWindowStart < 0) { perfWindowStart = now; return; }
+            if (perfWindowStart < 0) { PerfStartWindow(now); return; }
             double window = now - perfWindowStart;
             if (window < 10.0) return;
 
             double frameMs = window * 1000.0 / perfFrames;
-            Debug.Log(String.Format(
-                "KSPSerialIO: perf [{0:F0} s, {1} parts] frame {2:F1} ms ({3:F0} fps) | plugin Update avg {4:F3} ms max {5:F2} ms = {6:F2}% of frame | " +
-                "sampling {7} x avg {8:F3} ms max {9:F2} ms | send avg {10:F3} ms max {11:F2} ms",
-                window, parts, frameMs, 1000.0 / frameMs, perfUpdateSum / perfFrames, perfUpdateMax,
-                perfUpdateSum / (window * 1000.0) * 100.0,
+            double ws = -1, priv = -1, cpuPct = -1;
+            try
+            {
+                perfProc.Refresh();
+                ws = perfProc.WorkingSet64 / 1048576.0;
+                priv = perfProc.PrivateMemorySize64 / 1048576.0;
+                if (perfCpuStartMs >= 0)
+                    cpuPct = (perfProc.TotalProcessorTime.TotalMilliseconds - perfCpuStartMs) / (window * 1000.0) * 100.0;
+            }
+            catch (Exception) { }
+
+            Debug.Log(String.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "KSPSerialIO: perf window_s={0:F1} parts={1} frames={2} frame_ms={3:F2} fps={4:F1} " +
+                "upd_avg_ms={5:F3} upd_max_ms={6:F2} upd_share_pct={7:F3} " +
+                "samples={8} sample_avg_ms={9:F3} sample_max_ms={10:F2} send_avg_ms={11:F3} send_max_ms={12:F2} " +
+                "ws_mb={13:F0} private_mb={14:F0} gc_heap_mb={15:F0} gc0={16} gc1={17} gc2={18} proc_cpu_pct={19:F0}",
+                window, parts, perfFrames, frameMs, 1000.0 / frameMs,
+                perfUpdateSum / perfFrames, perfUpdateMax, perfUpdateSum / (window * 1000.0) * 100.0,
                 perfSamples, perfSamples > 0 ? perfSampleSum / perfSamples : 0, perfSampleMax,
-                perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax));
+                perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax,
+                ws, priv, GC.GetTotalMemory(false) / 1048576.0,
+                GC.CollectionCount(0) - perfGc0, GC.CollectionCount(1) - perfGc1, GC.CollectionCount(2) - perfGc2, cpuPct));
 
             perfFrames = perfSamples = 0;
             perfUpdateSum = perfUpdateMax = perfSampleSum = perfSampleMax = perfSendSum = perfSendMax = 0;
-            perfWindowStart = now;
+            PerfStartWindow(now);
         }
         #endregion
 

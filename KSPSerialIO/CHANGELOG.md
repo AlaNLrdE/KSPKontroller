@@ -1,5 +1,8 @@
 # Changelog
 
+* **0.19.3.3**: 20261103
+  The `PerfLog` line is now a list of `key=value` pairs for easy parsing, and adds process memory
+  (working set, private), managed heap size, garbage collections per generation and process CPU usage.
 * **0.19.3.2**: 20261103
   Optional performance log (`PerfLog` in config.xml): every 10 s it writes how long the plugin takes per
   frame, how much of that is vessel sampling and packet sending, and the game's own frame time. The
