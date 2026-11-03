@@ -301,7 +301,7 @@ namespace KSPSerialIO
                     }
                     break;
                 case Cid:
-                    CPacket = (ControlPacket)ByteArrayToStructure(PayloadBuffer, CPacket);
+                    CPacket = (ControlPacket)ByteArrayToStructure(NewPacketBuffer, CPacket);
                     SerialMutex.ReleaseMutex();
                     VesselControls();
                     break;
@@ -365,25 +365,28 @@ namespace KSPSerialIO
             SerialRead = delegate {
                 try
                 {
-                    Port.BaseStream.BeginRead(buffer, 0, buffer.Length, delegate (IAsyncResult ar) {
-                            try
-                            {
-                                int actualLength = Port.BaseStream.EndRead(ar);
-                                byte[] received = new byte[actualLength];
-                                Buffer.BlockCopy(buffer, 0, received, 0, actualLength);
-                                ReceivedDataEvent(received, actualLength);
-                            }
-                            catch (IOException exc)
-                            {
-                                Debug.Log("IOException in SerialWorker :(");
-                                Debug.Log(exc.ToString());
-                            }
-                        }, null);
+                    // One read at a time: EndRead blocks until this read completes, so
+                    // the shared buffer and the parser state are only touched by this thread.
+                    IAsyncResult ar = Port.BaseStream.BeginRead(buffer, 0, buffer.Length, null, null);
+                    int actualLength = Port.BaseStream.EndRead(ar);
+                    if (actualLength > 0)
+                    {
+                        byte[] received = new byte[actualLength];
+                        Buffer.BlockCopy(buffer, 0, received, 0, actualLength);
+                        ReceivedDataEvent(received, actualLength);
+                    }
                 }
                 catch (InvalidOperationException)
                 {
                     Debug.Log("KSPSerialIO: Trying to read port that isn't open. Sleeping");
                     Thread.Sleep(500);
+                }
+                catch (Exception exc)
+                {
+                    // Never let the parser die silently: reset it and keep reading
+                    Debug.Log("KSPSerialIO: Exception in SerialWorker: " + exc.ToString());
+                    CurrentState = ReceiveStates.FIRSTHEADER;
+                    Thread.Sleep(100);
                 }
             };
 
@@ -419,12 +422,13 @@ namespace KSPSerialIO
                     case ReceiveStates.SIZE:
                         CurrentPacketLength = ReadBuffer[x];
                         CurrentBytesRead = 0;
-                        CurrentState = ReceiveStates.PAYLOAD;
+                        // A zero-length packet is invalid; resync instead of overrunning PayloadBuffer
+                        CurrentState = (CurrentPacketLength == 0) ? ReceiveStates.FIRSTHEADER : ReceiveStates.PAYLOAD;
                         break;
                     case ReceiveStates.PAYLOAD:
                         PayloadBuffer[CurrentBytesRead] = ReadBuffer[x];
                         CurrentBytesRead++;
-                        if (CurrentBytesRead == CurrentPacketLength)
+                        if (CurrentBytesRead >= CurrentPacketLength)
                         {
                             CurrentState = ReceiveStates.CS;
                         }

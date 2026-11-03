@@ -136,17 +136,22 @@ struct ControlPacket {
   byte id;
   byte MainControls;                  //SAS RCS Lights Gear Brakes Precision Abort Stage 
   byte Mode;                          //0 = stage, 1 = docking, 2 = map
-  unsigned int ControlGroup;          //control groups 1-10 in 2 bytes
+  uint16_t ControlGroup;              //control groups 1-10 in 2 bytes
+  byte NavballSASMode;                //AutoPilot mode / navball mode
   byte AdditionalControlByte1;        //other stuff
-  byte AdditionalControlByte2;
-  int Pitch;                          //-1000 -> 1000
-  int Roll;                           //-1000 -> 1000
-  int Yaw;                            //-1000 -> 1000
-  int TX;                             //-1000 -> 1000
-  int TY;                             //-1000 -> 1000
-  int TZ;                             //-1000 -> 1000
-  int Throttle;                       //    0 -> 1000
+  int16_t Pitch;                      //-1000 -> 1000
+  int16_t Roll;                       //-1000 -> 1000
+  int16_t Yaw;                        //-1000 -> 1000
+  int16_t TX;                         //-1000 -> 1000
+  int16_t TY;                         //-1000 -> 1000
+  int16_t TZ;                         //-1000 -> 1000
+  int16_t WheelSteer;                 //-1000 -> 1000
+  int16_t Throttle;                   //    0 -> 1000
+  int16_t WheelThrottle;              //    0 -> 1000
 };
+
+// Must match KSPSerialIO.ControlPacket (25 bytes); R4 int is 32-bit so fixed-width types are required
+static_assert(sizeof(ControlPacket) == 25, "ControlPacket struct size must be 25 bytes");
 
 #pragma pack(pop)
 
