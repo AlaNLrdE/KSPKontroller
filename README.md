@@ -138,6 +138,7 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE)
 ./ci ksp_list             # list the KSP installs found on this machine
 ./ci deploy_all [PORT]    # build everything, install the plugin into a local KSP and flash the board (then test it; NO_TEST=1 skips)
 ./ci disable_mod          # move the plugin out of GameData (and enable_mod back) to compare performance
+./ci save_log [LABEL]      # keep the KSP.log of a run in build/perf/LABEL/ (KSP overwrites it)
 ./ci upload_sketch [PORT]   # upload the compiled sketch to the board
 ./ci test_arduino [PORT]   # compile + upload + test the board over USB serial (NO_UPLOAD=1 skips the upload)
 ./ci clean

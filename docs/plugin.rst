@@ -132,8 +132,8 @@ script or a profiler can parse it:
 
 To compare the game with and without the plugin, fly the same craft in the same place both times:
 
-#. ``./ci deploy`` and fly for a minute; the ``perf`` lines are written to ``KSP.log``.
-#. Close KSP, run ``./ci disable_mod`` and fly the same craft again.
+#. ``./ci deploy`` and fly for a minute; the ``perf`` lines are written to ``KSP.log``. Then ``./ci save_log a_all`` keeps that log, because KSP overwrites it on the next launch.
+#. Close KSP, run ``./ci disable_mod``, fly the same craft again and ``./ci save_log b_no_plugin``.
 #. ``./ci enable_mod`` puts the plugin back.
 
 The log line only exists while the plugin runs, so the frame rate of the run without the plugin has to

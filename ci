@@ -8,6 +8,7 @@
 #   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
 #   ./ci ksp_list            List the KSP installs found on this machine
 #   ./ci disable_mod         Move the plugin out of GameData (to compare performance); enable_mod puts it back
+#   ./ci save_log [LABEL]    Copy KSP.log and Player.log of the last run to build/perf/LABEL/ (KSP overwrites them)
 #   ./ci deploy_all [PORT]   Build everything, install the plugin into a local KSP and flash the board, then test it
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
@@ -257,6 +258,24 @@ install_plugin() {
   log "Installed: $dest"
 }
 
+# Copy KSP.log (and Player.log) of the last run to build/perf/LABEL/. KSP overwrites its log on every launch,
+# so do this after each measured run, before starting the game again. Works with KSP open or closed.
+save_log() {
+  local label="${1:-run}" ksp dest playerlog
+  label="${label//[^A-Za-z0-9._-]/_}"
+  ksp="$(find_kspdir)"
+  [ -f "$ksp/KSP.log" ] || die "no KSP.log in $ksp"
+  dest="$BUILD/perf/$label"
+  mkdir -p "$dest"
+  cp "$ksp/KSP.log" "$dest/KSP.log"
+  for playerlog in "${LOCALAPPDATA:-}/../LocalLow/Squad/Kerbal Space Program/Player.log" \
+                   "$HOME/.config/unity3d/Squad/Kerbal Space Program/Player.log"; do
+    [ -f "$playerlog" ] && cp "$playerlog" "$dest/Player.log" && break
+  done
+  log "Saved $dest ($(grep -c 'KSPSerialIO: perf' "$dest/KSP.log") plugin perf lines, $(grep -c '\[KSPPerf\]' "$dest/KSP.log") KSPPerf lines)"
+  echo "$dest/KSP.log"
+}
+
 # Take the plugin out of GameData without deleting it (KSP must be closed), to compare the game with and without it
 disable_mod() {
   local ksp
@@ -437,7 +456,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,27p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,28p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -446,6 +465,7 @@ case "${1:-help}" in
   install)           install_plugin ;;
   deploy)            deploy ;;
   deploy_all)        shift; deploy_all "$@" ;;
+  save_log)          shift; save_log "$@" ;;
   disable_mod)       disable_mod ;;
   enable_mod)        enable_mod ;;
   ksp_list)          ksp_list ;;

@@ -18,6 +18,8 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Both of the above.
    * - ``./ci deploy``
      - Build the plugin and install it into a local KSP. Lists the installs it finds and asks which one (see below).
+   * - ``./ci save_log [LABEL]``
+     - Copy ``KSP.log`` and ``Player.log`` of the last run to ``build/perf/LABEL/``. KSP overwrites them on every launch, so run it after each measured run, before starting the game again.
    * - ``./ci disable_mod`` / ``./ci enable_mod``
      - Move the plugin out of GameData and back, to compare performance with and without it. KSP must be closed.
    * - ``./ci deploy_all [PORT]``
