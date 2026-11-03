@@ -21,12 +21,23 @@ void output() {
  * Use this function as the template for adding more switches, buttons and axes.
  */
 void controls() {
+  static boolean stagePressedBefore = false;  // button state at the previous sample (edge detection)
+  static unsigned long stageHoldUntil = 0;    // the STAGE bit stays set until this time (ms)
+  static int stageIdle = HIGH;                // idle level of the stage pin, learned while not connected
   if (Connected) {
 
-    if (digitalRead(SASPIN))  //--------- This is how you do main controls
-      MainControls(SAS, HIGH);
-    else
-      MainControls(SAS, LOW);
+    // Stage button (same as the space bar). The plugin stages once on each rising edge of the STAGE bit and
+    // only looks at the bit once per game frame, so a short tap must not be missed: the bit is raised on the
+    // first sample that differs from the idle level and held for STAGEHOLD ms. Contact bounce falls inside
+    // the hold time and is ignored. The idle level is learned while the link is down, so the button works
+    // wired to GND (idle high, pull-up) or to +V with a pull-down (idle low), and a pin that is stuck at one
+    // level never stages by itself.
+    boolean stagePressed = (digitalRead(STAGEPIN) != stageIdle);
+    if (stagePressed && !stagePressedBefore && now > stageHoldUntil) {
+      stageHoldUntil = now + STAGEHOLD;
+    }
+    stagePressedBefore = stagePressed;
+    MainControls(STAGE, now < stageHoldUntil);
 
     if (digitalRead(RCSPIN))
       MainControls(RCS, HIGH);
@@ -42,12 +53,16 @@ void controls() {
     CPacket.Throttle = constrain(map(analogRead(THROTTLEPIN),THROTTLEDB,1024-THROTTLEDB,0,1000),0, 1000);
 
     KSPBoardSendData(details(CPacket));
+  } else {
+    stageIdle = digitalRead(STAGEPIN);   // learn the idle level; keep the button released-looking until connected
+    stagePressedBefore = false;
+    stageHoldUntil = 0;
   }
 }
 
 /// @brief Configures the input pins (all switches use the internal pull-up).
 void controlsInit() {
-  pinMode(SASPIN, INPUT_PULLUP);
+  pinMode(STAGEPIN, INPUT_PULLUP);
   pinMode(RCSPIN, INPUT_PULLUP);
   pinMode(CG1PIN, INPUT_PULLUP);
 }

@@ -21,19 +21,20 @@
  */
 
 //pins for LEDs
-#define GLED 7      ///< Green LED: lit while telemetry is being received
+#define GLED 12     ///< Green LED: lit while telemetry is being received
 #define YLED 6      ///< Yellow LED: caution (high G or low fuel)
 #define RLED 5      ///< Red LED: warning (very high G or very low fuel)
 #define SASLED 8    ///< Mirrors the SAS state reported by KSP
-#define RCSLED 12   ///< Mirrors the RCS state reported by KSP
+#define RCSLED 7    ///< Mirrors the RCS state reported by KSP
 #define CG1LED 11   ///< Mirrors custom action group 1
 
 //pins for input
-#define SASPIN 2        ///< SAS switch (active high, internal pull-up enabled)
+#define STAGEPIN 2      ///< Stage push button (internal pull-up: pressed = connected to GND)
 #define RCSPIN 9        ///< RCS switch
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
 
+#define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
 
 //Input enums

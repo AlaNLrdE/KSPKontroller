@@ -53,7 +53,7 @@ Hardware used by the demo sketch
      - Function
    * - 2
      - input (pull-up)
-     - SAS switch
+     - Stage push button (space bar)
    * - 9
      - input (pull-up)
      - RCS switch
@@ -63,7 +63,7 @@ Hardware used by the demo sketch
    * - A0
      - analog input
      - Throttle potentiometer
-   * - 7
+   * - 12
      - output
      - Green LED: link alive
    * - 6
@@ -75,7 +75,7 @@ Hardware used by the demo sketch
    * - 8
      - output
      - SAS state LED
-   * - 12
+   * - 7
      - output
      - RCS state LED
    * - 11
