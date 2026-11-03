@@ -122,3 +122,16 @@ KSPKontroller is a physical controller system for [Kerbal Space Program (KSP)](h
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE)
+---
+
+## Building with `./ci` (`./ci.cmd` in PowerShell/cmd)
+
+```
+./ci build_sketch        # compile the Arduino sketch (downloads arduino-cli + UNO R4 core if missing)
+./ci build_KSPSerialIO   # compile the KSP plugin (msbuild, xbuild or dotnet)
+./ci build_all           # both
+KSPDIR=/path/to/KSP ./ci install   # copy the plugin into GameData/KSPSerialIO
+./ci clean
+```
+
+Set `FQBN` to target another board (default `arduino:renesas_uno:minima`, use `arduino:renesas_uno:unor4wifi` for the WiFi variant) and `CONFIG=Debug` for a debug plugin build.

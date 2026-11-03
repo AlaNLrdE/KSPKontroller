@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# Build helper for KSPKontroller.
+#
+#   ./ci build_sketch        Compile the Arduino sketch (arduino-cli)
+#   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild)
+#   ./ci build_all           Both of the above
+#   ./ci install             Copy plugin + config.xml into $KSPDIR/GameData/KSPSerialIO
+#   ./ci docs                Generate the Doxygen documentation into build/docs
+#   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
+#   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
+#   ./ci clean               Remove build outputs
+#   ./ci help
+#
+# Environment overrides:
+#   FQBN    Arduino board          (default: arduino:renesas_uno:minima)
+#   CONFIG  Plugin configuration   (default: Release)
+#   KSPDIR  KSP install directory  (required for `install`)
+#   PLANTUML_JAR  Path to plantuml.jar (default: build/tools/plantuml.jar, downloaded if missing)
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUILD="$ROOT/build"
+SKETCH="$ROOT/arduino-sketch/KSPIODemo9"
+PLUGIN_SLN="$ROOT/KSPSerialIO/KSPSerialIO.sln"
+PLUGIN_OUT="$ROOT/KSPSerialIO/KSPSerialIO/bin"
+FQBN="${FQBN:-arduino:renesas_uno:minima}"
+CONFIG="${CONFIG:-Release}"
+
+REFASM_VERSION="1.0.3"
+REFASM_DIR="$BUILD/refasm"
+
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
+
+# ---------------------------------------------------------------- arduino-cli
+
+find_arduino_cli() {
+  if command -v arduino-cli >/dev/null 2>&1; then
+    command -v arduino-cli
+    return
+  fi
+
+  local exe="$BUILD/tools/arduino-cli"
+  is_windows && exe="$exe.exe"
+  if [ ! -x "$exe" ]; then
+    local url archive
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*) url="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip" ;;
+      Linux)                url="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_64bit.tar.gz" ;;
+      *) die "arduino-cli not found; install it from https://arduino.github.io/arduino-cli/" ;;
+    esac
+    log "arduino-cli not found, downloading to $BUILD/tools" >&2
+    mkdir -p "$BUILD/tools"
+    archive="$BUILD/tools/${url##*/}"
+    curl -fsSL -o "$archive" "$url"
+    case "$archive" in
+      *.zip)    unzip -q -o "$archive" -d "$BUILD/tools" ;;
+      *.tar.gz) tar -xzf "$archive" -C "$BUILD/tools" ;;
+    esac
+    rm -f "$archive"
+  fi
+  echo "$exe"
+}
+
+build_sketch() {
+  local cli core
+  cli="$(find_arduino_cli)"
+  core="${FQBN%:*}"
+
+  if ! "$cli" core list | awk 'NR>1 {print $1}' | grep -qx "$core"; then
+    log "Installing Arduino core $core"
+    "$cli" core update-index
+    # --skip-post-install: avoids the interactive USB driver installer (not needed to compile)
+    "$cli" core install --skip-post-install "$core"
+  fi
+
+  log "Compiling sketch for $FQBN"
+  "$cli" compile --fqbn "$FQBN" --build-path "$BUILD/sketch" "$SKETCH"
+}
+
+# ------------------------------------------------------------------- plugin
+
+# The plugin targets .NET Framework 3.5 (Unity/KSP). Modern SDKs ship no
+# reference assemblies for it, so fetch them from NuGet when needed.
+ensure_refassemblies() {
+  local dir="$REFASM_DIR/build/.NETFramework/v3.5"
+  if [ ! -f "$dir/mscorlib.dll" ]; then
+    log "Downloading .NET 3.5 reference assemblies"
+    mkdir -p "$REFASM_DIR"
+    curl -fsSL -o "$REFASM_DIR/ref.nupkg" \
+      "https://www.nuget.org/api/v2/package/Microsoft.NETFramework.ReferenceAssemblies.net35/$REFASM_VERSION"
+    unzip -q -o "$REFASM_DIR/ref.nupkg" -d "$REFASM_DIR"
+    rm -f "$REFASM_DIR/ref.nupkg"
+  fi
+  if is_windows; then (cd "$dir" && pwd -W); else (cd "$dir" && pwd); fi
+}
+
+build_KSPSerialIO() {
+  if command -v msbuild >/dev/null 2>&1; then
+    log "Building plugin with msbuild ($CONFIG)"
+    msbuild "$PLUGIN_SLN" -p:Configuration="$CONFIG" -v:minimal
+  elif command -v xbuild >/dev/null 2>&1; then
+    log "Building plugin with xbuild ($CONFIG)"
+    xbuild "$PLUGIN_SLN" /p:Configuration="$CONFIG"
+  elif command -v dotnet >/dev/null 2>&1; then
+    local refs
+    refs="$(ensure_refassemblies)"
+    log "Building plugin with dotnet ($CONFIG)"
+    dotnet build "$PLUGIN_SLN" -c "$CONFIG" -v:minimal -nologo \
+      -p:FrameworkPathOverride="$refs" -nowarn:MSB3258
+  else
+    die "no msbuild, xbuild or dotnet found"
+  fi
+  log "Output: $PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
+}
+
+install_plugin() {
+  [ -n "${KSPDIR:-}" ] || die "set KSPDIR to your KSP install directory"
+  local dll="$PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
+  [ -f "$dll" ] || die "plugin not built; run ./ci build_KSPSerialIO first"
+
+  local dest="$KSPDIR/GameData/KSPSerialIO"
+  mkdir -p "$dest/PluginData/KSPSerialIO"
+  cp "$dll" "$dest/"
+  cp "$ROOT/KSPSerialIO/Includes/PsimaxSerial.dll" "$dest/"
+  # Never overwrite a config the user has already edited
+  if [ ! -f "$dest/PluginData/KSPSerialIO/config.xml" ]; then
+    cp "$ROOT/KSPSerialIO/config.xml" "$dest/PluginData/KSPSerialIO/"
+  fi
+  log "Installed to $dest"
+}
+
+docs() {
+  command -v doxygen >/dev/null 2>&1 || die "doxygen not found; install it from https://www.doxygen.nl/"
+  log "Generating documentation"
+  (cd "$ROOT" && doxygen Doxyfile)
+  log "Output: $BUILD/docs/html/index.html"
+}
+
+PLANTUML_JAR="${PLANTUML_JAR:-$BUILD/tools/plantuml.jar}"
+PLANTUML_URL="https://github.com/plantuml/plantuml/releases/latest/download/plantuml.jar"
+
+ensure_plantuml() {
+  command -v java >/dev/null 2>&1 || die "java not found; PlantUML needs a Java runtime"
+  if [ ! -f "$PLANTUML_JAR" ]; then
+    log "Downloading plantuml.jar"
+    mkdir -p "$(dirname "$PLANTUML_JAR")"
+    curl -fsSL -o "$PLANTUML_JAR" "$PLANTUML_URL"
+  fi
+  export PLANTUML_JAR
+}
+
+# Render every docs/diagrams/*.puml to SVG (also a quick way to validate diagram syntax)
+diagrams() {
+  ensure_plantuml
+  log "Rendering diagrams"
+  mkdir -p "$BUILD/diagrams"
+  java -jar "$PLANTUML_JAR" -tsvg -o "$BUILD/diagrams" "$ROOT"/docs/diagrams/*.puml
+  log "Output: $BUILD/diagrams"
+}
+
+# Skips the Windows Store "python" stub, which exists on PATH but is not a real interpreter
+find_python() {
+  local c
+  # PATH first, then the default per-user and system install locations on Windows (a terminal
+  # opened before Python was installed does not have the new PATH entry)
+  for c in python3 python py \
+      "${LOCALAPPDATA:-}"/Programs/Python/Python3*/python.exe \
+      "${ProgramFiles:-}"/Python3*/python.exe; do
+    if { command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; } && "$c" -c 'import sys; sys.exit(0)' >/dev/null 2>&1; then
+      echo "$c"
+      return
+    fi
+  done
+  die "no working Python 3 found; install it from https://www.python.org/"
+}
+
+sphinx() {
+  ensure_plantuml
+  local py venv_bin
+  py="$(find_python)"
+  if [ ! -d "$BUILD/venv" ]; then
+    log "Creating virtual environment"
+    "$py" -m venv "$BUILD/venv"
+  fi
+  if [ -d "$BUILD/venv/Scripts" ]; then venv_bin="$BUILD/venv/Scripts"; else venv_bin="$BUILD/venv/bin"; fi
+  "$venv_bin/python" -m pip install --quiet -r "$ROOT/docs/requirements.txt"
+
+  log "Building Sphinx site"
+  "$venv_bin/python" -m sphinx -b html "$ROOT/docs" "$BUILD/sphinx"
+
+  # Embed the Doxygen API reference next to the Sphinx pages when Doxygen is available
+  if command -v doxygen >/dev/null 2>&1; then
+    docs
+    rm -rf "$BUILD/sphinx/api"
+    cp -r "$BUILD/docs/html" "$BUILD/sphinx/api"
+  else
+    log "doxygen not found: the API reference link will be missing"
+  fi
+  log "Output: $BUILD/sphinx/index.html"
+}
+
+clean() {
+  log "Removing build outputs"
+  rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
+}
+
+usage() { sed -n "2,18p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-help}" in
+  build_sketch)      build_sketch ;;
+  build_KSPSerialIO) build_KSPSerialIO ;;
+  build_all)         build_KSPSerialIO; build_sketch ;;
+  install)           install_plugin ;;
+  docs)              docs ;;
+  diagrams)          diagrams ;;
+  sphinx)            sphinx ;;
+  clean)             clean ;;
+  help|-h|--help)    usage ;;
+  *) usage >&2; exit 1 ;;
+esac
