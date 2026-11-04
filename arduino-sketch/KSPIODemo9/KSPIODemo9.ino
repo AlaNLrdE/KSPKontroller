@@ -39,6 +39,7 @@
 
 #define LINKRESETMS 12000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack; must fit the plugin's retry window)
 #define DTRDEBOUNCEMS 100 ///< DTR must stay low this long while connected before the host is considered gone (the plugin closed the port)
+#define SENDWAITUS 15000UL ///< Longest wait for room in the USB transmit FIFO before a frame is skipped, microseconds
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range

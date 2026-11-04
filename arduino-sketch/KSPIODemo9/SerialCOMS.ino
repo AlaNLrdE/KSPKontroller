@@ -116,9 +116,20 @@ void rxReset() {
  * @return true if the frame was handed to the USB stack.
  */
 bool KSPBoardSendData(uint8_t * address, uint8_t len){
-  if (!Serial || Serial.availableForWrite() < (int)len + 4) {
+  // _SerialUSB::write() of the renesas_uno core spins forever, with the USB interrupt disabled, when the host
+  // does not drain the 256-byte transmit FIFO (the host stopped reading, or closed the port abruptly while DTR
+  // still looked asserted). That froze the board for good, and the watchdog never saw it as a normal stall.
+  // So wait for room in the FIFO for the whole frame, but only up to SENDWAITUS, and skip the frame if there is none.
+  if (!Serial) {
     dbgTxSkipped++;
     return false;
+  }
+  unsigned long waitStartUs = micros();
+  while (Serial.availableForWrite() < (int)len + 4) {
+    if (micros() - waitStartUs > SENDWAITUS) {
+      dbgTxSkipped++;
+      return false;
+    }
   }
   unsigned long sendStartUs = micros();
   uint8_t CS = len;
