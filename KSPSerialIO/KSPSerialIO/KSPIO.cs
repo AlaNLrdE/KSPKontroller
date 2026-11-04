@@ -573,6 +573,7 @@ namespace KSPSerialIO
                 if (!LinkUp) return;   // link down: nothing to send to
                 byte[] frame = BuildFrame(anything);
                 lock (sendLock) { pendingFrame = frame; }
+                Interlocked.Exchange(ref lastQueueTicks, NowTicks());   // the board answers (ControlPacket) only while we send
                 EnsureSender();
                 sendEvent.Set();
             }
@@ -948,7 +949,11 @@ namespace KSPSerialIO
                     List<string> candidates = BuildCandidates();
                     Debug.Log(String.Format("KSPSerialIO: Found {0} serial ports: {1}", candidates.Count, String.Join(",", candidates.ToArray())));
                     if (TryConnect(candidates, SettingsNStuff.HandshakeDelay, ReplyWaitMs, -1))
+                    {
                         Debug.Log("KSPSerialIO-hp: found KSP Display at " + PortNumber);
+                        // The first Update (telemetry) may come much later (vessel load): no loss detection meanwhile
+                        Interlocked.Exchange(ref quietUntilTicks, NowTicks() + (long)StartGraceMs * System.Diagnostics.Stopwatch.Frequency / 1000);
+                    }
                     else
                         Debug.Log("KSPSerialIO-hp: KSP Display not found, the link supervisor keeps searching");
                 }
@@ -1059,6 +1064,7 @@ namespace KSPSerialIO
         public static int ReconnectCount = 0;      ///< Successful (re)connections by the supervisor since the game started
         private static long linkUpTicks;           ///< Stopwatch timestamp of the last link-up, reference for the silence timer (Interlocked)
         private static long quietUntilTicks;       ///< No loss detection before this timestamp (Interlocked)
+        private static long lastQueueTicks;        ///< Timestamp of the last telemetry packet queued since the link came up, 0 = none yet (Interlocked)
         private static Thread SupervisorThread;
         private static readonly ManualResetEvent supStop = new ManualResetEvent(false);
         private static int supGen;                 ///< Identifies the current supervisor; any other value means "stop". Guarded by supLock
@@ -1089,6 +1095,7 @@ namespace KSPSerialIO
             long now = NowTicks();
             Interlocked.Exchange(ref linkUpTicks, now);
             Interlocked.Exchange(ref quietUntilTicks, now + (long)graceMs * System.Diagnostics.Stopwatch.Frequency / 1000);
+            Interlocked.Exchange(ref lastQueueTicks, 0);
             LinkFailed = false;
             SendFailures = 0;
             lastBoardUptime = 0;         // a new board uptime is not a reboot
@@ -1191,20 +1198,23 @@ namespace KSPSerialIO
                 SerialPort p = null;
                 ReaderState st = null;
                 bool ok = false;
-                PortNumber = name;
+                if (!Cancelled(gen)) PortNumber = name;
                 try
                 {
                     p = new SerialPort(name, SettingsNStuff.BaudRate, Parity.None, 8, StopBits.One);
                     p.WriteTimeout = 250;       // bound how long a stuck port can block a write
                     p.DtrEnable = true;         // native-USB boards only transmit while DTR is asserted
+                    if (Cancelled(gen)) return false;
                     DisplayFound = false;
                     p.Open();
                     Debug.Log("KSPSerialIO[LINK] candidate " + name + ": opened");
 
+                    if (Cancelled(gen)) { try { p.Close(); p.Dispose(); } catch (Exception) { } return false; }
                     CurrentState = ReceiveStates.FIRSTHEADER;
                     NewPacketFlag = false;
                     st = StartReader(p);
                     Pause(settleMs, gen);
+                    if (Cancelled(gen)) throw new OperationCanceledException("supervisor stopped");
 
                     if (SettingsNStuff.HandshakeDisable == 1)
                     {
@@ -1252,8 +1262,9 @@ namespace KSPSerialIO
                     return true;
                 }
 
-                // Failed candidate: stop its reader and release the port before the next one
-                DisplayFound = false;
+                // Failed candidate: stop its reader and release the port before the next one.
+                // A cancelled supervisor must not touch DisplayFound: the next scene may already own it.
+                if (!Cancelled(gen)) DisplayFound = false;
                 if (st != null) { if (currentReader == st) currentReader = null; StopReader(st, 1500); }
                 else if (p != null) { try { p.Close(); } catch (Exception) { } }
                 if (p != null) { try { p.Dispose(); } catch (Exception) { } }
@@ -1262,13 +1273,22 @@ namespace KSPSerialIO
         }
 
         /// @brief Stops the writer and the reader and closes and disposes the current port. Idempotent; used before every search attempt.
-        private static void CloseCurrentLink()
+        private static void CloseCurrentLink(int gen)
         {
+            // A stopped supervisor must not touch the statics: the next scene may already own them
+            if (Cancelled(gen)) return;
             StopSender();
-            ReaderState st = currentReader;
-            currentReader = null;
+            ReaderState st;
+            SerialPort p;
+            lock (supLock)
+            {
+                if (Cancelled(gen)) return;
+                st = currentReader;
+                currentReader = null;
+                p = Port;
+            }
             StopReader(st, 1500);
-            SerialPort p = Port;
+            if (Cancelled(gen) || !object.ReferenceEquals(p, Port)) return;
             if (p != null)
             {
                 try { if (p.IsOpen) p.Close(); } catch (Exception) { }
@@ -1283,7 +1303,11 @@ namespace KSPSerialIO
             long now = NowTicks();
             if (now < Interlocked.Read(ref quietUntilTicks)) return null;
             if (!PortIsOpen()) return "port closed";
-            long refTicks = Math.Max(Interlocked.Read(ref LastRxTicks), Interlocked.Read(ref linkUpTicks));
+            // The board goes idle 2 s after the last valid packet and stops sending ControlPackets, so silence only
+            // means a loss while the plugin has been sending: measure it from our last queued telemetry packet.
+            long queued = Interlocked.Read(ref lastQueueTicks);
+            if (queued == 0) return null;
+            long refTicks = Math.Max(Interlocked.Read(ref LastRxTicks), Math.Max(Interlocked.Read(ref linkUpTicks), queued));
             double silentMs = TicksToMs(now - refTicks);
             if (silentMs > LinkTimeoutMs) return "no data from the board for " + ((int)silentMs) + " ms";
             return null;
@@ -1304,6 +1328,7 @@ namespace KSPSerialIO
                     {
                         string reason = CheckLink();
                         if (reason == null) { supStop.WaitOne(200, false); continue; }
+                        if (Cancelled(gen)) break;
                         Debug.Log("KSPSerialIO[LINK] lost: " + reason + " | port=" + PortNumber);
                         LinkUp = false;          // the main thread stops sending and applying controls from here on
                         DisplayFound = false;
@@ -1316,7 +1341,7 @@ namespace KSPSerialIO
                         attempts = 0;
                     }
 
-                    CloseCurrentLink();
+                    CloseCurrentLink(gen);
                     if (Cancelled(gen)) break;
                     attempts++;
                     List<string> candidates = BuildCandidates();
@@ -1333,6 +1358,7 @@ namespace KSPSerialIO
                     if (Cancelled(gen)) break;
                     supStop.WaitOne(RetryIntervalMs, false);
                 }
+                catch (OperationCanceledException) { }
                 catch (Exception e)
                 {
                     Debug.Log("KSPSerialIO[LINK] supervisor error: " + e.GetType().Name + ": " + e.Message);
@@ -1357,13 +1383,15 @@ namespace KSPSerialIO
         }
 
         /// @brief Tells the supervisor to stop. Does not wait for it: it notices within milliseconds, and it cannot publish a port after this.
-        private static void StopSupervisor()
+        private static Thread StopSupervisor()
         {
             lock (supLock)
             {
                 supGen++;
                 supStop.Set();
+                Thread old = SupervisorThread;
                 SupervisorThread = null;
+                return old;
             }
         }
 
@@ -1385,7 +1413,12 @@ namespace KSPSerialIO
         public static bool PortCleanup()
         {
             PortLog("cleanup begin: stopping link supervisor and writer");
-            StopSupervisor();
+            Thread oldSup = StopSupervisor();
+            // Bounded wait so the next scene's Awake rarely overlaps with the old supervisor (it may be inside a port call)
+            if (oldSup != null && oldSup != Thread.CurrentThread)
+            {
+                try { oldSup.Join(300); } catch (Exception) { }
+            }
             LinkUp = false;
             StopSender();
             PortLog("cleanup: writer stopped");
@@ -1420,6 +1453,7 @@ namespace KSPSerialIO
     public class KSPSerialIO : MonoBehaviour
     {
         private double lastUpdate = 0.0f;
+        private bool linkWasReady = false;   ///< LinkReady seen true on the previous Update (edge detection for the axis hook)
         private double deltaT = 1.0f;
         private double missionTime = 0;
         private double missionTimeOld = 0;
@@ -1661,10 +1695,24 @@ namespace KSPSerialIO
         {
             long perfStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
+            if (!KSPSerialPort.LinkReady) linkWasReady = false;
+
             // Without a controller (or after the link failed) there is nothing to send, even if a port was left open
             // (LinkReady is false while the link supervisor is reconnecting: nothing is sent or applied until it is back)
             if (FlightGlobals.ActiveVessel != null && KSPSerialPort.LinkReady)
             {
+                // Link came up (first connection or a late reconnect): hook the axes on the current vessel, idempotently.
+                // Start() only hooks when the board was present then, and the static ActiveVessel may already
+                // hold this vessel from an earlier flight, which would skip the hook in the vessel switch below.
+                if (!linkWasReady)
+                {
+                    linkWasReady = true;
+                    if (ActiveVessel != null) ActiveVessel.OnPostAutopilotUpdate -= AxisInput;
+                    ActiveVessel = FlightGlobals.ActiveVessel;
+                    ActiveVessel.OnPostAutopilotUpdate -= AxisInput;
+                    ActiveVessel.OnPostAutopilotUpdate += AxisInput;
+                    Debug.Log("KSPSerialIO: link ready, axes hooked");
+                }
                 //Debug.Log("KSPSerialIO: 1");
                 //If the current active vessel is not what we were using, we need to remove controls from the old 
                 //vessel and attache it to the current one

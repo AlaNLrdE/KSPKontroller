@@ -10,6 +10,11 @@
   the stage button is re-seeded so a held button cannot stage. Log lines: `KSPSerialIO[LINK] lost: ...`,
   `searching attempt n: ...`, `candidate <port>: ...`, `reconnected on <port> after n attempts, m ms down`.
   The perf line gains `link_state=<up|searching>` and `reconnects=<n>`.
+  Review fixes: the silence test only counts once telemetry has been queued since the link came up (measured from
+  the last queued packet, the board idles 2 s after the last valid packet) and the 10 s start grace also applies after
+  a connection made in Awake, so a long vessel load no longer causes a false loss; the axes are hooked again when
+  the link becomes ready (late reconnect with the same vessel id); a stopped supervisor no longer touches the
+  port, reader, writer or `DisplayFound` of the next scene, and scene cleanup waits up to 300 ms for it.
 
 * **0.19.3.10**: 20261103
   The KSPSerialIO[BOARD] line also carries the LED matrix frame (`matrix=` as 24 hex digits, one byte per column),
