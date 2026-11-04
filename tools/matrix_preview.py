@@ -20,7 +20,11 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-SCREENS = {"fuel": 0, "stage": 1, "horizon": 2, "vsi": 3, "sas": 4}
+SCREENS = {"fuel": 0, "stage": 1, "horizon": 2, "vsi": 3, "sas": 4, "data": 5, "waiting": 64}
+# Data pages: 16 + field shows the label, 32 + field the value (fields: 0 AP, 1 PE, 2 INC, 3 ALT, 4 SPD)
+for _i, _n in enumerate(("ap", "pe", "inc", "alt", "spd")):
+    SCREENS["label " + _n] = 16 + _i
+    SCREENS["value " + _n] = 32 + _i
 
 # VesselData wire layout (see docs/vesseldata.rst); little-endian, packed, 214 bytes
 FORMAT = ("<B" + "f" * 8 + "ii" + "ff" + "i" + "f" * 5 + "f" * 14 + "ffff" + "I" + "ff" + "I" + "f" + "fff" +
@@ -60,6 +64,22 @@ SCENARIOS = {
     "sas off":           ("sas", dict(ActionGroups=0)),
     "sas prograde":      ("sas", dict(ActionGroups=1, NavballSASMode=2)),
     "sas maneuver":      ("sas", dict(ActionGroups=1, NavballSASMode=10)),
+    "waiting for KSP":   ("waiting", dict()),
+    "label AP":          ("label ap", dict()),
+    "label PE":          ("label pe", dict()),
+    "label INC":         ("label inc", dict()),
+    "label ALT":         ("label alt", dict()),
+    "label SPD":         ("label spd", dict()),
+    "AP 250 km":         ("value ap", dict(AP=250000.0)),
+    "AP 86.5 km":        ("value ap", dict(AP=86500.0)),
+    "PE -45 km (sub)":   ("value pe", dict(PE=-45000.0)),
+    "PE 72 km":          ("value pe", dict(PE=72000.0)),
+    "INC 28.5 deg":      ("value inc", dict(inc=28.5)),
+    "INC 98 deg":        ("value inc", dict(inc=98.0)),
+    "ALT 1234 m":        ("value alt", dict(Alt=1234.0)),
+    "ALT 12 Mm (moon)":  ("value alt", dict(Alt=12000000.0)),
+    "SPD 7 m/s":         ("value spd", dict(Vsurf=7.0)),
+    "SPD 2200 m/s":      ("value spd", dict(Vsurf=2200.0)),
 }
 
 

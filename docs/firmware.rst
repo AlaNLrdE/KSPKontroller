@@ -62,7 +62,8 @@ LED matrix
 
 The 12x8 matrix of the UNO R4 WiFi is drawn by ``matrix.ino`` into an 8x12 buffer and refreshed by the
 library from a timer interrupt, so drawing never blocks ``loop()``. At power on it shows a "KSP" splash
-with a loading bar, then a scanning dot while it waits for KSP. A blinking X means the link was lost.
+with a loading bar, then the letters KSP with a moon orbiting a small planet below them while it waits for
+KSP. A blinking X means the link was lost.
 The pixel at the top right is a heartbeat that blinks four times a second: if it stops, ``loop()`` is stuck.
 
 While connected one of these screens is shown. The first four columns are bars, the other screens use the
@@ -85,6 +86,17 @@ whole matrix:
      - A bar growing up or down from the middle in four steps (2, 10, 50, 200 m/s).
    * - SAS mode
      - One icon per autopilot mode, or a dotted line when SAS is off.
+   * - Flight data
+     - Apoapsis, periapsis, inclination, altitude and surface speed, one after another (see below).
+
+Flight data pages. In flight the automatic mode rotates every 3 s through the fuel bars and then the five data
+fields. Three 3x5 digits are all that fit in 12 columns, so each field takes two steps: first a label for 1.2 s
+(a letter A, P, I, H or V and an icon: up arrow, down arrow, slope, stacked arrows, right arrow), then the value
+for the rest of the slot. The value has up to three digits, or one decimal below 10 (``1.2``), a minus sign when
+negative (two digits then), and dots on the bottom row for the unit: one dot is metres (or m/s), two dots
+kilometres (or km/s), three dots thousands of kilometres. Inclination is in degrees and has no dots. With the
+screen button the data screen cycles the same way by itself. ``tools/matrix_preview.py`` draws every label and
+value page with sample numbers.
 
 A warning (very high G or very low fuel) inverts the picture at 2 Hz. The screen button on pin 3 cycles
 through the screens and back to automatic selection; wire it between pin 3 and GND.

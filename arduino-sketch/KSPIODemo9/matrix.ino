@@ -21,7 +21,13 @@
 #define SCREEN_AUTO SCR_COUNT   ///< manualScreen value meaning "pick the screen from the flight phase"
 
 /// Screens shown while connected
-enum Screen { SCR_FUEL, SCR_STAGE, SCR_HORIZON, SCR_VSI, SCR_SAS, SCR_COUNT };
+enum Screen { SCR_FUEL, SCR_STAGE, SCR_HORIZON, SCR_VSI, SCR_SAS, SCR_DATA, SCR_COUNT };
+
+/// Flight data fields shown by the data pages. A forced/auto screen code of 16 + field shows the label of a field and
+/// 32 + field shows its value.
+enum DataField { FLD_AP, FLD_PE, FLD_INC, FLD_ALT, FLD_SPD, FLD_COUNT };
+#define DATA_SLOT_MS 3000       ///< Each page of the flight rotation lasts this long
+#define DATA_LABEL_MS 1200      ///< The first part of a data page shows the label, the rest shows the value
 
 ArduinoLEDMatrix matrix;        ///< The matrix driver
 uint8_t fb[MX_H][MX_W];         ///< Frame buffer: fb[row][column], 1 = lit
@@ -35,14 +41,28 @@ unsigned long screenLockUntil = 0;   ///< Presses before this time are ignored (
 unsigned long mxLast = 0;            ///< Time of the previous redraw
 
 /// 3x5 glyphs, one byte per row, bit 2 = left column. Digits 0-9, then K, S, P.
-static const uint8_t GLYPH[13][5] = {
+static const uint8_t GLYPH[17][5] = {
   {7,5,5,5,7}, {2,6,2,2,7}, {7,1,7,4,7}, {7,1,7,1,7}, {5,5,7,1,1},
   {7,4,7,1,7}, {7,4,7,5,7}, {7,1,1,2,2}, {7,5,7,5,7}, {7,5,7,1,7},
-  {5,5,6,5,5}, {3,4,2,1,6}, {6,5,6,4,4}
+  {5,5,6,5,5}, {3,4,2,1,6}, {6,5,6,4,4}, {2,5,7,5,5}, {5,5,7,5,5}, {7,2,2,2,7}, {5,5,5,5,2}
 };
 #define GLYPH_K 10
 #define GLYPH_S 11
 #define GLYPH_P 12
+#define GLYPH_A 13
+#define GLYPH_H 14
+#define GLYPH_I 15
+#define GLYPH_V 16
+
+/// 5x5 icons for the data labels, one byte per row, bit 4 = left column: up arrow, down arrow, slope, up-down, right arrow.
+static const uint8_t DATAICON[FLD_COUNT][5] = {
+  {0x04,0x0E,0x15,0x04,0x04},   // apoapsis: up arrow
+  {0x04,0x04,0x15,0x0E,0x04},   // periapsis: down arrow
+  {0x01,0x02,0x04,0x08,0x1F},   // inclination: a slope
+  {0x04,0x0E,0x04,0x0E,0x04},   // altitude: stacked arrows
+  {0x04,0x02,0x1F,0x02,0x04}    // speed: right arrow
+};
+static const uint8_t DATALETTER[FLD_COUNT] = { GLYPH_A, GLYPH_P, GLYPH_I, GLYPH_H, GLYPH_V };
 
 /// 7x7 icons, one byte per row, bit 6 = left column. Index = autopilot mode (Stability, Prograde, Retrograde,
 /// Normal, Antinormal, RadialIn, RadialOut, Target, AntiTarget, Maneuver).
@@ -111,13 +131,20 @@ static void drawSplash(unsigned long ms) {
   for (int x = 0; x < fill && x < MX_W; x++) setPx(x, 7);
 }
 
-/// @brief Waiting for KSP: a dot with a short tail bouncing along the middle.
+/// @brief Waiting for KSP: the letters KSP on top and, below, a moon orbiting a small planet (an ellipse seen from the
+///        side, with a short trail).
 static void drawWaiting(unsigned long ms) {
-  int p = (int)((ms / 90) % 22);
-  int x = p < MX_W ? p : 21 - p;
-  setPx(x, 3);
-  setPx(x, 4);
-  setPx(p < MX_W ? x - 1 : x + 1, 3);
+  drawGlyph(GLYPH_K, 1, 0);
+  drawGlyph(GLYPH_S, 5, 0);
+  drawGlyph(GLYPH_P, 9, 0);
+  setPx(6, 6);                                         // the planet
+  const float period = 2400.0f;                        // one orbit, milliseconds
+  for (int tail = 0; tail < 3; tail++) {               // head of the moon, then two fainter trail points
+    float a = ((float)(ms % 2400UL) / period - tail * 0.045f) * 6.2832f;
+    int x = (int)floorf(6.0f + 5.0f * cosf(a) + 0.5f);
+    int y = (int)floorf(6.0f + 1.0f * sinf(a) + 0.5f);        // rows 5-7, never the text above
+    if (tail < 2 || ((ms / 120) & 1)) setPx(x, y);
+  }
 }
 
 /// @brief Link lost: a blinking X.
@@ -180,6 +207,70 @@ static void drawSas() {
   drawIcon(ICON[mode], 2, 0);
 }
 
+/// @brief Value of a data field in its display unit, and how many unit dots to draw (1 = m or m/s, 2 = km, 3 = Mm).
+static float dataValue(uint8_t field, uint8_t *dots) {
+  float v = 0;
+  *dots = 0;
+  switch (field) {
+    case FLD_AP:  v = VData.AP;    break;
+    case FLD_PE:  v = VData.PE;    break;
+    case FLD_INC: v = VData.inc;   break;      // degrees: no unit dots
+    case FLD_ALT: v = VData.Alt;   break;
+    case FLD_SPD: v = VData.Vsurf; break;
+  }
+  if (field == FLD_INC) return v;
+  float a = v < 0 ? -v : v;
+  if (a < 1000.0f)        { *dots = 1; return v; }
+  if (a < 1000000.0f)     { *dots = 2; return v / 1000.0f; }
+  *dots = 3;
+  return v / 1000000.0f;
+}
+
+/// @brief Label page of a data field: its letter and an icon.
+static void drawDataLabel(uint8_t field) {
+  drawGlyph(DATALETTER[field], 1, 1);
+  for (int r = 0; r < 5; r++)
+    for (int c = 0; c < 5; c++)
+      if (DATAICON[field][r] & (0x10 >> c)) setPx(6 + c, 1 + r);
+}
+
+/// @brief Value page of a data field: up to 3 digits (or one decimal below 10), a minus sign if negative, and the unit dots.
+static void drawDataValue(uint8_t field) {
+  uint8_t dots;
+  float v = dataValue(field, &dots);
+  bool neg = v < 0;
+  float a = neg ? -v : v;
+  if (a < 9.95f) {                                   // d.d : digit, point, digit
+    int t = (int)(a * 10.0f + 0.5f);
+    int x0 = neg ? 3 : 1;
+    if (neg) { setPx(0, 3); setPx(1, 3); }
+    drawGlyph(t / 10, x0, 1);
+    setPx(x0 + 4, 5);
+    drawGlyph(t % 10, x0 + 6, 1);
+  } else {
+    int n = (int)(a + 0.5f);
+    int maxDigits = neg ? 2 : 3;
+    int cap = neg ? 99 : 999;
+    if (n > cap) n = cap;
+    int digits = n >= 100 ? 3 : (n >= 10 ? 2 : 1);
+    if (digits > maxDigits) digits = maxDigits;
+    int width = digits * 4 - 1;
+    int x = neg ? 12 - width : (12 - width) / 2;     // negative values are right aligned after the minus sign
+    if (neg) { setPx(0, 3); setPx(1, 3); }
+    for (int d = digits - 1; d >= 0; d--) {
+      drawGlyph(n % 10, x + d * 4, 1);
+      n /= 10;
+    }
+  }
+  for (int i = 0; i < dots; i++) setPx(1 + i * 2, 7);   // one dot per unit step
+}
+
+/// @brief One page of the data rotation: its label for DATA_LABEL_MS, then its value.
+static void drawData(uint8_t field, bool label) {
+  if (field >= FLD_COUNT) return;
+  if (label) drawDataLabel(field); else drawDataValue(field);
+}
+
 /// @brief Reads the screen button (learned idle level, 200 ms lockout) and cycles manualScreen.
 static void screenButton(unsigned long ms) {
   int level = digitalRead(SCREENPIN);
@@ -194,11 +285,15 @@ static void screenButton(unsigned long ms) {
 
 /// @brief Chooses the screen for the connected state.
 static uint8_t chooseScreen(unsigned long ms) {
-  if (forcedScreen < SCR_COUNT && ms < forcedUntil) return forcedScreen;
+  if ((forcedScreen < SCR_COUNT || forcedScreen >= 16) && forcedScreen != 255 && ms < forcedUntil) return forcedScreen;
   if (manualScreen < SCR_COUNT) return manualScreen;
   if (ms < stageFlashUntil) return SCR_STAGE;                       // a staging just happened
   if (VData.RAlt < 50.0f && VData.Vsurf < 2.0f && VData.CurrentStage > 0) return SCR_STAGE;   // on the pad
-  return SCR_FUEL;
+  // In flight: the fuel bars for one slot, then each flight data field for one slot (label, then value)
+  unsigned long slot = (ms / DATA_SLOT_MS) % (FLD_COUNT + 1);
+  if (slot == 0) return SCR_FUEL;
+  uint8_t field = slot - 1;
+  return ((ms % DATA_SLOT_MS) < DATA_LABEL_MS) ? 16 + field : 32 + field;
 }
 
 /// @brief Configures the matrix and the screen button; call once from setup().
@@ -227,12 +322,21 @@ void matrixUpdate() {
     everConnected = true;
     if (lastStageSeen != 255 && VData.CurrentStage != lastStageSeen) stageFlashUntil = ms + 1500;
     lastStageSeen = VData.CurrentStage;
-    switch (chooseScreen(ms)) {
+    uint8_t screen = chooseScreen(ms);
+    switch (screen) {
       case SCR_FUEL:    drawFuel();    break;
       case SCR_STAGE:   drawStage();   break;
       case SCR_HORIZON: drawHorizon(); break;
       case SCR_VSI:     drawVsi();     break;
       case SCR_SAS:     drawSas();     break;
+      case SCR_DATA:                                                   // chosen with the button: rotate through the fields
+        drawData((ms / DATA_SLOT_MS) % FLD_COUNT, (ms % DATA_SLOT_MS) < DATA_LABEL_MS);
+        break;
+      default:
+        if (screen == 64) drawWaiting(ms);                              // preview of the waiting animation
+        else if (screen >= 32) drawData(screen - 32, false);
+        else if (screen >= 16) drawData(screen - 16, true);
+        break;
     }
     if (warning != 0 && ((ms / 250) & 1))                            // warning: invert the whole picture
       for (int y = 0; y < MX_H; y++) for (int x = 0; x < MX_W; x++) fb[y][x] ^= 1;
