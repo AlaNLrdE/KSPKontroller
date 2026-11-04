@@ -2,6 +2,7 @@
 # Build helper for KSPKontroller.
 #
 #   ./ci build_sketch        Compile the Arduino sketch (arduino-cli)
+#   ./ci build_sketch_debug  Compile the sketch with symbols and -Og into build/sketch-debug (for the SWD debugger)
 #   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild)
 #   ./ci build_all           Both of the above
 #   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO)
@@ -26,6 +27,7 @@
 #   KSPDIR  KSP install directory  (skips the question when several installs are found)
 #   PLANTUML_JAR  Path to plantuml.jar (default: build/tools/plantuml.jar, downloaded if missing)
 #   ARDUINO_PORT  Port for upload_sketch and test_arduino, same as passing PORT (optional)
+#   SKETCH_BUILD  Build dir upload_sketch flashes (default: build/sketch; build/sketch-debug for the debug build)
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
 #   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
 #   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
@@ -92,6 +94,15 @@ build_sketch() {
 
   log "Compiling sketch for $FQBN"
   "$cli" compile --fqbn "$FQBN" --build-path "$BUILD/sketch" "$SKETCH"
+}
+
+# Debug build: same sketch, symbols and -Og, in its own build dir so build/sketch (what upload_sketch flashes)
+# is untouched. Upload it with: SKETCH_BUILD=build/sketch-debug ./ci upload_sketch
+build_sketch_debug() {
+  local cli
+  cli="$(find_arduino_cli)"
+  log "Compiling sketch for $FQBN (debug, -Og) into $BUILD/sketch-debug"
+  "$cli" compile --fqbn "$FQBN" --optimize-for-debug --build-path "$BUILD/sketch-debug" "$SKETCH"
 }
 
 # ------------------------------------------------------------------- plugin
@@ -399,7 +410,7 @@ upload_sketch() {
   [ -n "$port" ] || port="$(find_board_port)"
   [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci upload_sketch COM5)"
   log "Uploading to $port"
-  "$cli" upload -p "$port" --fqbn "$FQBN" --input-dir "$BUILD/sketch"
+  "$cli" upload -p "$port" --fqbn "$FQBN" --input-dir "${SKETCH_BUILD:-$BUILD/sketch}"
   echo "$port" > "$BUILD/last_upload_port"
 }
 
@@ -462,6 +473,7 @@ usage() { sed -n "2,30p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
+  build_sketch_debug) build_sketch_debug ;;
   build_KSPSerialIO) build_KSPSerialIO ;;
   build_all)         build_KSPSerialIO; build_sketch ;;
   install)           install_plugin ;;
