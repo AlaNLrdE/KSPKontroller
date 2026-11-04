@@ -175,7 +175,7 @@ namespace KSPSerialIO
         public ushort resetCause;      ///< reset status at boot (bits 8-9 = watchdog reset)
         public byte flags;             ///< bit0 connected, bit2 stage pin level
         public short rxAvail;          ///< Bytes waiting in the board's receive buffer
-        public short txFree;           ///< Free bytes in the board's transmit buffer
+        public ushort txSkipped;        ///< Frames the board skipped because the host was not listening or its FIFO was full
         public ushort a0;              ///< Raw throttle analog reading
         // followed on the wire by 12 bytes: the LED matrix frame, one byte per column (not part of this struct)
     }
@@ -432,7 +432,6 @@ namespace KSPSerialIO
         private static volatile byte[] NewPacketBuffer = new byte[MaxPayloadSize];
         // Semaphore to indicate whether the serial worker should do work
         private static volatile bool doSerialRead = true;
-        private static Thread SerialThread;       ///< Background thread running SerialWorker
 
         private const byte HSPid = 0, VDid = 1, Cid = 101, DBGid = 102; //hard coded values for packet IDS
         private static uint lastBoardUptime = 0;  ///< Uptime of the previous DebugPacket, to detect a board reboot
@@ -462,7 +461,7 @@ namespace KSPSerialIO
                           " rx_bad_cs=" + d.rxBadChecksum + " rx_bad_size=" + d.rxBadSize + " tx=" + d.txPackets +
                           " loop_max_us=" + d.loopMaxUs + " tx_max_us=" + d.txMaxUs + " since_rx_ms=" + d.sinceRxMs +
                           " reset=0x" + d.resetCause.ToString("X4") + " flags=0x" + d.flags.ToString("X2") +
-                          " rx_avail=" + d.rxAvail + " tx_free=" + d.txFree + " a0=" + d.a0 +
+                          " rx_avail=" + d.rxAvail + " tx_skipped=" + d.txSkipped + " a0=" + d.a0 +
                           " matrix=" + BitConverter.ToString(PayloadBuffer, Marshal.SizeOf(typeof(DebugPacket)), 12).Replace("-", ""));
             }
             catch (Exception e)
@@ -552,22 +551,26 @@ namespace KSPSerialIO
         private static int WriteCount;                 // guarded by sendLock
         private static double WriteMsSum, WriteMsMax;  // guarded by sendLock
 
-        /// True once sending failed repeatedly; telemetry stops until the next flight scene.
+        /// True once sending failed repeatedly (the link supervisor then closes the port and searches again).
         public static volatile Boolean LinkFailed = false;
         private static int SendFailures = 0;
         private const int MaxSendFailures = 3;
+        private static int senderGen;                                  // identifies the current writer thread, guarded by senderCtl
+        private static readonly object senderCtl = new object();
 
         /**
          * @brief Queues a packet for the background writer and returns immediately; never throws.
          *
          * The frame is built on the calling thread (cheap) and replaces any frame still waiting to be
          * written. The writer closes the port after MaxSendFailures consecutive failed writes and sets
-         * LinkFailed, so a dead port costs one log line per failure instead of blocking the game.
+         * LinkFailed, so a dead port costs one log line per failure instead of blocking the game; the
+         * link supervisor then reconnects.
          */
         public static void TrySendPacket(object anything)
         {
             try
             {
+                if (!LinkUp) return;   // link down: nothing to send to
                 byte[] frame = BuildFrame(anything);
                 lock (sendLock) { pendingFrame = frame; }
                 EnsureSender();
@@ -579,31 +582,39 @@ namespace KSPSerialIO
             }
         }
 
-        /// @brief Starts the writer thread if it is not running.
+        /// @brief Starts the writer thread if it is not running (only while the link is up).
         private static void EnsureSender()
         {
-            if (SenderThread != null && SenderThread.IsAlive && senderRun) return;
-            senderRun = true;
-            SenderThread = new Thread(SenderWorker);
-            SenderThread.IsBackground = true;
-            SenderThread.Start();
+            lock (senderCtl)
+            {
+                if (!LinkUp) return;
+                if (SenderThread != null && SenderThread.IsAlive && senderRun) return;
+                senderRun = true;
+                senderGen++;
+                SenderThread = new Thread(SenderWorker);
+                SenderThread.IsBackground = true;
+                SenderThread.Start(senderGen);
+            }
         }
 
-        /// @brief Writer thread body: writes the newest queued frame, one at a time, until senderRun is cleared.
-        private static void SenderWorker()
+        /// @brief Writer thread body: writes the newest queued frame, one at a time, until it is stopped (senderRun cleared or a newer writer started).
+        private static void SenderWorker(object genObj)
         {
-            while (senderRun)
+            int gen = (int)genObj;
+            while (senderRun && gen == senderGen)
             {
                 sendEvent.WaitOne(500);
+                if (!senderRun || gen != senderGen) break;
 
                 byte[] frame;
                 lock (sendLock) { frame = pendingFrame; pendingFrame = null; }
-                if (frame == null || LinkFailed || Port == null || !Port.IsOpen) continue;
+                SerialPort p = Port;
+                if (frame == null || LinkFailed || !LinkUp || p == null || !PortIsOpen()) continue;
 
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
-                    Port.Write(frame, 0, frame.Length);
+                    p.Write(frame, 0, frame.Length);
                     SendFailures = 0;
                 }
                 catch (Exception e)
@@ -615,7 +626,7 @@ namespace KSPSerialIO
                         LinkFailed = true;
                         Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
                         PortLog("closing port after repeated send failures");
-                        try { Port.Close(); } catch (Exception) { }
+                        try { p.Close(); } catch (Exception) { }
                     }
                 }
                 double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -631,9 +642,15 @@ namespace KSPSerialIO
         /// @brief Stops the writer thread (waits briefly for a write in progress; writes are bounded by the write timeout).
         private static void StopSender()
         {
-            senderRun = false;
+            Thread t;
+            lock (senderCtl)
+            {
+                senderRun = false;
+                senderGen++;
+                t = SenderThread;
+            }
             sendEvent.Set();
-            try { if (SenderThread != null) SenderThread.Join(1000); } catch (Exception) { }
+            try { if (t != null && t != Thread.CurrentThread) t.Join(1000); } catch (Exception) { }
         }
 
         /// @brief Returns and resets the statistics of the background writes (used by the perf log).
@@ -648,6 +665,41 @@ namespace KSPSerialIO
             }
         }
 
+        /// @brief State of one reader thread: the port it reads and a flag to make it exit.
+        private class ReaderState
+        {
+            public SerialPort port;
+            public volatile bool stop;
+            public Thread thread;
+        }
+        private static volatile ReaderState currentReader;  ///< Reader of the port in use
+
+        /// @brief Starts a background reader thread for @p p (the port may still be closed: the reader then waits).
+        private static ReaderState StartReader(SerialPort p)
+        {
+            ReaderState st = new ReaderState();
+            st.port = p;
+            doSerialRead = true;
+            st.thread = new Thread(SerialWorker);
+            st.thread.IsBackground = true;
+            st.thread.Start(st);
+            currentReader = st;
+            return st;
+        }
+
+        /// @brief Makes a reader exit: raises its stop flag, closes its port (which aborts the pending read) and optionally waits for it.
+        private static void StopReader(ReaderState st, int joinMs)
+        {
+            if (st == null) return;
+            st.stop = true;
+            try { if (st.port != null) st.port.Close(); } catch (Exception) { }
+            try
+            {
+                if (joinMs > 0 && st.thread != null && st.thread != Thread.CurrentThread) st.thread.Join(joinMs);
+            }
+            catch (Exception) { }
+        }
+
         /// @brief Creates the SerialPort object and starts the background reader thread.
         private void Begin()
         {
@@ -656,9 +708,7 @@ namespace KSPSerialIO
             Port.WriteTimeout = 250;
             // Native-USB boards such as the Arduino UNO R4 only transmit while the host asserts DTR
             Port.DtrEnable = true;
-            SerialThread = new Thread(SerialWorker);
-            SerialThread.Start();
-            while (!SerialThread.IsAlive);
+            StartReader(Port);
         }
 
         /// @brief Unity per-frame callback: processes a packet completed by the worker thread, if any.
@@ -671,24 +721,26 @@ namespace KSPSerialIO
         }
 
         /**
-         * @brief Background thread body: keeps reading from the port until doSerialRead is cleared.
+         * @brief Background thread body: keeps reading from its port until its ReaderState is stopped.
          *
          * Reads are issued one at a time (EndRead blocks), so ReceivedDataEvent and the parser
-         * state are only ever touched by this thread. If the port is closed the thread sleeps and retries.
+         * state are only ever touched by one reader thread at a time. If the port is not open the thread sleeps and retries.
          */
-        private void SerialWorker()
+        private static void SerialWorker(object stateObj)
         {
+            ReaderState st = (ReaderState)stateObj;
+            SerialPort p = st.port;
             byte[] buffer = new byte[MaxPayloadSize + 4];
-            Action SerialRead = null;
             Debug.Log("KSPSerialIO: Serial Worker thread started");
-            SerialRead = delegate {
+            while (doSerialRead && !st.stop)
+            {
                 try
                 {
                     // One read at a time: EndRead blocks until this read completes, so
                     // the shared buffer and the parser state are only touched by this thread.
-                    IAsyncResult ar = Port.BaseStream.BeginRead(buffer, 0, buffer.Length, null, null);
-                    int actualLength = Port.BaseStream.EndRead(ar);
-                    if (actualLength > 0)
+                    IAsyncResult ar = p.BaseStream.BeginRead(buffer, 0, buffer.Length, null, null);
+                    int actualLength = p.BaseStream.EndRead(ar);
+                    if (actualLength > 0 && !st.stop)
                     {
                         Interlocked.Add(ref RxBytes, actualLength);
                         Interlocked.Exchange(ref LastRxTicks, System.Diagnostics.Stopwatch.GetTimestamp());
@@ -699,23 +751,19 @@ namespace KSPSerialIO
                 }
                 catch (InvalidOperationException)
                 {
+                    if (st.stop) break;
                     Debug.Log("KSPSerialIO: Trying to read port that isn't open. Sleeping");
-                    Thread.Sleep(500);
+                    for (int i = 0; i < 5 && !st.stop; i++) Thread.Sleep(100);
                 }
                 catch (Exception exc)
                 {
                     // Never let the parser die silently: reset it and keep reading
                     // Closing the port aborts the read that is pending: expected, no stack trace needed
                     Debug.Log("KSPSerialIO: SerialWorker read ended: " + exc.GetType().Name + ": " + exc.Message);
+                    if (st.stop) break;
                     CurrentState = ReceiveStates.FIRSTHEADER;
                     Thread.Sleep(100);
                 }
-            };
-
-            doSerialRead = true;
-            while (doSerialRead)
-            {
-                SerialRead();
             }
             Debug.Log("KSPSerialIO: Serial worker thread shutting down.");
         }
@@ -729,7 +777,7 @@ namespace KSPSerialIO
          * @param ReadBuffer Bytes just read from the port.
          * @param BufferLength Number of valid bytes in @p ReadBuffer.
          */
-        private void ReceivedDataEvent(byte[] ReadBuffer, int BufferLength)
+        private static void ReceivedDataEvent(byte[] ReadBuffer, int BufferLength)
         {
             for (int x=0; x<BufferLength; x++)
             {
@@ -863,23 +911,26 @@ namespace KSPSerialIO
         }
 
         /**
-         * @brief Unity Awake: locates the controller.
+         * @brief Unity Awake: locates the controller and starts the link supervisor.
          *
-         * Normally runs a handshake on the default port and then on every serial port found in the
-         * registry, keeping the first one that answers. The port is closed again afterwards because
-         * KSPSerialIO::Start reopens it. If the controller was already found in an earlier flight,
-         * only the port object and reader thread are recreated.
+         * Runs a handshake on the candidate ports (see BuildCandidates) and keeps the first one that
+         * answers open. If the controller was already found in an earlier flight, only the port object and
+         * reader thread are recreated (KSPSerialIO::Start opens the port). Whatever happens, the link
+         * supervisor is started: it reconnects in the background if nothing was found or the link is lost later.
          */
         void Awake()
         {
+            StopSupervisor();   // in case the previous scene did not clean up
             // Static state survives scene changes: give every flight a clean link
             LinkFailed = false;
             SendFailures = 0;
+            LinkUp = false;
 
             if (DisplayFound)
             {
                 Debug.Log("KSPSerialIO: running...");
                 Begin();
+                MarkLinkUp(StartGraceMs);   // the port is opened by KSPSerialIO.Start, which takes a few seconds
             }
             else
             {
@@ -894,124 +945,19 @@ namespace KSPSerialIO
 
                 try
                 {
-                    //Use registry hack to get a list of serial ports until we get system.io.ports
-                    RegistryKey SerialCOMSKey = Registry.LocalMachine.OpenSubKey(@"HARDWARE\\DEVICEMAP\\SERIALCOMM\\");
-
-                    Begin();
-
-                    //print("KSPSerialIO: receive threshold " + Port.ReceivedBytesThreshold.ToString());
-
-                    String[] PortNames;
-                    if (SerialCOMSKey == null)
-                    {
-                        Debug.Log("KSPSerialIO: Dude do you even win32 serial port??");
-                        PortNames = new String[1];
-                        PortNames[0] = SettingsNStuff.DefaultPort;
-                    }
+                    List<string> candidates = BuildCandidates();
+                    Debug.Log(String.Format("KSPSerialIO: Found {0} serial ports: {1}", candidates.Count, String.Join(",", candidates.ToArray())));
+                    if (TryConnect(candidates, SettingsNStuff.HandshakeDelay, ReplyWaitMs, -1))
+                        Debug.Log("KSPSerialIO-hp: found KSP Display at " + PortNumber);
                     else
-                    {
-                        String[] realports = SerialCOMSKey.GetValueNames();  // get list of all serial devices
-                        PortNames = new String[realports.Length + 1];   // make a new list with 1 extra, we put the default port first
-                        realports.CopyTo(PortNames, 1);
-                    }
-
-                    Debug.Log(String.Format("KSPSerialIO: Found {0} serial ports",
-                                            PortNames.Length));
-
-                    //look through all found ports for our display
-                    for (int j=0; j < PortNames.Length; j++)
-                    {
-                        if (j == 0)  // try default port first
-                        {
-                            PortNumber = SettingsNStuff.DefaultPort;
-                            Debug.Log("KSPSerialIO: trying default port " + PortNumber);
-                        }
-                        else
-                        {
-                            PortNumber = (string)SerialCOMSKey.GetValue(PortNames[j]);
-                            // Bluetooth modems open fine but never answer, and the default port was already tried
-                            if (PortNames[j].IndexOf("Bth", StringComparison.OrdinalIgnoreCase) >= 0
-                                || PortNumber == SettingsNStuff.DefaultPort)
-                            {
-                                Debug.Log("KSPSerialIO: skipping port " + PortNames[j] + " - " + PortNumber);
-                                continue;
-                            }
-                            Debug.Log("KSPSerialIO: trying port " + PortNames[j] + " - " + PortNumber);
-                        }
-                        Port.PortName = PortNumber;
-
-                        if (!Port.IsOpen)
-                        {
-                            try
-                            {
-                                PortLog("opening port for discovery");
-                                Port.Open();
-                                PortLog("opened for discovery");
-                            }
-                            catch (Exception e)
-                            {
-                                Debug.Log("Error opening serial port " + Port.PortName + ": " + e.Message);
-                            }
-
-                            //secret handshake
-                            if (Port.IsOpen && (SettingsNStuff.HandshakeDisable == 0))
-                            {
-                                // A port that fails here must not abort the scan or stay open
-                                try
-                                {
-                                    Thread.Sleep(SettingsNStuff.HandshakeDelay);
-                                    //Port.DiscardOutBuffer();
-                                    //Port.DiscardInBuffer();
-
-                                    sendPacket(HPacket);
-
-                                    //wait for reply
-                                    int k = 0;
-                                    while (k < 15 && !DisplayFound)
-                                    {
-                                        Thread.Sleep(100);
-                                        k++;
-                                    }
-                                }
-                                catch (Exception e)
-                                {
-                                    Debug.Log("KSPSerialIO: handshake failed on " + Port.PortName + ": " + e.Message);
-                                }
-                                finally
-                                {
-                                    PortLog("closing port after discovery handshake");
-                                    try { Port.Close(); } catch (Exception) { }
-                                    PortLog("closed after discovery handshake");
-                                }
-
-                                if (DisplayFound)
-                                {
-                                    Debug.Log("KSPSerialIO-hp: found KSP Display at " + Port.PortName);
-                                    break;
-                                }
-                                else
-                                {
-                                    Debug.Log("KSPSerialIO-hp: KSP Display not found");
-                                }
-                            }
-                            else if (Port.IsOpen && (SettingsNStuff.HandshakeDisable == 1))
-                            {
-                                DisplayFound = true;                                    
-                                Debug.Log("KSPSerialIO: Handshake disabled, using " + Port.PortName);
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            Debug.Log("KSPSerialIO: " + PortNumber + "is already being used.");
-                        }
-                    }
+                        Debug.Log("KSPSerialIO-hp: KSP Display not found, the link supervisor keeps searching");
                 }
                 catch (Exception e)
                 {
                     print(e.Message);
                 }
             }
+            StartSupervisor();
         }
 
         /// @brief Logs the handshake reply received from the controller.
@@ -1097,12 +1043,334 @@ namespace KSPSerialIO
                 VData.ActionGroups &= (UInt16)~(1 << n);      // forces nth bit of x to be 0.  all other bits left alone.
         }
 
+        // ---- Link supervisor --------------------------------------------------------------------
+        // A background thread that watches the link and reconnects when it is lost: the writer gave up,
+        // the board has been silent for LinkTimeoutMs, or the port closed. It also runs the search when the
+        // first discovery in Awake found nothing. It never runs on, or is waited for by, the main thread
+        // (which only sees the LinkUp flag); the port, reader and writer are only replaced while the link is down.
+        public const int LinkTimeoutMs = 3000;     ///< Silence from the board that counts as a dead link
+        public const int RetryIntervalMs = 2000;   ///< Pause between two search attempts
+        private const int SettleMs = 300;          ///< Wait after opening a candidate before the handshake
+        private const int ReplyWaitMs = 1500;      ///< How long a candidate has to answer the handshake
+        private const int StartGraceMs = 10000;    ///< After a scene start the port is opened by Start() (slow): no loss detection meanwhile
+
+        /// True while the link is believed good; the main thread sends and applies controls only then.
+        public static volatile bool LinkUp = false;
+        public static int ReconnectCount = 0;      ///< Successful (re)connections by the supervisor since the game started
+        private static long linkUpTicks;           ///< Stopwatch timestamp of the last link-up, reference for the silence timer (Interlocked)
+        private static long quietUntilTicks;       ///< No loss detection before this timestamp (Interlocked)
+        private static Thread SupervisorThread;
+        private static readonly ManualResetEvent supStop = new ManualResetEvent(false);
+        private static int supGen;                 ///< Identifies the current supervisor; any other value means "stop". Guarded by supLock
+        private static readonly object supLock = new object();
+
+        /// @brief "up" or "searching", for the perf line.
+        public static string LinkState { get { return LinkUp ? "up" : "searching"; } }
+
+        /// @brief True if the current port exists and is open; never throws.
+        private static bool PortIsOpen()
+        {
+            try { SerialPort p = Port; return p != null && p.IsOpen; }
+            catch (Exception) { return false; }
+        }
+
+        /// @brief True when the main thread may talk to the board: link up, handshake done, no write failure, port open.
+        public static bool LinkReady
+        {
+            get { return LinkUp && DisplayFound && !LinkFailed && PortIsOpen(); }
+        }
+
+        private static long NowTicks() { return System.Diagnostics.Stopwatch.GetTimestamp(); }
+        private static double TicksToMs(long ticks) { return ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency; }
+
+        /// @brief Resets the per-connection state and declares the link up; @p graceMs delays loss detection.
+        private static void MarkLinkUp(int graceMs)
+        {
+            long now = NowTicks();
+            Interlocked.Exchange(ref linkUpTicks, now);
+            Interlocked.Exchange(ref quietUntilTicks, now + (long)graceMs * System.Diagnostics.Stopwatch.Frequency / 1000);
+            LinkFailed = false;
+            SendFailures = 0;
+            lastBoardUptime = 0;         // a new board uptime is not a reboot
+            StageSeeded = false;         // the first ControlPacket only seeds the stage button, a held button must not stage
+            ControlReceived = false;
+            lock (sendLock) { pendingFrame = null; }
+            LinkUp = true;
+        }
+
+        /// @brief True when the supervisor @p gen must stop (always false for gen < 0, the blocking call from Awake).
+        private static bool Cancelled(int gen)
+        {
+            return gen >= 0 && gen != supGen;
+        }
+
+        /// @brief Sleeps @p ms, ending early if the supervisor is stopped.
+        private static void Pause(int ms, int gen)
+        {
+            if (gen >= 0) supStop.WaitOne(ms, false);
+            else Thread.Sleep(ms);
+        }
+
         /**
-         * @brief Writes one easily searchable port lifecycle line: grep the KSP log for "KSPSerialIO[PORT]".
+         * @brief Lists the ports to probe: the last known port, the configured default port, then the others.
          *
-         * Every open, close and shutdown step goes through here, so a hang or a board that stops answering
-         * can be matched against the exact moment (and thread) of the last port operation.
+         * Ports come from the registry (the value name tells a Bluetooth modem apart, those open fine but never
+         * answer, so they are skipped) or from SerialPort.GetPortNames() if the registry is unavailable. A name
+         * that does not exist (the DefaultPort placeholder, or a port that vanished) is not listed.
          */
+        private static List<string> BuildCandidates()
+        {
+            List<string> present = new List<string>();
+            bool listed = false;
+            try
+            {
+                //Use registry hack to get a list of serial ports until we get system.io.ports
+                RegistryKey SerialCOMSKey = Registry.LocalMachine.OpenSubKey(@"HARDWARE\\DEVICEMAP\\SERIALCOMM\\");
+                if (SerialCOMSKey != null)
+                {
+                    listed = true;
+                    foreach (string valueName in SerialCOMSKey.GetValueNames())
+                    {
+                        string portName = SerialCOMSKey.GetValue(valueName) as string;
+                        if (portName == null || valueName.IndexOf("Bth", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                        if (!present.Contains(portName)) present.Add(portName);
+                    }
+                    SerialCOMSKey.Close();
+                }
+            }
+            catch (Exception e) { Debug.Log("KSPSerialIO[LINK] could not read the port list from the registry: " + e.Message); }
+
+            if (!listed)
+            {
+                try
+                {
+                    foreach (string n in SerialPort.GetPortNames())
+                        if (n.IndexOf("Bth", StringComparison.OrdinalIgnoreCase) < 0 && !present.Contains(n)) present.Add(n);
+                    listed = true;
+                }
+                catch (Exception e) { Debug.Log("KSPSerialIO[LINK] could not list the serial ports: " + e.Message); }
+            }
+
+            List<string> ordered = new List<string>();
+            string last = PortNumber;
+            string def = SettingsNStuff.DefaultPort;
+            if (!String.IsNullOrEmpty(last) && present.Contains(last)) ordered.Add(last);
+            if (!String.IsNullOrEmpty(def) && !ordered.Contains(def) && (present.Contains(def) || !listed)) ordered.Add(def);
+            foreach (string n in present) if (!ordered.Contains(n)) ordered.Add(n);
+            return ordered;
+        }
+
+        /// @brief Builds a fresh handshake packet (1, 2, 3); the static HPacket is overwritten by the board's reply.
+        private static HandShakePacket NewHandshake()
+        {
+            HandShakePacket h = new HandShakePacket();
+            h.id = HSPid;
+            h.M1 = 1;
+            h.M2 = 2;
+            h.M3 = 3;
+            return h;
+        }
+
+        /**
+         * @brief Probes the candidate ports in order and keeps the first one that answers the handshake.
+         *
+         * Shared by the discovery in Awake (gen = -1, blocking, settle = HandshakeDelay) and the link supervisor
+         * (gen >= 0, cancellable, short settle). Per candidate: new SerialPort, Open, reader thread, settle,
+         * handshake (1,2,3), wait for the reply (3,1,4, recognised by InboundPacketHandler which sets DisplayFound).
+         * A candidate that fails is closed and its reader stopped before the next one. On success the port stays
+         * open and becomes Port, the link state is reset (SendFailures, board uptime, stage seeding, silence timer),
+         * LinkUp is raised and the writer is started. Must only run while no reader or writer of an earlier
+         * link is active (the caller closes it first).
+         * @return True if a board answered.
+         */
+        private static bool TryConnect(List<string> candidates, int settleMs, int replyWaitMs, int gen)
+        {
+            foreach (string name in candidates)
+            {
+                if (Cancelled(gen)) return false;
+                SerialPort p = null;
+                ReaderState st = null;
+                bool ok = false;
+                PortNumber = name;
+                try
+                {
+                    p = new SerialPort(name, SettingsNStuff.BaudRate, Parity.None, 8, StopBits.One);
+                    p.WriteTimeout = 250;       // bound how long a stuck port can block a write
+                    p.DtrEnable = true;         // native-USB boards only transmit while DTR is asserted
+                    DisplayFound = false;
+                    p.Open();
+                    Debug.Log("KSPSerialIO[LINK] candidate " + name + ": opened");
+
+                    CurrentState = ReceiveStates.FIRSTHEADER;
+                    NewPacketFlag = false;
+                    st = StartReader(p);
+                    Pause(settleMs, gen);
+
+                    if (SettingsNStuff.HandshakeDisable == 1)
+                    {
+                        ok = !Cancelled(gen);
+                        Debug.Log("KSPSerialIO[LINK] candidate " + name + ": handshake disabled, trusting the port");
+                    }
+                    else
+                    {
+                        byte[] frame = BuildFrame(NewHandshake());
+                        p.Write(frame, 0, frame.Length);
+                        int waited = 0;
+                        while (!DisplayFound && waited < replyWaitMs && !Cancelled(gen))
+                        {
+                            Pause(20, gen);
+                            waited += 20;
+                        }
+                        ok = DisplayFound && !Cancelled(gen);
+                        Debug.Log("KSPSerialIO[LINK] candidate " + name + ": " + (ok ? "handshake ok" : "no handshake reply"));
+                    }
+                }
+                catch (Exception e)
+                {
+                    if (st == null) Debug.Log("KSPSerialIO[LINK] candidate " + name + ": open failed: " + e.Message);
+                    else Debug.Log("KSPSerialIO[LINK] candidate " + name + ": handshake failed: " + e.Message);
+                    ok = false;
+                }
+
+                if (ok)
+                {
+                    lock (supLock)
+                    {
+                        if (gen < 0 || gen == supGen)
+                        {
+                            Port = p;
+                            PortNumber = name;
+                            DisplayFound = true;
+                            MarkLinkUp(0);
+                        }
+                        else ok = false;   // the scene is gone: do not publish a port nobody will close
+                    }
+                }
+                if (ok)
+                {
+                    EnsureSender();
+                    return true;
+                }
+
+                // Failed candidate: stop its reader and release the port before the next one
+                DisplayFound = false;
+                if (st != null) { if (currentReader == st) currentReader = null; StopReader(st, 1500); }
+                else if (p != null) { try { p.Close(); } catch (Exception) { } }
+                if (p != null) { try { p.Dispose(); } catch (Exception) { } }
+            }
+            return false;
+        }
+
+        /// @brief Stops the writer and the reader and closes and disposes the current port. Idempotent; used before every search attempt.
+        private static void CloseCurrentLink()
+        {
+            StopSender();
+            ReaderState st = currentReader;
+            currentReader = null;
+            StopReader(st, 1500);
+            SerialPort p = Port;
+            if (p != null)
+            {
+                try { if (p.IsOpen) p.Close(); } catch (Exception) { }
+                try { p.Dispose(); } catch (Exception) { }
+            }
+        }
+
+        /// @brief Returns why the link must be considered lost, or null while it looks good.
+        private static string CheckLink()
+        {
+            if (LinkFailed) return "send failures (the writer closed the port)";
+            long now = NowTicks();
+            if (now < Interlocked.Read(ref quietUntilTicks)) return null;
+            if (!PortIsOpen()) return "port closed";
+            long refTicks = Math.Max(Interlocked.Read(ref LastRxTicks), Interlocked.Read(ref linkUpTicks));
+            double silentMs = TicksToMs(now - refTicks);
+            if (silentMs > LinkTimeoutMs) return "no data from the board for " + ((int)silentMs) + " ms";
+            return null;
+        }
+
+        /// @brief Supervisor thread body: watches the link and runs the recovery loop until its generation is superseded.
+        private static void SupervisorWorker(object genObj)
+        {
+            int gen = (int)genObj;
+            Debug.Log("KSPSerialIO[LINK] supervisor started, state=" + LinkState + " port=" + PortNumber);
+            long downSince = 0;
+            int attempts = 0;
+            while (!Cancelled(gen))
+            {
+                try
+                {
+                    if (LinkUp)
+                    {
+                        string reason = CheckLink();
+                        if (reason == null) { supStop.WaitOne(200, false); continue; }
+                        Debug.Log("KSPSerialIO[LINK] lost: " + reason + " | port=" + PortNumber);
+                        LinkUp = false;          // the main thread stops sending and applying controls from here on
+                        DisplayFound = false;
+                        downSince = NowTicks();
+                        attempts = 0;
+                    }
+                    else if (downSince == 0)
+                    {
+                        downSince = NowTicks();  // started without a link: the first discovery found nothing
+                        attempts = 0;
+                    }
+
+                    CloseCurrentLink();
+                    if (Cancelled(gen)) break;
+                    attempts++;
+                    List<string> candidates = BuildCandidates();
+                    Debug.Log("KSPSerialIO[LINK] searching attempt " + attempts + ": " +
+                              (candidates.Count > 0 ? String.Join(",", candidates.ToArray()) : "(no serial ports)"));
+                    if (TryConnect(candidates, SettleMs, ReplyWaitMs, gen))
+                    {
+                        ReconnectCount++;
+                        Debug.Log("KSPSerialIO[LINK] reconnected on " + PortNumber + " after " + attempts + " attempts, " +
+                                  ((int)TicksToMs(NowTicks() - downSince)) + " ms down");
+                        downSince = 0;
+                        continue;
+                    }
+                    if (Cancelled(gen)) break;
+                    supStop.WaitOne(RetryIntervalMs, false);
+                }
+                catch (Exception e)
+                {
+                    Debug.Log("KSPSerialIO[LINK] supervisor error: " + e.GetType().Name + ": " + e.Message);
+                    supStop.WaitOne(RetryIntervalMs, false);
+                }
+            }
+            Debug.Log("KSPSerialIO[LINK] supervisor stopped");
+        }
+
+        /// @brief Starts the link supervisor thread (replacing any earlier one).
+        private static void StartSupervisor()
+        {
+            StopSupervisor();
+            lock (supLock)
+            {
+                supStop.Reset();
+                supGen++;
+                SupervisorThread = new Thread(SupervisorWorker);
+                SupervisorThread.IsBackground = true;
+                SupervisorThread.Start(supGen);
+            }
+        }
+
+        /// @brief Tells the supervisor to stop. Does not wait for it: it notices within milliseconds, and it cannot publish a port after this.
+        private static void StopSupervisor()
+        {
+            lock (supLock)
+            {
+                supGen++;
+                supStop.Set();
+                SupervisorThread = null;
+            }
+        }
+
+        /// @brief Writes one easily searchable port lifecycle line: grep the KSP log for "KSPSerialIO[PORT]".
+        ///
+        /// Every open, close and shutdown step goes through here, so a hang or a board that stops answering
+        /// can be matched against the exact moment (and thread) of the last port operation.
         public static void PortLog(string what)
         {
             bool open = false;
@@ -1112,23 +1380,32 @@ namespace KSPSerialIO
                       DateTime.Now.ToString("HH:mm:ss.fff"));
         }
 
-        /// @brief Stops the reader thread and closes and disposes the port.
-        public static void PortCleanup()
+        /// @brief Stops the supervisor, the writer and the reader thread and closes and disposes the port. Safe if no port exists.
+        /// @return True if a port was open.
+        public static bool PortCleanup()
         {
-            PortLog("cleanup begin: stopping writer");
+            PortLog("cleanup begin: stopping link supervisor and writer");
+            StopSupervisor();
+            LinkUp = false;
             StopSender();
             PortLog("cleanup: writer stopped");
-            if (KSPSerialPort.Port.IsOpen)
+            doSerialRead = false;
+            ReaderState st = currentReader;
+            currentReader = null;
+            if (st != null) st.stop = true;
+            SerialPort p = Port;
+            bool wasOpen = PortIsOpen();
+            if (p != null && wasOpen)
             {
-                doSerialRead = false;
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 PortLog("closing port (Close() about to be called; no 'closed' line after this means Close() hung)");
-                KSPSerialPort.Port.Close();
-                KSPSerialPort.Port.Dispose();
+                try { p.Close(); } catch (Exception e) { Debug.Log("KSPSerialIO: port close failed: " + e.Message); }
+                try { p.Dispose(); } catch (Exception) { }
                 PortLog("closed in " + ((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency).ToString("F1") + " ms");
                 Debug.Log("KSPSerialIO: Port closed");
             }
             else PortLog("cleanup: port was already closed");
+            return wasOpen;
         }
     }
 
@@ -1277,7 +1554,7 @@ namespace KSPSerialIO
                 "KSPSerialIO: perf window_s={0:F1} parts={1} frames={2} frame_ms={3:F2} fps={4:F1} " +
                 "upd_avg_ms={5:F3} upd_max_ms={6:F2} upd_share_pct={7:F3} " +
                 "samples={8} sample_avg_ms={9:F3} sample_max_ms={10:F2} send_avg_ms={11:F3} send_max_ms={12:F2} " +
-                "writes={20} write_avg_ms={21:F2} write_max_ms={22:F2} rx_bytes={23} rx_age_ms={24:F0} " +
+                "writes={20} write_avg_ms={21:F2} write_max_ms={22:F2} rx_bytes={23} rx_age_ms={24:F0} link_state={25} reconnects={26} " +
                 "ws_mb={13:F0} private_mb={14:F0} gc_heap_mb={15:F0} gc0={16} gc1={17} gc2={18} proc_cpu_pct={19:F0}",
                 window, parts, perfFrames, frameMs, 1000.0 / frameMs,
                 perfUpdateSum / perfFrames, perfUpdateMax, perfUpdateSum / (window * 1000.0) * 100.0,
@@ -1285,7 +1562,7 @@ namespace KSPSerialIO
                 perfSamples > 0 ? perfSendSum / perfSamples : 0, perfSendMax,
                 ws, priv, GC.GetTotalMemory(false) / 1048576.0,
                 GC.CollectionCount(0) - perfGc0, GC.CollectionCount(1) - perfGc1, GC.CollectionCount(2) - perfGc2, cpuPct,
-                writes, writeAvg, writeMax, rxBytes, rxAge));
+                writes, writeAvg, writeMax, rxBytes, rxAge, KSPSerialPort.LinkState, KSPSerialPort.ReconnectCount));
 
             perfFrames = perfSamples = 0;
             perfUpdateSum = perfUpdateMax = perfSampleSum = perfSampleMax = perfSendSum = perfSendMax = 0;
@@ -1314,7 +1591,7 @@ namespace KSPSerialIO
          */
         void Start()
         {
-            if (KSPSerialPort.DisplayFound)
+            if (KSPSerialPort.DisplayFound && KSPSerialPort.Port != null)
             {
                 if (!KSPSerialPort.Port.IsOpen)
                 {
@@ -1385,8 +1662,8 @@ namespace KSPSerialIO
             long perfStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 
             // Without a controller (or after the link failed) there is nothing to send, even if a port was left open
-            if (FlightGlobals.ActiveVessel != null && KSPSerialPort.DisplayFound && !KSPSerialPort.LinkFailed
-                && KSPSerialPort.Port.IsOpen)
+            // (LinkReady is false while the link supervisor is reconnecting: nothing is sent or applied until it is back)
+            if (FlightGlobals.ActiveVessel != null && KSPSerialPort.LinkReady)
             {
                 //Debug.Log("KSPSerialIO: 1");
                 //If the current active vessel is not what we were using, we need to remove controls from the old 
@@ -1935,6 +2212,7 @@ namespace KSPSerialIO
 
         private void AxisInput(FlightCtrlState s)
         {
+            if (!KSPSerialPort.LinkReady) return;   // link down: leave the stock controls alone
             switch (SettingsNStuff.ThrottleEnable)
             {
                 case 1:
@@ -2366,9 +2644,9 @@ namespace KSPSerialIO
         void OnDestroy()
         {
             KSPSerialPort.PortLog("OnDestroy (flight scene unloading)");
-            if (KSPSerialPort.Port.IsOpen)
+            // Always clean up: this also stops the link supervisor, which may be searching with no port open
+            if (KSPSerialPort.PortCleanup())
             {
-                KSPSerialPort.PortCleanup();
                 ScreenMessages.PostScreenMessage("Port closed", 10f, KSPIOScreenStyle);
             }
         }

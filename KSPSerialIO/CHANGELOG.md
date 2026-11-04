@@ -1,5 +1,16 @@
 # Changelog
 
+* **0.19.3.11**: 20261103
+  Automatic reconnection. A link supervisor thread (started with the flight scene, stopped on scene unload)
+  declares the link lost when the writer fails 3 times, when the board sends nothing for 3 s, or when the port
+  closes, then retries every 2 s without limit, on the last port first and then on every other non Bluetooth
+  port (the board may come back under another COM number): open, 300 ms settle, handshake, 1.5 s for the reply.
+  It also takes over when the first discovery at scene load finds nothing. While the link is down the main thread
+  sends and applies nothing and never blocks; on reconnect telemetry and controls resume with no scene reload and
+  the stage button is re-seeded so a held button cannot stage. Log lines: `KSPSerialIO[LINK] lost: ...`,
+  `searching attempt n: ...`, `candidate <port>: ...`, `reconnected on <port> after n attempts, m ms down`.
+  The perf line gains `link_state=<up|searching>` and `reconnects=<n>`.
+
 * **0.19.3.10**: 20261103
   The KSPSerialIO[BOARD] line also carries the LED matrix frame (`matrix=` as 24 hex digits, one byte per column),
   so the log shows what the matrix displayed. Matches the firmware that draws splash, fuel, stage, horizon,
