@@ -157,7 +157,7 @@ namespace KSPSerialIO
      * @brief Board diagnostics sent from the controller once per second (packet id 102).
      *
      * Not applied to the game: each one is written to KSP.log as a KSPSerialIO[BOARD] line. Must match the
-     * @c DebugPacket struct in the Arduino sketch (40 bytes, packed).
+     * @c DebugPacket struct in the Arduino sketch (40 bytes of fields plus 12 bytes of LED matrix frame, packed).
      */
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
     public struct DebugPacket
@@ -177,6 +177,7 @@ namespace KSPSerialIO
         public short rxAvail;          ///< Bytes waiting in the board's receive buffer
         public short txFree;           ///< Free bytes in the board's transmit buffer
         public ushort a0;              ///< Raw throttle analog reading
+        // followed on the wire by 12 bytes: the LED matrix frame, one byte per column (not part of this struct)
     }
 
     /**
@@ -447,7 +448,7 @@ namespace KSPSerialIO
         {
             try
             {
-                if (length != Marshal.SizeOf(typeof(DebugPacket)))
+                if (length != Marshal.SizeOf(typeof(DebugPacket)) + 12)   // the struct plus the 12-byte LED matrix frame
                 {
                     Debug.Log("KSPSerialIO[BOARD] debug packet with unexpected size " + length);
                     return;
@@ -461,7 +462,8 @@ namespace KSPSerialIO
                           " rx_bad_cs=" + d.rxBadChecksum + " rx_bad_size=" + d.rxBadSize + " tx=" + d.txPackets +
                           " loop_max_us=" + d.loopMaxUs + " tx_max_us=" + d.txMaxUs + " since_rx_ms=" + d.sinceRxMs +
                           " reset=0x" + d.resetCause.ToString("X4") + " flags=0x" + d.flags.ToString("X2") +
-                          " rx_avail=" + d.rxAvail + " tx_free=" + d.txFree + " a0=" + d.a0);
+                          " rx_avail=" + d.rxAvail + " tx_free=" + d.txFree + " a0=" + d.a0 +
+                          " matrix=" + BitConverter.ToString(PayloadBuffer, Marshal.SizeOf(typeof(DebugPacket)), 12).Replace("-", ""));
             }
             catch (Exception e)
             {

@@ -44,10 +44,15 @@ Packets
      - controller to KSP
      - 25 bytes
      - Switch and axis state
+   * - 2
+     - ``DisplayCommand``
+     - test tool to controller
+     - 2 bytes
+     - Forces an LED matrix screen for 4 s (only ``tools/matrix_preview.py`` sends it)
    * - 102
      - ``DebugPacket``
      - controller to KSP
-     - 40 bytes
+     - 52 bytes
      - Board diagnostics, once per second; the plugin only logs it
 
 Handshake
@@ -153,13 +158,17 @@ with the reset cause (a watchdog reset sets bit 8 or 9 of ``reset``).
      - Reset status read at boot (bit 0 power on, 8 and 9 watchdog, 10 software).
    * - ``flags``
      - byte
-     - bit 0 connected, bit 2 stage pin level.
+     - bit 0 connected, bit 2 stage pin level, bit 3 watchdog started, bit 4 ever connected.
    * - ``rx_avail``, ``tx_free``
      - int16
      - Bytes waiting in the receive buffer and free in the transmit buffer.
    * - ``a0``
      - uint16
      - Raw throttle analog reading.
+   * - ``matrix``
+     - 12 bytes
+     - The LED matrix frame, one byte per column (bit r is row r). Logged as 24 hex digits;
+       ``tools/matrix_preview.py --log KSP.log`` draws it.
 
 VesselData
 ~~~~~~~~~~

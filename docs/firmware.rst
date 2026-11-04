@@ -57,6 +57,48 @@ Indicators
    * - SAS, RCS, group 1
      - Mirror the action group state reported by KSP.
 
+LED matrix
+----------
+
+The 12x8 matrix of the UNO R4 WiFi is drawn by ``matrix.ino`` into an 8x12 buffer and refreshed by the
+library from a timer interrupt, so drawing never blocks ``loop()``. At power on it shows a "KSP" splash
+with a loading bar, then a scanning dot while it waits for KSP. A blinking X means the link was lost.
+The pixel at the top right is a heartbeat that blinks four times a second: if it stops, ``loop()`` is stuck.
+
+While connected one of these screens is shown. The first four columns are bars, the other screens use the
+whole matrix:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 85
+
+   * - Screen
+     - Content
+   * - Fuel
+     - Four 2-pixel bars: liquid fuel, oxidizer, monopropellant, electric charge (a single dot if the
+       vessel has no such tank). The default in flight.
+   * - Stage
+     - Current stage as a number, one dot per stage below it. Shown on the pad and for 1.5 s after staging.
+   * - Horizon
+     - Artificial horizon: tilts with roll, moves with pitch, the ground is dotted.
+   * - Vertical speed
+     - A bar growing up or down from the middle in four steps (2, 10, 50, 200 m/s).
+   * - SAS mode
+     - One icon per autopilot mode, or a dotted line when SAS is off.
+
+A warning (very high G or very low fuel) inverts the picture at 2 Hz. The screen button on pin 3 cycles
+through the screens and back to automatic selection; wire it between pin 3 and GND.
+``python tools/matrix_preview.py`` draws every screen with the real firmware, and
+``python tools/matrix_preview.py --log KSP.log`` shows what the matrix displayed according to a saved log.
+
+Recovering from a frozen board
+------------------------------
+
+Two protections are active. A 2 s hardware watchdog resets the board if ``loop()`` stops. If ``loop()``
+keeps running but the USB link has been silent for 20 s after working (a wedged USB stack, which the watchdog
+cannot see), ``Input.ino`` resets the board too. The ``KSPSerialIO[BOARD]`` lines in ``KSP.log`` show uptime,
+loop and send times, packet counters and the reset cause, and a ``REBOOT detected`` line when it restarts.
+
 Adding a control
 ----------------
 

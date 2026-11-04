@@ -33,9 +33,11 @@
 //pins for input
 #define STAGEPIN 2      ///< Stage push button (internal pull-up: pressed = connected to GND)
 #define RCSPIN 9        ///< RCS switch
+#define SCREENPIN 3     ///< Screen button: cycles the LED matrix screens (internal pull-up, wire to GND)
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
 
+#define LINKRESETMS 20000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
@@ -216,7 +218,7 @@ static_assert(sizeof(ControlPacket) == 25, "ControlPacket struct size must be 25
  * @brief Board diagnostics sent to KSP once per second (packet id 102).
  *
  * The plugin writes every one to KSP.log with the tag KSPSerialIO[BOARD], so the last line before a
- * freeze shows what the board was doing. Mirrors KSPSerialIO.DebugPacket (40 bytes, packed).
+ * freeze shows what the board was doing. Mirrors KSPSerialIO.DebugPacket (52 bytes: 40 of fields plus the 12-byte matrix frame).
  */
 struct DebugPacket {
   byte id;                 ///< Packet id, always 102
@@ -230,12 +232,25 @@ struct DebugPacket {
   uint32_t txMaxUs;        ///< Longest single packet send since the previous report, microseconds
   uint32_t sinceRxMs;      ///< Milliseconds since the last valid packet from KSP
   uint16_t resetCause;     ///< RA4M1 RSTSR0 (low byte) and RSTSR1 (high byte) read at boot: bit 0 power on, bit 8/9 watchdog, bit 10 software
-  byte flags;              ///< bit0 Connected, bit2 stage pin level now
+  byte flags;              ///< bit0 Connected, bit2 stage pin level now, bit3 watchdog started, bit4 ever connected
   int16_t rxAvail;         ///< Bytes waiting in the serial receive buffer
   int16_t txFree;          ///< Free bytes in the serial transmit buffer
   uint16_t a0;             ///< Raw reading of the throttle analog pin
+  uint8_t matrix[12];      ///< The LED matrix frame, one byte per column (bit r = row r); see matrix.ino
 };
-static_assert(sizeof(DebugPacket) == 40, "DebugPacket struct size must be 40 bytes");
+static_assert(sizeof(DebugPacket) == 52, "DebugPacket struct size must be 52 bytes");
+
+/**
+ * @brief Forces a LED matrix screen for a few seconds (packet id 2, KSP side never sends it).
+ *
+ * Only tools/matrix_preview.py uses it, to see every screen without flying. Screen numbers are the Screen
+ * enum in matrix.ino; 255 returns to automatic selection.
+ */
+struct DisplayCommand {
+  byte id;                 ///< Packet id, always 2
+  byte screen;             ///< Screen to show, 255 = automatic
+};
+static_assert(sizeof(DisplayCommand) == 2, "DisplayCommand struct size must be 2 bytes");
 
 #pragma pack(pop)
 
@@ -243,11 +258,17 @@ HandShakePacket HPacket; ///< Reused for both the received probe and our reply
 VesselData VData;        ///< Latest telemetry received from KSP
 ControlPacket CPacket;   ///< Controls being built and sent to KSP
 DebugPacket DPacket;     ///< Diagnostics sent once per second (see debugReport())
+DisplayCommand DCmd;     ///< Last DisplayCommand received (test tool only)
+uint8_t mxCols[12];      ///< Last LED matrix frame, one byte per column (bit r = row r), sent in the DebugPacket
+uint8_t forcedScreen = 255;     ///< LED matrix screen forced by a DisplayCommand (255 = none)
+unsigned long forcedUntil = 0;  ///< The forced screen expires at this time
 
 // Diagnostic counters, reported in DebugPacket
 uint32_t dbgLoops = 0, dbgTxPackets = 0, dbgLoopMaxUs = 0, dbgTxMaxUs = 0;
 uint16_t dbgRxOk = 0, dbgRxBadChecksum = 0, dbgRxBadSize = 0, dbgResetCause = 0;
 unsigned long dbgLastRxMs = 0, dbgLastReportMs = 0;
+bool everConnected = false;   ///< True once KSP has talked to us since power on
+bool dbgWdtOk = false;   ///< True if WDT.begin() succeeded; reported in DebugPacket.flags bit 3
 
 /// @brief Arduino entry point: opens the serial link and initializes LEDs, packets and inputs.
 void setup(){
@@ -255,11 +276,12 @@ void setup(){
   dbgResetCause = (uint16_t)(R_SYSTEM->RSTSR0 | ((R_SYSTEM->RSTSR1 & 0xFF) << 8));   // why the board last reset: bit0 power on, bit8 IWDT, bit9 WDT, bit10 software
   // Watchdog: if loop() ever stops running (for example a blocked USB write) the board resets itself
   // after WATCHDOGMS instead of staying frozen until someone presses RESET.
-  WDT.begin(WATCHDOGMS);
+  dbgWdtOk = WDT.begin(WATCHDOGMS);
 
   initLEDS();
   InitTxPackets();
   controlsInit();
+  matrixInit();
 
   LEDSAllOff();
 }
@@ -277,4 +299,5 @@ void loop()
   input();
   output();
   debugReport();
+  matrixUpdate();
 }

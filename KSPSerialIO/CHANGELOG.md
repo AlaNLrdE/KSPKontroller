@@ -1,5 +1,9 @@
 # Changelog
 
+* **0.19.3.10**: 20261103
+  The KSPSerialIO[BOARD] line also carries the LED matrix frame (`matrix=` as 24 hex digits, one byte per column),
+  so the log shows what the matrix displayed. Matches the firmware that draws splash, fuel, stage, horizon,
+  vertical speed and SAS screens, and resets the board when the USB link stays dead for 20 s.
 * **0.19.3.9**: 20261103
   The board sends a DebugPacket (id 102) once per second and the plugin writes it to KSP.log as a
   `KSPSerialIO[BOARD]` line (uptime, loop and send times, packet counters, buffers, reset cause), plus a

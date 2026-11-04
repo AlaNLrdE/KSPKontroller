@@ -25,10 +25,11 @@ void debugReport() {
   DPacket.txMaxUs = dbgTxMaxUs;
   DPacket.sinceRxMs = ms - dbgLastRxMs;
   DPacket.resetCause = dbgResetCause;
-  DPacket.flags = (Connected ? 1 : 0) | (digitalRead(STAGEPIN) == HIGH ? 4 : 0);
+  DPacket.flags = (Connected ? 1 : 0) | (digitalRead(STAGEPIN) == HIGH ? 4 : 0) | (dbgWdtOk ? 8 : 0) | (everConnected ? 16 : 0);
   DPacket.rxAvail = Serial.available();
   DPacket.txFree = Serial.availableForWrite();
   DPacket.a0 = analogRead(THROTTLEPIN);
+  memcpy(DPacket.matrix, mxCols, sizeof(DPacket.matrix));
 
   dbgLoopMaxUs = 0;
   dbgTxMaxUs = 0;

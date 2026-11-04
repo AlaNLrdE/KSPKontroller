@@ -57,6 +57,9 @@ Hardware used by the demo sketch
    * - 9
      - input (pull-up)
      - RCS switch
+   * - 3
+     - input (pull-up)
+     - LED matrix screen button
    * - 10
      - input (pull-up)
      - Action group 1 switch

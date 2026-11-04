@@ -26,6 +26,10 @@ int input() {
     case 1: // Telemetry packet
       Indicators();
       break;
+    case 2: // DisplayCommand (test tool): force a LED matrix screen for a few seconds
+      forcedScreen = DCmd.screen;
+      forcedUntil = now + 4000;
+      break;
     }
 
     //We got some data, turn the green led on
@@ -34,6 +38,11 @@ int input() {
   }
   else
   { //if no message received for a while, go idle
+    // The loop is alive but the USB link has been dead for a long time after working: a wedged USB stack
+    // is not recoverable from inside the sketch, so reset the whole board (the watchdog cannot help, loop() keeps running).
+    if (everConnected && (now - dbgLastRxMs) > LINKRESETMS)
+      NVIC_SystemReset();
+
     deadtime = now - deadtimeOld;
     if (deadtime > IDLETIMER)
     {
