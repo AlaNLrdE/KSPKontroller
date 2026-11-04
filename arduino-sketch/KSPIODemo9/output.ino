@@ -6,6 +6,18 @@
 /**
  * @brief Rate limiter: calls controls() at most once every CONTROLREFRESH milliseconds.
  */
+// Stage button state. File scope (not static inside controls()) so a new host session can reset it.
+boolean stagePressedBefore = false;  ///< Button state at the previous sample (edge detection)
+unsigned long stageHoldUntil = 0;    ///< The STAGE bit stays set until this time (ms)
+int stageIdle = HIGH;                ///< Idle level of the stage pin, learned while not connected
+
+/// @brief A new host session started: a button that is already held (or bouncing) cannot stage.
+void stageReset() {
+  stagePressedBefore = true;   // the next press needs a release first
+  stageHoldUntil = 0;
+  MainControls(STAGE, false);
+}
+
 void output() {
   now = millis();
   controlTime = now - controlTimeOld;
@@ -21,9 +33,6 @@ void output() {
  * Use this function as the template for adding more switches, buttons and axes.
  */
 void controls() {
-  static boolean stagePressedBefore = false;  // button state at the previous sample (edge detection)
-  static unsigned long stageHoldUntil = 0;    // the STAGE bit stays set until this time (ms)
-  static int stageIdle = HIGH;                // idle level of the stage pin, learned while not connected
   if (Connected) {
 
     // Stage button (same as the space bar). The plugin stages once on each rising edge of the STAGE bit and

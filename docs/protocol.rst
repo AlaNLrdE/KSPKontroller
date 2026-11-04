@@ -158,10 +158,15 @@ with the reset cause (a watchdog reset sets bit 8 or 9 of ``reset``).
      - Reset status read at boot (bit 0 power on, 8 and 9 watchdog, 10 software).
    * - ``flags``
      - byte
-     - bit 0 connected, bit 2 stage pin level, bit 3 watchdog started, bit 4 ever connected.
-   * - ``rx_avail``, ``tx_free``
+     - bit 0 connected, bit 2 stage pin level, bit 3 watchdog started, bit 4 ever connected, bit 5 DTR asserted
+       by the host right now.
+   * - ``rx_avail``
      - int16
-     - Bytes waiting in the receive buffer and free in the transmit buffer.
+     - Bytes waiting in the receive buffer.
+   * - ``tx_skipped``
+     - uint16
+     - Frames the board did not send because the host was not listening or the transmit buffer was full
+       (cumulative since boot).
    * - ``a0``
      - uint16
      - Raw throttle analog reading.
@@ -191,6 +196,17 @@ Steady state
 ~~~~~~~~~~~~
 
 .. uml:: diagrams/seq_runtime.puml
+
+Reconnection
+~~~~~~~~~~~~
+
+The protocol has no separate reconnect message. A new session always begins with the same handshake (id 0,
+bytes 1, 2, 3, answered with 3, 1, 4). The host asserts DTR when it opens the port, which the board sees as
+``Serial`` being true, and drops it on close. The firmware treats each handshake as a new session (parser
+reset, stale input dropped, DebugPacket sent at once), and the plugin repeats discovery every 2 s until a
+port answers. Details are in :doc:`plugin` and :doc:`firmware`.
+
+.. uml:: diagrams/state_link_recovery.puml
 
 Receivers
 ---------

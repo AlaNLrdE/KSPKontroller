@@ -94,10 +94,34 @@ through the screens and back to automatic selection; wire it between pin 3 and G
 Recovering from a frozen board
 ------------------------------
 
-Two protections are active. A 2 s hardware watchdog resets the board if ``loop()`` stops. If ``loop()``
-keeps running but the USB link has been silent for 20 s after working (a wedged USB stack, which the watchdog
-cannot see), ``Input.ino`` resets the board too. The ``KSPSerialIO[BOARD]`` lines in ``KSP.log`` show uptime,
-loop and send times, packet counters and the reset cause, and a ``REBOOT detected`` line when it restarts.
+A 2 s hardware watchdog (WDT) resets the board if ``loop()`` stops. The USB link has its own recovery,
+described below. The ``KSPSerialIO[BOARD]`` lines in ``KSP.log`` show uptime, loop and send times,
+packet counters and the reset cause, and a ``REBOOT detected`` line when it restarts.
+
+Reconnection
+------------
+
+The firmware is written so that the plugin can reconnect at any time (see :doc:`plugin`):
+
+* Every handshake (id 0) starts a fresh host session: the parser is reset, stale input is discarded,
+  ``Connected`` is set, the stage button state is reset and a DebugPacket is sent at once.
+* A dropped DTR (``!Serial``) means the host closed the port. The board goes to disconnected immediately
+  and stops transmitting.
+* It never blocks in a ``Serial`` write: a frame is skipped when the host is not listening or there is no
+  room in the buffer.
+* If it was connected before and now hears nothing for ``LINKRESETMS`` (12000 ms), it resets itself with
+  ``NVIC_SystemReset()``. A softer USB restart is not possible: on the renesas_uno core 1.6.0 ``Serial.end()``
+  is an empty function and ``Serial.begin()`` returns at once when the port is already running. The hardware
+  watchdog stays active.
+
+After a reset the board re-enumerates on USB and Windows may give it the same COM number or another one.
+That is why the plugin scans all ports instead of waiting for the old one.
+
+.. uml:: diagrams/state_link_recovery.puml
+
+``tools/test_arduino.py`` has a ``reopen`` test (close and reopen the port twice, then an abrupt close with
+60 telemetry frames in flight) that checks the handshake is answered again after each reopen. It needs the
+board and could not be run while the board was frozen.
 
 Adding a control
 ----------------

@@ -6,7 +6,9 @@ plugin expects:
 
   1. handshake      KSP sends 1, 2, 3 and the board must answer 3, 1, 4
   2. telemetry      after a VesselData packet the board must stream ControlPackets (id 101, 25 bytes)
-  3. idle timeout   with no more telemetry the board must stop sending after about 2 seconds
+  3. reopen         close and reopen the port (DTR toggles): handshake answered again, ControlPackets
+                    resume within 2 s; also after an abrupt close with 60 frames in flight
+  4. idle timeout   with no more telemetry the board must stop sending after about 2 seconds
 
 If the board does not answer on the requested port (or no port is given), every USB serial port is
 tried, Arduino vendor ids first. Exit code: 0 all passed, 1 a test failed, 2 no board found.
@@ -142,6 +144,52 @@ def test_debug(ser):
     return True, "%d DebugPackets in 3 s, uptime %d ms" % (len(debug), uptime)
 
 
+def _feed_and_wait_controls(ser, seconds):
+    """Feed telemetry for `seconds` and return how many ControlPackets came back."""
+    vessel = frame([ID_VESSEL_DATA] + [0] * (VESSEL_DATA_SIZE - 1))
+    controls = 0
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        ser.write(vessel)
+        frames, _ = read_frames(ser, 0.1)
+        controls += sum(1 for p in frames if p[0] == ID_CONTROL)
+    return controls
+
+
+def _reopen(ser, wait=2.0):
+    """Close and reopen the same port (DTR drops and rises), then give the board `wait` seconds."""
+    ser.close()
+    time.sleep(0.5)
+    ser.open()
+    time.sleep(0.3)
+    ser.reset_input_buffer()
+
+
+def test_reopen(ser):
+    """The host may close and reopen the port at any time; the board must answer the handshake again
+    and resume ControlPackets within 2 s while telemetry is fed. Done twice, then once after an abrupt
+    close with 60 telemetry frames in flight (a stress case found by hand)."""
+    vessel = frame([ID_VESSEL_DATA] + [0] * (VESSEL_DATA_SIZE - 1))
+    steps = []
+    for n in (1, 2, 3):
+        if n == 3:
+            for _ in range(60):  # unread frames in flight, then close without waiting for anything
+                ser.write(vessel)
+        try:
+            _reopen(ser)
+        except (serial.SerialException, OSError) as e:
+            return False, "reopen %d: port could not be reopened: %s" % (n, e)
+        t0 = time.monotonic()
+        ok, detail = test_handshake(ser)
+        if not ok:
+            return False, "reopen %d%s: %s" % (n, " (after abrupt close)" if n == 3 else "", detail)
+        controls = _feed_and_wait_controls(ser, 2.0)
+        if controls < 3:
+            return False, "reopen %d: only %d ControlPackets within 2 s after the handshake" % (n, controls)
+        steps.append("%d (%.1f s)" % (controls, time.monotonic() - t0))
+    return True, "handshake answered and ControlPackets resumed after 3 reopens: %s" % ", ".join(steps)
+
+
 def test_idle(ser):
     # The firmware drops to idle after IDLETIMER (2000 ms) without a valid packet
     time.sleep(2.6)
@@ -183,7 +231,8 @@ def main():
 
             print("Controller found on %s" % device)
             failed = False
-            for name, test in (("telemetry", test_telemetry), ("debug", test_debug), ("idle timeout", test_idle)):
+            for name, test in (("telemetry", test_telemetry), ("debug", test_debug),
+                              ("reopen", test_reopen), ("idle timeout", test_idle)):
                 ok, detail = test(ser)
                 print("  [%s] %s: %s" % ("PASS" if ok else "FAIL", name, detail))
                 failed = failed or not ok

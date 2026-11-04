@@ -1,0 +1,18 @@
+@startuml state_link_recovery
+title Plugin link supervisor (background thread)
+
+[*] --> Searching : scene start, initial discovery found nothing
+[*] --> Up : scene start, discovery found the board
+
+state Up : bytes arrive from the board\nControlPackets are applied
+state Searching : close the old port\nwait RetryIntervalMs (2000 ms)\npick the next candidate
+state Handshaking : open with DtrEnable = true\nsettle 300 ms\nsend 0, 1, 2, 3\nwait up to 1500 ms for 3, 1, 4
+
+Up --> Searching : lost: writer reported LinkFailed\nor no bytes for LinkTimeoutMs (3000 ms)\nor port closed or throwing
+Searching --> Handshaking : candidate port opened\n(last known port first,\nthen every non-Bluetooth port)
+Searching --> Searching : open failed\n(next candidate, next attempt)
+Handshaking --> Searching : no handshake reply\n(close, try the next candidate)
+Handshaking --> Up : reply 3, 1, 4\n(reconnected, no scene reload)
+Searching --> [*] : leaving the flight scene
+Up --> [*] : leaving the flight scene
+@enduml

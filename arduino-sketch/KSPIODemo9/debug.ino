@@ -11,7 +11,8 @@
  */
 void debugReport() {
   unsigned long ms = millis();
-  if (!Connected || (ms - dbgLastReportMs) < 1000) return;
+  if (!Connected || (!dbgForceReport && (ms - dbgLastReportMs) < 1000)) return;
+  dbgForceReport = false;
   dbgLastReportMs = ms;
 
   DPacket.id = 102;
@@ -25,9 +26,9 @@ void debugReport() {
   DPacket.txMaxUs = dbgTxMaxUs;
   DPacket.sinceRxMs = ms - dbgLastRxMs;
   DPacket.resetCause = dbgResetCause;
-  DPacket.flags = (Connected ? 1 : 0) | (digitalRead(STAGEPIN) == HIGH ? 4 : 0) | (dbgWdtOk ? 8 : 0) | (everConnected ? 16 : 0);
+  DPacket.flags = (Connected ? 1 : 0) | (digitalRead(STAGEPIN) == HIGH ? 4 : 0) | (dbgWdtOk ? 8 : 0) | (everConnected ? 16 : 0) | (dtrNow ? 32 : 0);
   DPacket.rxAvail = Serial.available();
-  DPacket.txFree = Serial.availableForWrite();
+  DPacket.txSkipped = dbgTxSkipped;
   DPacket.a0 = analogRead(THROTTLEPIN);
   memcpy(DPacket.matrix, mxCols, sizeof(DPacket.matrix));
 

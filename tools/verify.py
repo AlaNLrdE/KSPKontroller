@@ -164,6 +164,65 @@ def check_plugin_safety(ctx):
         report("FAIL", "background writer", "main-thread serial writes would block the game ~20 ms per packet")
 
 
+def check_reconnect_guards(ctx):
+    """Source guards for the automatic reconnection (WARN, not FAIL, while the code has not landed yet)."""
+    cs = read(CS)
+    has_tag = "KSPSerialIO[LINK]" in cs
+    has_sup = re.search(r"Supervisor|LinkSupervisor|SuperviseLink", cs) and re.search(r"new Thread\(|ThreadPool|Task\.Run", cs)
+    if has_tag and has_sup:
+        report("PASS", "reconnect: plugin supervisor", "KSPSerialIO[LINK] logging and a supervisor thread present")
+    else:
+        report("WARN", "reconnect: plugin supervisor", "missing in KSPIO.cs: " + ", ".join(
+            n for n, ok in (("KSPSerialIO[LINK] tag", has_tag), ("supervisor + thread", has_sup)) if not ok))
+    ino = sketch_text()
+    m = re.search(r"#define\s+LINKRESETMS\s+(\d+)", ino)
+    if not m:
+        report("FAIL", "reconnect: sketch LINKRESETMS", "LINKRESETMS not defined in the sketch")
+    elif int(m.group(1)) > 15000:
+        report("FAIL", "reconnect: sketch LINKRESETMS", "%s ms is above 15000: the board stays wedged too long" % m.group(1))
+    else:
+        report("PASS", "reconnect: sketch LINKRESETMS", "%s ms" % m.group(1))
+    wdt = re.search(r"\bWDT\.begin\(", ino)
+    report("PASS" if wdt else "FAIL", "reconnect: sketch watchdog", "WDT started" if wdt else "WDT.begin() not found: a hung loop() would never reset")
+
+
+def check_reconnect_log(ctx):
+    """KSPSerialIO[LINK] lines: every loss must be followed by a reconnect, and searching must not give up."""
+    path = ctx["log"]
+    if not os.path.isfile(path):
+        return
+    events = [l for l in read(path).splitlines() if "KSPSerialIO[LINK]" in l]
+    if not events:
+        report("PASS", "log: link recovery", "no link loss recorded")
+        return
+    losses, recovered, downs = 0, 0, []
+    pending, attempts, worst = False, 0, 0
+    for l in events:
+        if re.search(r"\] lost:", l):
+            losses += 1
+            pending, attempts = True, 0
+        m = re.search(r"searching attempt (\d+)", l)
+        if m:
+            pending = True
+            attempts = int(m.group(1))
+            worst = max(worst, attempts)
+        m = re.search(r"reconnected on \S+ after (\d+) attempts?, (\d+) ms down", l)
+        if m:
+            recovered += 1
+            pending, attempts = False, 0
+            downs.append(int(m.group(2)))
+    if pending and attempts > 10:
+        report("FAIL", "log: link recovery", "still searching after %d attempts when the log ends (no candidate answered the handshake)" % attempts)
+    elif pending:
+        report("FAIL", "log: link recovery", "log ends while the link is lost/searching (attempt %d)" % attempts)
+    elif losses > recovered:
+        report("FAIL", "log: link recovery", "%d loss(es) but only %d reconnect(s)" % (losses, recovered))
+    elif losses:
+        report("WARN", "log: link recovery", "%d loss(es), all recovered, longest down %d ms" % (losses, max(downs) if downs else 0))
+    else:
+        report("PASS", "log: link recovery", "searching only at startup, reconnected %d time(s)" % recovered)
+
+
 # --------------------------------------------------------------------------------------------- install checks
 def check_install(ctx):
     ksp = ctx["ksp"]
@@ -329,13 +388,13 @@ def check_board(ctx):
     cmd = [sys.executable, os.path.join(ROOT, "tools", "test_arduino.py")] + ([port] if port else [])
     p = subprocess.run(cmd, capture_output=True, text=True)
     out = p.stdout
-    for name in ("handshake", "telemetry", "debug", "idle timeout"):
+    for name in ("handshake", "telemetry", "debug", "reopen", "idle timeout"):
         m = re.search(r"\[(PASS|FAIL)\] %s: (.*)" % name, out)
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety,
-          check_install, check_gamedata_snapshot, check_log, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_git]
 
 
 def main():

@@ -154,6 +154,57 @@ The log line only exists while the plugin runs, so the frame rate of the run wit
 come from outside the plugin: an external overlay (the NVIDIA or Steam counter) or a profiler such as
 KSPPerf.
 
+Automatic reconnection
+----------------------
+
+A link supervisor runs on its own background thread (never the main thread) and brings the link back
+without reloading the scene. It treats the link as lost when any of these happens:
+
+* the writer thread reports ``LinkFailed`` after repeated send failures;
+* no bytes arrive from the board for ``LinkTimeoutMs`` (3000 ms) while the link was up;
+* the port is closed or throws;
+* the initial discovery found nothing.
+
+While in the flight scene it then repeats, every ``RetryIntervalMs`` (2000 ms) and without an attempt limit:
+
+#. Close the old port.
+#. Build the candidate list: the last known port first, then every non-Bluetooth name of
+   ``SerialPort.GetPortNames()``. The list is rebuilt on each attempt because the board may come back
+   under a different COM number after a reset.
+#. For each candidate: open it with ``DtrEnable = true``, wait 300 ms, send the handshake (id 0, bytes 1, 2, 3)
+   and wait up to 1500 ms for 3, 1, 4. If there is no reply, close it and try the next one.
+
+On a reply the link resumes at once. The firmware starts a fresh session on every handshake
+(see :doc:`firmware`), so nothing else needs to be reset. Only the handshake proves that a port belongs to
+the board: USB has no "reconnect" request, a CDC serial port simply disappears and reappears with the bus.
+
+.. uml:: diagrams/state_link_recovery.puml
+
+The supervisor logs with the tag ``KSPSerialIO[LINK]``:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
+
+   * - Line
+     - Meaning
+   * - ``lost: <reason> | port=<name>``
+     - The link was declared lost and why.
+   * - ``searching attempt <n>: <candidates>``
+     - Start of attempt ``n`` with the ports that will be tried.
+   * - ``candidate <name>: opened``
+     - The port opened.
+   * - ``candidate <name>: open failed: <msg>``
+     - The port could not be opened (busy, gone).
+   * - ``candidate <name>: no handshake reply``
+     - Opened but it is not the board (or the board is still booting).
+   * - ``candidate <name>: handshake ok``
+     - The board answered 3, 1, 4.
+   * - ``reconnected on <name> after <n> attempts, <ms> ms down``
+     - The link is up again.
+
+``./ci verify`` counts these lines in ``KSP.log`` (see ``check_reconnect_log`` in ``tools/verify.py``).
+
 State exposed to other code
 ---------------------------
 

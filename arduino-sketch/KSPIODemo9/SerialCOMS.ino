@@ -97,12 +97,29 @@ boolean KSPBoardReceiveData() {
   return false;
 }
 
+/// @brief Forgets any half-received frame and discards unread input (a new host session starts).
+void rxReset() {
+  rx_len = 0;
+  rx_array_inx = 1;
+  // read() returns -1 without consuming while DTR is low, so stop on the first failure (no infinite loop)
+  while (Serial.available() > 0 && Serial.read() >= 0) {}
+}
+
 /**
- * @brief Sends a struct to KSP wrapped in the wire framing.
+ * @brief Sends a struct to KSP wrapped in the wire framing. Never blocks.
+ *
+ * The frame is skipped (and counted in dbgTxSkipped) when the host has not asserted DTR, because nobody
+ * has the port open, or when the USB transmit buffer has less room than the frame, because the core's
+ * write() would then spin until the host drains it and starve the watchdog.
  * @param address Start of the packed struct (use the details() macro to pass address and size together).
  * @param len Size of the struct in bytes.
+ * @return true if the frame was handed to the USB stack.
  */
-void KSPBoardSendData(uint8_t * address, uint8_t len){
+bool KSPBoardSendData(uint8_t * address, uint8_t len){
+  if (!Serial || Serial.availableForWrite() < (int)len + 4) {
+    dbgTxSkipped++;
+    return false;
+  }
   unsigned long sendStartUs = micros();
   uint8_t CS = len;
   Serial.write(0xBE);
@@ -119,4 +136,5 @@ void KSPBoardSendData(uint8_t * address, uint8_t len){
   dbgTxPackets++;
   unsigned long sendUs = micros() - sendStartUs;
   if (sendUs > dbgTxMaxUs) dbgTxMaxUs = sendUs;
+  return true;
 }
