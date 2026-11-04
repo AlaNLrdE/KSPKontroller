@@ -6,18 +6,6 @@
 /**
  * @brief Rate limiter: calls controls() at most once every CONTROLREFRESH milliseconds.
  */
-// Stage button state. File scope (not static inside controls()) so a new host session can reset it.
-boolean stagePressedBefore = false;  ///< Button state at the previous sample (edge detection)
-unsigned long stageHoldUntil = 0;    ///< The STAGE bit stays set until this time (ms)
-int stageIdle = HIGH;                ///< Idle level of the stage pin, learned while not connected
-
-/// @brief A new host session started: a button that is already held (or bouncing) cannot stage.
-void stageReset() {
-  stagePressedBefore = true;   // the next press needs a release first
-  stageHoldUntil = 0;
-  MainControls(STAGE, false);
-}
-
 void output() {
   now = millis();
   controlTime = now - controlTimeOld;
@@ -33,6 +21,12 @@ void output() {
  * Use this function as the template for adding more switches, buttons and axes.
  */
 void controls() {
+  static boolean stagePressedBefore = false;  // button state at the previous sample (edge detection)
+  static unsigned long stageHoldUntil = 0;    // the STAGE bit stays set until this time (ms)
+  static int stageIdle = HIGH;                // idle level of the stage pin, learned while not connected
+  static ControlPacket lastSent;
+  static boolean haveLast = false;
+  static unsigned long lastSendMs = 0;
   if (Connected) {
 
     // Stage button (same as the space bar). The plugin stages once on each rising edge of the STAGE bit and
@@ -61,8 +55,23 @@ void controls() {
     //This is an example of reading analog inputs to an axis, with deadband and limits
     CPacket.Throttle = constrain(map(analogRead(THROTTLEPIN),THROTTLEDB,1024-THROTTLEDB,0,1000),0, 1000);
 
-    KSPBoardSendData(details(CPacket));
+    // Send only when something changed, plus a keep-alive. The UNO R4 USB serial is known to stall at random after
+    // long, steady traffic, so the board no longer streams 40 identical ControlPackets per second. A change in a
+    // switch, button or group is sent at once (sampled every CONTROLREFRESH ms); the throttle must move by at least
+    // THROTTLEDELTA (the analog input jitters by a few counts); otherwise one packet every CONTROLKEEPALIVE ms tells
+    // the plugin that the link is alive.
+    int16_t throttleDiff = CPacket.Throttle - lastSent.Throttle;
+    if (throttleDiff < 0) throttleDiff = -throttleDiff;
+    boolean changed = !haveLast || CPacket.MainControls != lastSent.MainControls ||
+                      CPacket.ControlGroup != lastSent.ControlGroup || throttleDiff >= THROTTLEDELTA;
+    if (changed || (now - lastSendMs) >= CONTROLKEEPALIVE) {
+      KSPBoardSendData(details(CPacket));
+      lastSent = CPacket;
+      haveLast = true;
+      lastSendMs = now;
+    }
   } else {
+    haveLast = false;
     stageIdle = digitalRead(STAGEPIN);   // learn the idle level; keep the button released-looking until connected
     stagePressedBefore = false;
     stageHoldUntil = 0;

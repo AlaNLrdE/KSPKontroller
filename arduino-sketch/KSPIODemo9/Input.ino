@@ -3,37 +3,6 @@
  * @brief Handling of the packets received from KSP and of the idle timeout.
  */
 
-bool dtrNow = false;                 ///< The host has the port open (DTR asserted)
-unsigned long dtrLowSince = 0;       ///< When DTR was first seen low (0 = it is high)
-
-/**
- * @brief Goes disconnected at once when the host closes the port.
- *
- * On the UNO R4 `Serial` is true only while the host asserts DTR (the plugin opens with DtrEnable = true).
- * DTR low for DTRDEBOUNCEMS while connected means nobody is listening: LEDs off, no more packets sent.
- */
-void hostMonitor() {
-  dtrNow = Serial;
-  if (dtrNow) { dtrLowSince = 0; return; }
-  if (dtrLowSince == 0) dtrLowSince = now | 1;   // never 0
-  if (Connected && (now - dtrLowSince) >= DTRDEBOUNCEMS) {
-    Connected = false;
-    deadtimeOld = now;
-    LEDSAllOff();
-    rxReset();
-  }
-}
-
-/// @brief A handshake arrived: start a fresh host session.
-void newSession() {
-  rxReset();
-  stageReset();
-  dtrLowSince = 0;
-  deadtimeOld = now;
-  Connected = true;
-  dbgForceReport = true;
-}
-
 /**
  * @brief Processes at most one incoming packet and tracks the link state.
  *
@@ -46,14 +15,12 @@ void newSession() {
 int input() {
   int returnValue = -1;
   now = millis();
-  hostMonitor();
 
   if (KSPBoardReceiveData()){
     deadtimeOld = now;
     returnValue = id;
     switch(id) {
-    case 0: //Handshake packet: a new host session, whatever happened before
-      newSession();
+    case 0: //Handshake packet
       Handshake();
       break;
     case 1: // Telemetry packet
@@ -73,7 +40,6 @@ int input() {
   { //if no message received for a while, go idle
     // The loop is alive but the USB link has been dead for a long time after working: a wedged USB stack
     // is not recoverable from inside the sketch, so reset the whole board (the watchdog cannot help, loop() keeps running).
-    // (Serial.end()/begin() cannot be used as a softer first step: on this core end() is an empty TODO and begin() returns early.)
     if (everConnected && (now - dbgLastRxMs) > LINKRESETMS)
       NVIC_SystemReset();
 

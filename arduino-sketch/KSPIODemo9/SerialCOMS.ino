@@ -97,55 +97,36 @@ boolean KSPBoardReceiveData() {
   return false;
 }
 
-/// @brief Forgets any half-received frame and discards unread input (a new host session starts).
-void rxReset() {
-  rx_len = 0;
-  rx_array_inx = 1;
-  // read() returns -1 without consuming while DTR is low, so stop on the first failure (no infinite loop)
-  while (Serial.available() > 0 && Serial.read() >= 0) {}
-}
-
 /**
- * @brief Sends a struct to KSP wrapped in the wire framing. Never blocks.
- *
- * The frame is skipped (and counted in dbgTxSkipped) when the host has not asserted DTR, because nobody
- * has the port open, or when the USB transmit buffer has less room than the frame, because the core's
- * write() would then spin until the host drains it and starve the watchdog.
+ * @brief Sends a struct to KSP wrapped in the wire framing.
  * @param address Start of the packed struct (use the details() macro to pass address and size together).
  * @param len Size of the struct in bytes.
- * @return true if the frame was handed to the USB stack.
  */
-bool KSPBoardSendData(uint8_t * address, uint8_t len){
-  // _SerialUSB::write() of the renesas_uno core spins forever, with the USB interrupt disabled, when the host
-  // does not drain the 256-byte transmit FIFO (the host stopped reading, or closed the port abruptly while DTR
-  // still looked asserted). That froze the board for good, and the watchdog never saw it as a normal stall.
-  // So wait for room in the FIFO for the whole frame, but only up to SENDWAITUS, and skip the frame if there is none.
-  if (!Serial) {
-    dbgTxSkipped++;
-    return false;
-  }
-  unsigned long waitStartUs = micros();
-  while (Serial.availableForWrite() < (int)len + 4) {
-    if (micros() - waitStartUs > SENDWAITUS) {
-      dbgTxSkipped++;
-      return false;
-    }
-  }
+void KSPBoardSendData(uint8_t * address, uint8_t len){
+  // The frame is built in a local buffer and written with ONE call. _SerialUSB::write() of the renesas_uno core
+  // loops without a timeout (USB interrupt on and off) until the transmit FIFO has room, so if the PC closes the port
+  // while the board is inside it, the board freezes (until the link watchdog resets it). Writing byte by byte
+  // meant about 30 calls and 30 one-byte USB transfers per packet and kept the board inside that loop most of
+  // the time; one call per packet shrinks the exposure to a few microseconds.
+  // Things that were tried and made the link worse on this core: calling `Serial` (operator bool) from loop(),
+  // because it runs tud_task() in main context while the USB interrupt runs it too (random multi-second stalls),
+  // writing straight to TinyUSB with tud_cdc_write() (the board then sent nothing), and gating on
+  // Serial.availableForWrite() (it reads 0, so every frame was skipped).
   unsigned long sendStartUs = micros();
+  uint8_t frame[260];
   uint8_t CS = len;
-  Serial.write(0xBE);
-  Serial.write(0xEF);
-  Serial.write(len);
-
-  for(int i = 0; i<len; i++){
-    CS^=*(address+i);
-    Serial.write(*(address+i));
+  frame[0] = 0xBE;
+  frame[1] = 0xEF;
+  frame[2] = len;
+  for (int i = 0; i < len; i++) {
+    CS ^= *(address + i);
+    frame[3 + i] = *(address + i);
   }
+  frame[3 + len] = CS;
 
-  Serial.write(CS);
+  Serial.write(frame, (size_t)len + 4);
 
   dbgTxPackets++;
   unsigned long sendUs = micros() - sendStartUs;
   if (sendUs > dbgTxMaxUs) dbgTxMaxUs = sendUs;
-  return true;
 }

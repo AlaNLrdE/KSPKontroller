@@ -37,9 +37,7 @@
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
 
-#define LINKRESETMS 12000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack; must fit the plugin's retry window)
-#define DTRDEBOUNCEMS 100 ///< DTR must stay low this long while connected before the host is considered gone (the plugin closed the port)
-#define SENDWAITUS 15000UL ///< Longest wait for room in the USB transmit FIFO before a frame is skipped, microseconds
+#define LINKRESETMS 12000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
@@ -79,7 +77,9 @@
 
 //if no message received from KSP for more than 2s, go idle
 #define IDLETIMER 2000    ///< Milliseconds without a valid packet before the controller goes idle
-#define CONTROLREFRESH 25 ///< Minimum milliseconds between ControlPacket transmissions
+#define CONTROLREFRESH 25 ///< Milliseconds between samples of the switches and buttons
+#define CONTROLKEEPALIVE 200 ///< A ControlPacket is sent at least this often even if nothing changed
+#define THROTTLEDELTA 6 ///< Smallest throttle change (0-1000) that is sent at once
 
 //warnings
 #define GWARN 9                  ///< G-force that raises the red warning
@@ -234,9 +234,9 @@ struct DebugPacket {
   uint32_t txMaxUs;        ///< Longest single packet send since the previous report, microseconds
   uint32_t sinceRxMs;      ///< Milliseconds since the last valid packet from KSP
   uint16_t resetCause;     ///< RA4M1 RSTSR0 (low byte) and RSTSR1 (high byte) read at boot: bit 0 power on, bit 8/9 watchdog, bit 10 software
-  byte flags;              ///< bit0 Connected, bit2 stage pin level now, bit3 watchdog started, bit4 ever connected, bit5 DTR asserted by the host now
+  byte flags;              ///< bit0 Connected, bit2 stage pin level now, bit3 watchdog started, bit4 ever connected
   int16_t rxAvail;         ///< Bytes waiting in the serial receive buffer
-  uint16_t txSkipped;      ///< Frames not sent because the host was not listening (DTR low) or the USB transmit buffer was too full; replaces the old txFree field, which always read 0
+  uint16_t txSkipped;      ///< Frames not sent because the host had the port closed (cumulative since boot)
   uint16_t a0;             ///< Raw reading of the throttle analog pin
   uint8_t matrix[12];      ///< The LED matrix frame, one byte per column (bit r = row r); see matrix.ino
 };
@@ -267,9 +267,9 @@ unsigned long forcedUntil = 0;  ///< The forced screen expires at this time
 
 // Diagnostic counters, reported in DebugPacket
 uint32_t dbgLoops = 0, dbgTxPackets = 0, dbgLoopMaxUs = 0, dbgTxMaxUs = 0;
-uint16_t dbgRxOk = 0, dbgRxBadChecksum = 0, dbgRxBadSize = 0, dbgResetCause = 0, dbgTxSkipped = 0;
-bool dbgForceReport = false;   ///< Set by a handshake: send a DebugPacket on the next loop
+uint16_t dbgRxOk = 0, dbgRxBadChecksum = 0, dbgRxBadSize = 0, dbgResetCause = 0;
 unsigned long dbgLastRxMs = 0, dbgLastReportMs = 0;
+uint16_t dbgTxSkipped = 0;   ///< Frames skipped because DTR was low (reported in DebugPacket.txSkipped)
 bool everConnected = false;   ///< True once KSP has talked to us since power on
 bool dbgWdtOk = false;   ///< True if WDT.begin() succeeded; reported in DebugPacket.flags bit 3
 

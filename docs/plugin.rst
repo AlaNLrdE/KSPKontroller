@@ -174,7 +174,7 @@ While in the flight scene it then repeats, every ``RetryIntervalMs`` (2000 ms) a
 #. For each candidate: open it with ``DtrEnable = true``, wait 300 ms, send the handshake (id 0, bytes 1, 2, 3)
    and wait up to 1500 ms for 3, 1, 4. If there is no reply, close it and try the next one.
 
-On a reply the link resumes at once. The firmware starts a fresh session on every handshake
+On a reply the link resumes at once. The firmware treats any valid packet, a handshake included, as a reconnection
 (see :doc:`firmware`), so nothing else needs to be reset. Only the handshake proves that a port belongs to
 the board: USB has no "reconnect" request, a CDC serial port simply disappears and reappears with the bus.
 

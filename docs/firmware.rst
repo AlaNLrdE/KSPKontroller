@@ -101,18 +101,26 @@ packet counters and the reset cause, and a ``REBOOT detected`` line when it rest
 Reconnection
 ------------
 
-The firmware is written so that the plugin can reconnect at any time (see :doc:`plugin`):
+The plugin can reconnect at any time (see :doc:`plugin`). What the firmware does to help:
 
-* Every handshake (id 0) starts a fresh host session: the parser is reset, stale input is discarded,
-  ``Connected`` is set, the stage button state is reset and a DebugPacket is sent at once.
-* A dropped DTR (``!Serial``) means the host closed the port. The board goes to disconnected immediately
-  and stops transmitting.
-* It never blocks in a ``Serial`` write: a frame is skipped when the host is not listening or there is no
-  room in the buffer.
+* Any valid packet, and a handshake in particular, marks the board as connected again, so a reconnecting plugin
+  only has to repeat the handshake.
 * If it was connected before and now hears nothing for ``LINKRESETMS`` (12000 ms), it resets itself with
   ``NVIC_SystemReset()``. A softer USB restart is not possible: on the renesas_uno core 1.6.0 ``Serial.end()``
   is an empty function and ``Serial.begin()`` returns at once when the port is already running. The hardware
   watchdog stays active.
+* It sends less. A ControlPacket goes out only when a switch, button or group changed or the throttle moved by
+  ``THROTTLEDELTA`` (6 of 1000), plus a keep-alive every ``CONTROLKEEPALIVE`` (200 ms). The UNO R4 USB serial
+  is known to stall at random after long steady traffic, and this cut the traffic about eight times.
+* Each frame is built in a local buffer and written with one ``Serial.write()`` call instead of one call per byte.
+
+What did not work on this core, so do not try it again: (1) calling ``Serial`` (its ``operator bool``) from
+``loop()`` to read DTR, because it runs ``tud_task()`` in main context while the USB interrupt runs it too
+(the handshake then took seconds or never came); (2) writing straight to TinyUSB with ``tud_cdc_write()`` (the
+board sent nothing); (3) gating writes on ``Serial.availableForWrite()``, which reads 0 (every frame was
+skipped). The core's own ``_SerialUSB::write()`` loops without a timeout until the transmit FIFO has room, so
+if the PC closes the port while the board is inside it, the board freezes until the link reset. One call per
+packet makes that window a few microseconds instead of most of the time.
 
 After a reset the board re-enumerates on USB and Windows may give it the same COM number or another one.
 That is why the plugin scans all ports instead of waiting for the old one.
@@ -120,8 +128,9 @@ That is why the plugin scans all ports instead of waiting for the old one.
 .. uml:: diagrams/state_link_recovery.puml
 
 ``tools/test_arduino.py`` has a ``reopen`` test (close and reopen the port twice, then an abrupt close with
-60 telemetry frames in flight) that checks the handshake is answered again after each reopen. It needs the
-board and could not be run while the board was frozen.
+60 telemetry frames in flight) that checks the handshake is answered again after each reopen. In ten rounds
+the abrupt close still freezes the board about one time in five; it comes back by itself after the link reset
+(about 15 s).
 
 Adding a control
 ----------------
