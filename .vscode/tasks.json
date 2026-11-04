@@ -1,0 +1,73 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Sketch: build debug",
+            "type": "shell",
+            "command": "bash ./ci build_sketch_debug",
+            "group": "build",
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": "absolute",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            }
+        },
+        {
+            "label": "Sketch: build",
+            "type": "shell",
+            "command": "bash ./ci build_sketch",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Sketch: upload debug build",
+            "type": "shell",
+            "command": "bash ./ci upload_sketch ${input:port}",
+            "options": { "env": { "SKETCH_BUILD": "build/sketch-debug" } },
+            "dependsOn": "Sketch: build debug",
+            "problemMatcher": []
+        },
+        {
+            "label": "Sketch: upload normal build",
+            "type": "shell",
+            "command": "bash ./ci upload_sketch ${input:port}",
+            "dependsOn": "Sketch: build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Verify (static checks)",
+            "type": "shell",
+            "command": "bash ./ci verify",
+            "problemMatcher": []
+        },
+        {
+            "label": "Verify (with board, KSP closed)",
+            "type": "shell",
+            "command": "bash ./ci verify --board",
+            "problemMatcher": []
+        },
+        {
+            "label": "Serial: tail board output",
+            "type": "shell",
+            "command": "build/venv/Scripts/python.exe -m serial.tools.miniterm ${input:port} 115200",
+            "problemMatcher": []
+        },
+        {
+            "label": "Matrix preview (KSP closed)",
+            "type": "shell",
+            "command": "build/venv/Scripts/python.exe tools/matrix_preview.py ${input:port}",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "port",
+            "type": "promptString",
+            "description": "Serial port of the board (KSP closed), for example COM5. Leave empty to auto-detect (not for miniterm).",
+            "default": ""
+        }
+    ]
+}

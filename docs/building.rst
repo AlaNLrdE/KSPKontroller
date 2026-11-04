@@ -12,6 +12,8 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
      - Action
    * - ``./ci build_sketch``
      - Compile the firmware with arduino-cli (downloads it and the UNO R4 core if missing).
+   * - ``./ci build_sketch_debug``
+     - Compile the firmware with symbols and ``-Og`` into ``build/sketch-debug`` (see :doc:`debugging`).
    * - ``./ci build_KSPSerialIO``
      - Compile the plugin with msbuild, xbuild or dotnet.
    * - ``./ci build_all``

@@ -1,0 +1,65 @@
+{
+    // Debugging the UNO R4 WiFi (Renesas RA4M1) needs an external SWD probe, see docs/debugging.rst.
+    // Steps: 1) task "Sketch: build debug", 2) task "Sketch: upload debug build" (normal USB bootloader upload),
+    // 3) wire the probe to the SWD pads, 4) F5 with one of the configurations below.
+    // The request is "attach" on purpose: OpenOCD 0.11 (Arduino build) has no flash driver for the RA4M1, so
+    // gdb cannot "load" the program; the Arduino core's own debug config (platform.txt) attaches too.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "UNO R4 WiFi: attach (CMSIS-DAP probe)",
+            "type": "cortex-debug",
+            "request": "attach",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/sketch-debug/KSPIODemo9.ino.elf",
+            "armToolchainPath": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/arm-none-eabi-gcc/7-2017q4/bin",
+            "serverpath": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/openocd/0.11.0-arduino2/bin/openocd.exe",
+            "searchDir": [
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/openocd/0.11.0-arduino2/share/openocd/scripts"
+            ],
+            "configFiles": [
+                "interface/cmsis-dap.cfg",
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/debugger/select_swd.cfg",
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/debugger/R7FA4M1AB.cfg"
+            ],
+            // The SVD ships with the core (peripheral registers view). Remove the line if the file is missing.
+            "svdFile": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/svd/R7FA4M1AB.svd",
+            "runToEntryPoint": "main",
+            "overrideAttachCommands": [
+                "monitor reset halt",
+                "monitor gdb_breakpoint_override hard"
+            ],
+            "overrideRestartCommands": [
+                "monitor reset halt"
+            ]
+        },
+        {
+            "name": "UNO R4 WiFi: attach (J-Link probe)",
+            "type": "cortex-debug",
+            "request": "attach",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/sketch-debug/KSPIODemo9.ino.elf",
+            "armToolchainPath": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/arm-none-eabi-gcc/7-2017q4/bin",
+            "serverpath": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/openocd/0.11.0-arduino2/bin/openocd.exe",
+            "searchDir": [
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/tools/openocd/0.11.0-arduino2/share/openocd/scripts"
+            ],
+            "configFiles": [
+                "interface/jlink.cfg",
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/debugger/select_swd.cfg",
+                "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/debugger/R7FA4M1AB.cfg"
+            ],
+            "svdFile": "${env:LOCALAPPDATA}/Arduino15/packages/arduino/hardware/renesas_uno/1.6.0/svd/R7FA4M1AB.svd",
+            "runToEntryPoint": "main",
+            "overrideAttachCommands": [
+                "monitor reset halt",
+                "monitor gdb_breakpoint_override hard"
+            ],
+            "overrideRestartCommands": [
+                "monitor reset halt"
+            ]
+        }
+    ]
+}
