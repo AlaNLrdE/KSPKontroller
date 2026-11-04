@@ -44,6 +44,11 @@ Packets
      - controller to KSP
      - 25 bytes
      - Switch and axis state
+   * - 102
+     - ``DebugPacket``
+     - controller to KSP
+     - 40 bytes
+     - Board diagnostics, once per second; the plugin only logs it
 
 Handshake
 ~~~~~~~~~
@@ -112,6 +117,49 @@ ControlPacket
    The Arduino struct must use fixed-width types (``uint16_t``, ``int16_t``). On the UNO R4 a
    plain ``int`` is 32 bits, which silently produces a 37-byte packet that the plugin decodes
    with shifted fields. The sketch has a ``static_assert`` on the 25-byte size.
+
+DebugPacket
+~~~~~~~~~~~
+
+Sent by the board once per second while connected. The plugin does not apply it: it writes one line
+per packet to ``KSP.log`` starting with ``KSPSerialIO[BOARD]``, so the last line before a freeze
+shows what the firmware was doing. A drop of ``uptime_ms`` produces an extra ``REBOOT detected`` line
+with the reset cause (a watchdog reset sets bit 8 or 9 of ``reset``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 12 68
+
+   * - Field
+     - Type
+     - Meaning
+   * - ``uptime_ms``, ``loops``
+     - uint32
+     - Board uptime and completed loop iterations.
+   * - ``rx_ok``, ``rx_bad_cs``, ``rx_bad_size``
+     - uint16
+     - Valid packets, packets with a wrong checksum, packets with a wrong size.
+   * - ``tx``
+     - uint32
+     - Packets the board has sent.
+   * - ``loop_max_us``, ``tx_max_us``
+     - uint32
+     - Longest firmware loop and longest single send since the previous report.
+   * - ``since_rx_ms``
+     - uint32
+     - Time since the last valid packet from KSP.
+   * - ``reset``
+     - uint16
+     - Reset status read at boot (bit 0 power on, 8 and 9 watchdog, 10 software).
+   * - ``flags``
+     - byte
+     - bit 0 connected, bit 2 stage pin level.
+   * - ``rx_avail``, ``tx_free``
+     - int16
+     - Bytes waiting in the receive buffer and free in the transmit buffer.
+   * - ``a0``
+     - uint16
+     - Raw throttle analog reading.
 
 VesselData
 ~~~~~~~~~~

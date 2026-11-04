@@ -212,15 +212,47 @@ struct ControlPacket {
 // Must match KSPSerialIO.ControlPacket (25 bytes); R4 int is 32-bit so fixed-width types are required
 static_assert(sizeof(ControlPacket) == 25, "ControlPacket struct size must be 25 bytes");
 
+/**
+ * @brief Board diagnostics sent to KSP once per second (packet id 102).
+ *
+ * The plugin writes every one to KSP.log with the tag KSPSerialIO[BOARD], so the last line before a
+ * freeze shows what the board was doing. Mirrors KSPSerialIO.DebugPacket (40 bytes, packed).
+ */
+struct DebugPacket {
+  byte id;                 ///< Packet id, always 102
+  uint32_t uptimeMs;       ///< millis() since the board started; a drop means the board rebooted
+  uint32_t loops;          ///< Completed loop() iterations
+  uint16_t rxOk;           ///< Valid packets received from KSP
+  uint16_t rxBadChecksum;  ///< Packets dropped for a wrong checksum
+  uint16_t rxBadSize;      ///< Packets dropped because the announced size did not match the struct
+  uint32_t txPackets;      ///< Packets sent to KSP (all kinds)
+  uint32_t loopMaxUs;      ///< Longest loop() iteration since the previous report, microseconds
+  uint32_t txMaxUs;        ///< Longest single packet send since the previous report, microseconds
+  uint32_t sinceRxMs;      ///< Milliseconds since the last valid packet from KSP
+  uint16_t resetCause;     ///< RA4M1 RSTSR0 (low byte) and RSTSR1 (high byte) read at boot: bit 0 power on, bit 8/9 watchdog, bit 10 software
+  byte flags;              ///< bit0 Connected, bit2 stage pin level now
+  int16_t rxAvail;         ///< Bytes waiting in the serial receive buffer
+  int16_t txFree;          ///< Free bytes in the serial transmit buffer
+  uint16_t a0;             ///< Raw reading of the throttle analog pin
+};
+static_assert(sizeof(DebugPacket) == 40, "DebugPacket struct size must be 40 bytes");
+
 #pragma pack(pop)
 
 HandShakePacket HPacket; ///< Reused for both the received probe and our reply
 VesselData VData;        ///< Latest telemetry received from KSP
 ControlPacket CPacket;   ///< Controls being built and sent to KSP
+DebugPacket DPacket;     ///< Diagnostics sent once per second (see debugReport())
+
+// Diagnostic counters, reported in DebugPacket
+uint32_t dbgLoops = 0, dbgTxPackets = 0, dbgLoopMaxUs = 0, dbgTxMaxUs = 0;
+uint16_t dbgRxOk = 0, dbgRxBadChecksum = 0, dbgRxBadSize = 0, dbgResetCause = 0;
+unsigned long dbgLastRxMs = 0, dbgLastReportMs = 0;
 
 /// @brief Arduino entry point: opens the serial link and initializes LEDs, packets and inputs.
 void setup(){
   Serial.begin(115200);
+  dbgResetCause = (uint16_t)(R_SYSTEM->RSTSR0 | ((R_SYSTEM->RSTSR1 & 0xFF) << 8));   // why the board last reset: bit0 power on, bit8 IWDT, bit9 WDT, bit10 software
   // Watchdog: if loop() ever stops running (for example a blocked USB write) the board resets itself
   // after WATCHDOGMS instead of staying frozen until someone presses RESET.
   WDT.begin(WATCHDOGMS);
@@ -235,7 +267,14 @@ void setup(){
 /// @brief Main loop: process incoming packets, then send our controls if it is time.
 void loop()
 {
+  static unsigned long loopStartUs = 0;
+  unsigned long nowUs = micros();
+  if (loopStartUs != 0 && (nowUs - loopStartUs) > dbgLoopMaxUs) dbgLoopMaxUs = nowUs - loopStartUs;
+  loopStartUs = nowUs;
+  dbgLoops++;
+
   WDT.refresh();
   input();
   output();
+  debugReport();
 }

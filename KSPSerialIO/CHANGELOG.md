@@ -1,5 +1,9 @@
 # Changelog
 
+* **0.19.3.9**: 20261103
+  The board sends a DebugPacket (id 102) once per second and the plugin writes it to KSP.log as a
+  `KSPSerialIO[BOARD]` line (uptime, loop and send times, packet counters, buffers, reset cause), plus a
+  `REBOOT detected` line when the uptime drops. The last line before a freeze shows what the firmware was doing.
 * **0.19.3.8**: 20261103
   The perf line gains `rx_bytes` and `rx_age_ms` (bytes received from the board in the window and time since
   the last chunk), so a board that stops talking can be told apart from a plugin that stops reading.

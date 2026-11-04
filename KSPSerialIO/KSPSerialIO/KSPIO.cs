@@ -154,6 +154,32 @@ namespace KSPSerialIO
     }
 
     /**
+     * @brief Board diagnostics sent from the controller once per second (packet id 102).
+     *
+     * Not applied to the game: each one is written to KSP.log as a KSPSerialIO[BOARD] line. Must match the
+     * @c DebugPacket struct in the Arduino sketch (40 bytes, packed).
+     */
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    public struct DebugPacket
+    {
+        public byte id;                ///< Packet id, always 102
+        public uint uptimeMs;          ///< Board uptime; a drop means the board rebooted
+        public uint loops;             ///< Completed firmware loop iterations
+        public ushort rxOk;            ///< Valid packets the board received from KSP
+        public ushort rxBadChecksum;   ///< Packets the board dropped for a wrong checksum
+        public ushort rxBadSize;       ///< Packets the board dropped for a wrong size
+        public uint txPackets;         ///< Packets the board sent
+        public uint loopMaxUs;         ///< Longest firmware loop since the last report, microseconds
+        public uint txMaxUs;           ///< Longest single send since the last report, microseconds
+        public uint sinceRxMs;         ///< Milliseconds since the board last received a valid packet
+        public ushort resetCause;      ///< reset status at boot (bits 8-9 = watchdog reset)
+        public byte flags;             ///< bit0 connected, bit2 stage pin level
+        public short rxAvail;          ///< Bytes waiting in the board's receive buffer
+        public short txFree;           ///< Free bytes in the board's transmit buffer
+        public ushort a0;              ///< Raw throttle analog reading
+    }
+
+    /**
      * @brief Controls sent from the controller to KSP (packet id 101).
      *
      * The layout must match the @c ControlPacket struct in the Arduino sketch (25 bytes, packed).
@@ -407,7 +433,8 @@ namespace KSPSerialIO
         private static volatile bool doSerialRead = true;
         private static Thread SerialThread;       ///< Background thread running SerialWorker
 
-        private const byte HSPid = 0, VDid = 1, Cid = 101; //hard coded values for packet IDS
+        private const byte HSPid = 0, VDid = 1, Cid = 101, DBGid = 102; //hard coded values for packet IDS
+        private static uint lastBoardUptime = 0;  ///< Uptime of the previous DebugPacket, to detect a board reboot
 
         /**
          * @brief Dispatches the packet waiting in NewPacketBuffer according to its id.
@@ -415,6 +442,33 @@ namespace KSPSerialIO
          * Called from Update() on the main thread, and from the worker thread while the handshake
          * is still pending. Takes SerialMutex and always releases it before running the handler.
          */
+        /// @brief Writes one DebugPacket from the board to KSP.log as a KSPSerialIO[BOARD] line (called by the reader thread).
+        private static void LogBoardDebug(int length)
+        {
+            try
+            {
+                if (length != Marshal.SizeOf(typeof(DebugPacket)))
+                {
+                    Debug.Log("KSPSerialIO[BOARD] debug packet with unexpected size " + length);
+                    return;
+                }
+                DebugPacket d = (DebugPacket)ByteArrayToStructure(PayloadBuffer, new DebugPacket());
+                if (lastBoardUptime != 0 && d.uptimeMs < lastBoardUptime)
+                    Debug.Log("KSPSerialIO[BOARD] REBOOT detected: uptime fell from " + lastBoardUptime + " to " + d.uptimeMs +
+                              " ms, reset cause 0x" + d.resetCause.ToString("X4") + (((d.resetCause >> 8) & 3) != 0 ? " (watchdog)" : ""));
+                lastBoardUptime = d.uptimeMs;
+                Debug.Log("KSPSerialIO[BOARD] uptime_ms=" + d.uptimeMs + " loops=" + d.loops + " rx_ok=" + d.rxOk +
+                          " rx_bad_cs=" + d.rxBadChecksum + " rx_bad_size=" + d.rxBadSize + " tx=" + d.txPackets +
+                          " loop_max_us=" + d.loopMaxUs + " tx_max_us=" + d.txMaxUs + " since_rx_ms=" + d.sinceRxMs +
+                          " reset=0x" + d.resetCause.ToString("X4") + " flags=0x" + d.flags.ToString("X2") +
+                          " rx_avail=" + d.rxAvail + " tx_free=" + d.txFree + " a0=" + d.a0);
+            }
+            catch (Exception e)
+            {
+                Debug.Log("KSPSerialIO[BOARD] could not decode a debug packet: " + e.Message);
+            }
+        }
+
         public static void InboundPacketHandler()
         {
             SerialMutex.WaitOne();
@@ -709,7 +763,12 @@ namespace KSPSerialIO
                         }
                         break;
                     case ReceiveStates.CS:
-                        if (CompareChecksum(ReadBuffer[x]))
+                        if (CompareChecksum(ReadBuffer[x]) && PayloadBuffer[0] == DBGid)
+                        {
+                            // Diagnostics never go through NewPacketBuffer: they must not overwrite a pending ControlPacket
+                            LogBoardDebug(CurrentBytesRead);
+                        }
+                        else if (CompareChecksum(ReadBuffer[x]))
                         {
                             SerialMutex.WaitOne();
                             Buffer.BlockCopy(PayloadBuffer, 0, NewPacketBuffer, 0, CurrentBytesRead);

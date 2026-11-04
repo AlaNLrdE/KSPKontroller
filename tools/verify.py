@@ -63,7 +63,8 @@ def check_protocol_sizes(ctx):
     """Struct sizes asserted in the sketch must equal the constants used by the board test script."""
     ino = sketch_text()
     test = read(os.path.join(ROOT, "tools", "test_arduino.py"))
-    for struct, const in (("VesselData", "VESSEL_DATA_SIZE"), ("ControlPacket", "CONTROL_PACKET_SIZE")):
+    for struct, const in (("VesselData", "VESSEL_DATA_SIZE"), ("ControlPacket", "CONTROL_PACKET_SIZE"),
+                          ("DebugPacket", "DEBUG_PACKET_SIZE")):
         a = re.search(r"static_assert\(sizeof\(%s\)\s*==\s*(\d+)" % struct, ino)
         t = re.search(r"%s\s*=\s*(\d+)" % const, test)
         if not a or not t:
@@ -288,6 +289,21 @@ def check_log(ctx):
             report("WARN", "log: serial write time", "max avg write %.1f ms (background thread, so it does not cost frames)" % max(wavg))
     else:
         report("WARN", "log: perf lines", "none (PerfLog=0, or a short session)")
+    board = [l for l in plugin if "KSPSerialIO[BOARD] uptime_ms=" in l]
+    if board:
+        def bvals(key):
+            return [int(m.group(1)) for l in board for m in [re.search(r"\b%s=(\d+)" % key, l)] if m]
+        reboots = [l for l in plugin if "KSPSerialIO[BOARD] REBOOT" in l]
+        report("WARN" if reboots else "PASS", "log: board reboots", ("%d, first: %s" % (len(reboots), reboots[0][:140])) if reboots else "none")
+        bad = bvals("rx_bad_cs")[-1:] + bvals("rx_bad_size")[-1:]
+        report("WARN" if any(bad) else "PASS", "log: board dropped packets", "bad checksum/size at the end: %s" % bad)
+        loop_us, tx_us = bvals("loop_max_us"), bvals("tx_max_us")
+        report("WARN" if (loop_us and max(loop_us) > 100000) or (tx_us and max(tx_us) > 50000) else "PASS",
+               "log: board loop/send time", "max loop %d us, max send %d us" % (max(loop_us or [0]), max(tx_us or [0])))
+        last = bvals("uptime_ms")[-1]
+        report("PASS", "log: board diagnostics", "%d reports, last uptime %d ms, last: %s" % (len(board), last, board[-1].split("] ", 1)[-1][:150]))
+    elif perf:
+        report("WARN", "log: board diagnostics", "no KSPSerialIO[BOARD] lines (old firmware, or no link)")
     ctrl = [l for l in plugin if "KSPSerialIO[CTRL]" in l]
     report("PASS", "log: stage presses", "%d" % len(ctrl))
 
@@ -313,7 +329,7 @@ def check_board(ctx):
     cmd = [sys.executable, os.path.join(ROOT, "tools", "test_arduino.py")] + ([port] if port else [])
     p = subprocess.run(cmd, capture_output=True, text=True)
     out = p.stdout
-    for name in ("handshake", "telemetry", "idle timeout"):
+    for name in ("handshake", "telemetry", "debug", "idle timeout"):
         m = re.search(r"\[(PASS|FAIL)\] %s: (.*)" % name, out)
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 

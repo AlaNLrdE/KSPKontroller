@@ -28,6 +28,8 @@ ID_VESSEL_DATA = 1
 ID_CONTROL = 101
 VESSEL_DATA_SIZE = 214
 CONTROL_PACKET_SIZE = 25
+ID_DEBUG = 102
+DEBUG_PACKET_SIZE = 40
 
 # USB vendor ids tried first (Arduino SA, Arduino LLC)
 ARDUINO_VIDS = (0x2341, 0x2A03)
@@ -120,6 +122,25 @@ def test_telemetry(ser):
     return True, "%d ControlPackets in 1 s, %d bad frames, throttle %d" % (len(controls), bad, throttle)
 
 
+def test_debug(ser):
+    """The board must send a 40-byte DebugPacket about once per second while it is being fed telemetry."""
+    ser.reset_input_buffer()
+    vessel = frame([ID_VESSEL_DATA] + [0] * (VESSEL_DATA_SIZE - 1))
+    debug = []
+    end = time.monotonic() + 3.0
+    while time.monotonic() < end:
+        ser.write(vessel)
+        frames, _ = read_frames(ser, 0.2)
+        debug += [p for p in frames if p[0] == ID_DEBUG]
+    if not debug:
+        return False, "no DebugPacket in 3 s (old firmware?)"
+    wrong = [p for p in debug if len(p) != DEBUG_PACKET_SIZE]
+    if wrong:
+        return False, "DebugPacket has %d bytes, the plugin expects %d" % (len(wrong[0]), DEBUG_PACKET_SIZE)
+    uptime = int.from_bytes(debug[-1][1:5], "little")
+    return True, "%d DebugPackets in 3 s, uptime %d ms" % (len(debug), uptime)
+
+
 def test_idle(ser):
     # The firmware drops to idle after IDLETIMER (2000 ms) without a valid packet
     time.sleep(2.6)
@@ -161,7 +182,7 @@ def main():
 
             print("Controller found on %s" % device)
             failed = False
-            for name, test in (("telemetry", test_telemetry), ("idle timeout", test_idle)):
+            for name, test in (("telemetry", test_telemetry), ("debug", test_debug), ("idle timeout", test_idle)):
                 ok, detail = test(ser)
                 print("  [%s] %s: %s" % ("PASS" if ok else "FAIL", name, detail))
                 failed = failed or not ok

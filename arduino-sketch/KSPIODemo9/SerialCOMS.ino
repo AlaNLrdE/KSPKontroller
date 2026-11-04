@@ -52,6 +52,7 @@ boolean KSPBoardReceiveData() {
     //make sure the binary structs on both Arduinos are the same size.
     if(rx_len != structSize){
       rx_len = 0;
+      dbgRxBadSize++;
       return false;
     }
   }
@@ -75,10 +76,13 @@ boolean KSPBoardReceiveData() {
         memcpy(address,buffer,structSize);
         rx_len = 0;
         rx_array_inx = 1;
+        dbgRxOk++;
+        dbgLastRxMs = millis();
         return true;
       }
       else{
         //failed checksum, need to clear this out anyway
+        dbgRxBadChecksum++;
         rx_len = 0;
         rx_array_inx = 1;
         return false;
@@ -95,6 +99,7 @@ boolean KSPBoardReceiveData() {
  * @param len Size of the struct in bytes.
  */
 void KSPBoardSendData(uint8_t * address, uint8_t len){
+  unsigned long sendStartUs = micros();
   uint8_t CS = len;
   Serial.write(0xBE);
   Serial.write(0xEF);
@@ -106,4 +111,8 @@ void KSPBoardSendData(uint8_t * address, uint8_t len){
   }
 
   Serial.write(CS);
+
+  dbgTxPackets++;
+  unsigned long sendUs = micros() - sendStartUs;
+  if (sendUs > dbgTxMaxUs) dbgTxMaxUs = sendUs;
 }
