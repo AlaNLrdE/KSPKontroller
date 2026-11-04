@@ -37,7 +37,7 @@
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
 
-#define LINKRESETMS 12000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
+#define LINKRESETMS 30000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range

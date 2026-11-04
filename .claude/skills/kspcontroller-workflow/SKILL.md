@@ -30,7 +30,10 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 - The UNO R4 only transmits while the host asserts DTR, and only answers at 115200 baud (0.19.3.1).
 - The board froze three times with USB still enumerated and Windows seeing COM5; once the staging was *not* the
   trigger (silence 10 s before it). The 2 s hardware watchdog does not fire if `loop()` keeps running with a wedged
-  USB stack, hence the 20 s (later 12 s) link reset and the plugin reconnect supervisor.
+  USB stack, hence the link reset and the plugin reconnect supervisor. The link reset must stay above the longest scene
+  load: 12 s reset the board in the middle of a flight scene load (the plugin sends nothing while loading); it is 30 s now.
+- Verified in a real flight (session_reconnect1): unplugging the USB for 8 s mid-flight, the supervisor logged
+  `lost: send failures`, searched 5 times and reconnected on COM5 without reloading the scene, then 9.5 minutes of flight with no loss.
 - A floating analog input (no potentiometer) read ~18.7 % and, with `ThrottleEnable=2`, overrode a cut throttle (and MechJeb's).
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.

@@ -178,8 +178,10 @@ def check_reconnect_guards(ctx):
     m = re.search(r"#define\s+LINKRESETMS\s+(\d+)", ino)
     if not m:
         report("FAIL", "reconnect: sketch LINKRESETMS", "LINKRESETMS not defined in the sketch")
-    elif int(m.group(1)) > 15000:
-        report("FAIL", "reconnect: sketch LINKRESETMS", "%s ms is above 15000: the board stays wedged too long" % m.group(1))
+    elif int(m.group(1)) > 45000:
+        report("FAIL", "reconnect: sketch LINKRESETMS", "%s ms is above 45000: the board stays wedged too long" % m.group(1))
+    elif int(m.group(1)) < 20000:
+        report("FAIL", "reconnect: sketch LINKRESETMS", "%s ms is below 20000: a scene load (the plugin sends nothing) resets the board" % m.group(1))
     else:
         report("PASS", "reconnect: sketch LINKRESETMS", "%s ms" % m.group(1))
     wdt = re.search(r"\bWDT\.begin\(", ino)

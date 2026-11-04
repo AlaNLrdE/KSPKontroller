@@ -105,7 +105,7 @@ The plugin can reconnect at any time (see :doc:`plugin`). What the firmware does
 
 * Any valid packet, and a handshake in particular, marks the board as connected again, so a reconnecting plugin
   only has to repeat the handshake.
-* If it was connected before and now hears nothing for ``LINKRESETMS`` (12000 ms), it resets itself with
+* If it was connected before and now hears nothing for ``LINKRESETMS`` (30000 ms), it resets itself with
   ``NVIC_SystemReset()``. A softer USB restart is not possible: on the renesas_uno core 1.6.0 ``Serial.end()``
   is an empty function and ``Serial.begin()`` returns at once when the port is already running. The hardware
   watchdog stays active.
