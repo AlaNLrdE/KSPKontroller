@@ -392,6 +392,8 @@ namespace KSPSerialIO
         public static Boolean DisplayFound = false;   ///< True once a controller answered the handshake
         public static Boolean StageSeeded = false;   ///< False until the first ControlPacket of a flight has seeded the stage button state
         public static Boolean ControlReceived = false;///< Set when a new ControlPacket was decoded, cleared by KSPSerialIO::Update
+        public static volatile int StageRequestTick = 0;   ///< Environment.TickCount of an unconsumed stage press, 0 when none
+        private static Boolean lastRxStage = false;        ///< STAGE bit of the previous ControlPacket (edge detection at receive time)
 
         public static VesselData VData;           ///< Telemetry being filled and sent to the controller
         public static ControlPacket CPacket;      ///< Last raw ControlPacket received
@@ -987,8 +989,19 @@ namespace KSPSerialIO
             {
                 // The first packet after connecting only seeds the state: a button already down must not stage
                 VControlsOld.Stage = VControls.Stage;
+                lastRxStage = VControls.Stage;
+                StageRequestTick = 0;
                 StageSeeded = true;
             }
+            else if (VControls.Stage && !lastRxStage)
+            {
+                // Latch the press when it arrives: the board holds the bit for only 150 ms, which a slow or stalled game
+                // frame could skip if the edge were only looked for once per frame.
+                int t = Environment.TickCount;
+                StageRequestTick = t == 0 ? 1 : t;
+                Debug.Log("KSPSerialIO[CTRL] stage press received t=" + DateTime.Now.ToString("HH:mm:ss.fff"));
+            }
+            lastRxStage = VControls.Stage;
             VControls.Pitch = (float)CPacket.Pitch / 1000.0F;
             VControls.Roll = (float)CPacket.Roll / 1000.0F;
             VControls.Yaw = (float)CPacket.Yaw / 1000.0F;
@@ -1100,6 +1113,7 @@ namespace KSPSerialIO
             SendFailures = 0;
             lastBoardUptime = 0;         // a new board uptime is not a reboot
             StageSeeded = false;         // the first ControlPacket only seeds the stage button, a held button must not stage
+            StageRequestTick = 0;
             ControlReceived = false;
             lock (sendLock) { pendingFrame = null; }
             LinkUp = true;
@@ -1658,6 +1672,7 @@ namespace KSPSerialIO
                 ActiveVessel = FlightGlobals.ActiveVessel;
                 ActiveVessel.OnPostAutopilotUpdate += AxisInput;
                 KSPSerialPort.StageSeeded = false;
+                KSPSerialPort.StageRequestTick = 0;
 
                 //sync inputs at start
                 SafeSetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
@@ -2038,19 +2053,27 @@ namespace KSPSerialIO
                         KSPSerialPort.VControlsOld.Abort = KSPSerialPort.VControls.Abort;
                     }
 
-                    if (KSPSerialPort.VControls.Stage != KSPSerialPort.VControlsOld.Stage)
+                    // Same as the space bar: only ActivateNextStage. The Stage action group is deliberately
+                    // not toggled, so no other mod sees extra group events (e.g. MechJeb's ascent autopilot).
+                    // The press was latched when its packet arrived; one older than 1 s is stale and dropped.
+                    int stageTick = KSPSerialPort.StageRequestTick;
+                    if (stageTick != 0)
                     {
-                        // Same as the space bar: only ActivateNextStage. The Stage action group is deliberately
-                        // not toggled, so no other mod sees extra group events (e.g. MechJeb's ascent autopilot).
-                        if (KSPSerialPort.VControls.Stage)
+                        KSPSerialPort.StageRequestTick = 0;
+                        int age = Environment.TickCount - stageTick;
+                        if (age >= 0 && age <= 1000)
                         {
                             Debug.Log("KSPSerialIO[CTRL] stage button: stage " + StageManager.CurrentStage +
                                       " -> next, vessel throttle=" + FlightInputHandler.state.mainThrottle.ToString("F2") +
-                                      " t=" + DateTime.Now.ToString("HH:mm:ss.fff"));
+                                      " age_ms=" + age + " t=" + DateTime.Now.ToString("HH:mm:ss.fff"));
                             StageManager.ActivateNextStage();
                         }
-                        KSPSerialPort.VControlsOld.Stage = KSPSerialPort.VControls.Stage;
+                        else
+                        {
+                            Debug.Log("KSPSerialIO[CTRL] stage press dropped, stale age_ms=" + age);
+                        }
                     }
+                    KSPSerialPort.VControlsOld.Stage = KSPSerialPort.VControls.Stage;
 
                     //================ control groups
 

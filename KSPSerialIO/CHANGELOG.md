@@ -1,5 +1,10 @@
 # Changelog
 
+* **0.19.3.12**: 20261108
+  Stage button hardened. The press is latched when its ControlPacket arrives (the board holds the bit only 150 ms)
+  and applied on the next game frame, so a slow or stalled frame cannot skip it; a press older than 1 s is dropped
+  as stale. New log lines `KSPSerialIO[CTRL] stage press received` (packet arrived) and, when applied,
+  `stage button: ... age_ms=N`; a press that arrives but is never applied is now visible in the log.
 * **0.19.3.11**: 20261103
   Automatic reconnection. A link supervisor thread (started with the flight scene, stopped on scene unload)
   declares the link lost when the writer fails 3 times, when the board sends nothing for 3 s, or when the port
