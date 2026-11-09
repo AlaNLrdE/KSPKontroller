@@ -1,5 +1,15 @@
 # Changelog
 
+* **0.19.3.13**: 20261108
+  Fix a game crash (UnityPlayer.dll access violation in Mesh.Internal_Create <- TextMeshProUGUI.Awake <-
+  DebugScreenConsole.OnMemoryLogUpdated <- Debug.Log <- KSPSerialPort.LogBoardDebug / SerialWorker, 10 of 10 Unity
+  crash reports). Root cause: KSP's in-game debug console creates Unity UI objects for every log line, which is
+  illegal off the main thread, and the plugin called Debug.Log from its serial reader thread (and the supervisor and
+  sender threads). All plugin logging now goes through `KSPLogQueue.Log`: on the main thread it writes directly, on
+  any other thread it enqueues the line (bounded to 2000, drops the oldest and then logs a "dropped n lines" warning)
+  and the main thread drains up to 50 lines per frame from Update and flushes the queue on scene unload and quit.
+  Tags and formats are unchanged; worker-thread lines may appear a frame or so late. New `./ci verify` check
+  `no direct Debug.Log`.
 * **0.19.3.12**: 20261108
   Stage button hardened. The press is latched when its ControlPacket arrives (the board holds the bit only 150 ms)
   and applied on the next game frame, so a slow or stalled frame cannot skip it; a press older than 1 s is dropped

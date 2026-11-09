@@ -139,6 +139,23 @@ def check_config_defaults(ctx):
         report("PASS", "config ThrottleEnable", "mode %s" % (thr.group(1) if thr else "?"))
 
 
+def check_no_direct_debug_log(ctx):
+    """Debug.Log from a worker thread crashes KSP's debug console (Unity UI off the main thread)."""
+    cs = read(CS)
+    start = cs.find("public static class KSPLogQueue")
+    end = cs.find("[KSPAddon", start) if start >= 0 else -1
+    if start < 0 or end < 0:
+        report("FAIL", "no direct Debug.Log", "KSPLogQueue class not found in KSPIO.cs")
+        return
+    rest = cs[:start] + cs[end:]
+    hits = [i + 1 for i, line in enumerate(rest.splitlines())
+            if re.search(r"Debug\.Log(Warning|Error|Format|Exception)?\(", line) and not line.lstrip().startswith(("//", "*", "///"))]
+    if hits:
+        report("FAIL", "no direct Debug.Log", "Debug.Log outside KSPLogQueue (unsafe from worker threads), lines %s" % hits[:10])
+    else:
+        report("PASS", "no direct Debug.Log", "all logging goes through KSPLogQueue")
+
+
 def check_plugin_safety(ctx):
     """Source-level guards for bugs we already had."""
     cs = read(CS)
@@ -406,7 +423,7 @@ def check_board(ctx):
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
-CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety,
+CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
           check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_git]
 
 

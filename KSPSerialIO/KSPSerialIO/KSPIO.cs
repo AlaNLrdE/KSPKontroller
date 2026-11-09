@@ -287,6 +287,89 @@ namespace KSPSerialIO
      *  - 2: use KSP's value unless it is zero, then use the controller's
      *  - 3: use the controller's value unless it is zero, then use KSP's
      */
+    /**
+     * @brief Thread safe logging: worker threads must never call Debug.Log.
+     *
+     * KSP's in-game debug console creates Unity UI objects (TextMeshPro) for every log line, which is illegal
+     * off the main thread and crashed the game in UnityPlayer (Mesh.Internal_Create) when SerialWorker or
+     * LogBoardDebug logged. Every log call of the plugin goes through Log(): on the main thread it writes
+     * directly (after draining older queued lines, to keep the order); on any other thread it enqueues the line
+     * in a bounded queue (drop oldest, with a "dropped" line) that the main thread drains with Drain() from
+     * Update (capped per frame) and flushes completely with Flush() on scene unload and quit.
+     */
+    public static class KSPLogQueue
+    {
+        private const int MaxQueued = 2000;     ///< Queue bound: the oldest lines are dropped beyond this
+        private const int MaxPerFrame = 50;     ///< Lines written per Drain() call
+        private static readonly Queue<KeyValuePair<LogType, string>> queue = new Queue<KeyValuePair<LogType, string>>();
+        private static readonly object gate = new object();
+        private static int mainThreadId = -1;
+        private static int dropped = 0;
+
+        /// @brief Records the calling thread as the Unity main thread. Call from Awake of an addon.
+        public static void InitMainThread() { mainThreadId = Thread.CurrentThread.ManagedThreadId; }
+
+        private static bool OnMainThread() { return mainThreadId == Thread.CurrentThread.ManagedThreadId; }
+
+        /// @brief Logs a line, safe from any thread.
+        public static void Log(string msg) { Write(LogType.Log, msg); }
+        /// @brief Logs a warning, safe from any thread.
+        public static void LogWarning(string msg) { Write(LogType.Warning, msg); }
+        /// @brief Logs an error, safe from any thread.
+        public static void LogError(string msg) { Write(LogType.Error, msg); }
+
+        private static void Write(LogType type, string msg)
+        {
+            if (OnMainThread())
+            {
+                Drain(MaxPerFrame);
+                Emit(type, msg);
+                return;
+            }
+            lock (gate)
+            {
+                if (queue.Count >= MaxQueued) { queue.Dequeue(); dropped++; }
+                queue.Enqueue(new KeyValuePair<LogType, string>(type, msg));
+            }
+        }
+
+        private static void Emit(LogType type, string msg)
+        {
+            if (type == LogType.Error) Debug.LogError(msg);
+            else if (type == LogType.Warning) Debug.LogWarning(msg);
+            else Debug.Log(msg);
+        }
+
+        /// @brief Main thread only: writes up to max queued lines (and a dropped-count line if any were lost).
+        public static void Drain(int max)
+        {
+            if (!OnMainThread()) return;
+            for (int i = 0; i < max; i++)
+            {
+                KeyValuePair<LogType, string> item;
+                int lost = 0;
+                lock (gate)
+                {
+                    if (dropped > 0) { lost = dropped; dropped = 0; }
+                    if (lost == 0)
+                    {
+                        if (queue.Count == 0) return;
+                        item = queue.Dequeue();
+                    }
+                    else item = new KeyValuePair<LogType, string>(LogType.Warning, "");
+                }
+                if (lost > 0) Emit(LogType.Warning, "KSPSerialIO: log queue overflow, dropped " + lost + " lines");
+                else Emit(item.Key, item.Value);
+            }
+        }
+
+        /// @brief Main thread only: drains per frame (called from Update).
+        public static void Drain() { Drain(MaxPerFrame); }
+
+        /// @brief Main thread only: writes everything queued (scene unload, quit).
+        public static void Flush() { Drain(int.MaxValue); }
+    }
+
     [KSPAddon(KSPAddon.Startup.MainMenu, false)]
     public class SettingsNStuff : MonoBehaviour
     {
@@ -320,6 +403,7 @@ namespace KSPSerialIO
         /// @brief Reads every setting from config.xml into the static fields.
         void Awake()
         {
+            KSPLogQueue.InitMainThread();
             //cfg["refresh"] = 0.08;
             //cfg["DefaultPort"] = "COM1";
             //cfg["HandshakeDelay"] = 2500;
@@ -451,15 +535,15 @@ namespace KSPSerialIO
             {
                 if (length != Marshal.SizeOf(typeof(DebugPacket)) + 12)   // the struct plus the 12-byte LED matrix frame
                 {
-                    Debug.Log("KSPSerialIO[BOARD] debug packet with unexpected size " + length);
+                    KSPLogQueue.Log("KSPSerialIO[BOARD] debug packet with unexpected size " + length);
                     return;
                 }
                 DebugPacket d = (DebugPacket)ByteArrayToStructure(PayloadBuffer, new DebugPacket());
                 if (lastBoardUptime != 0 && d.uptimeMs < lastBoardUptime)
-                    Debug.Log("KSPSerialIO[BOARD] REBOOT detected: uptime fell from " + lastBoardUptime + " to " + d.uptimeMs +
+                    KSPLogQueue.Log("KSPSerialIO[BOARD] REBOOT detected: uptime fell from " + lastBoardUptime + " to " + d.uptimeMs +
                               " ms, reset cause 0x" + d.resetCause.ToString("X4") + (((d.resetCause >> 8) & 3) != 0 ? " (watchdog)" : ""));
                 lastBoardUptime = d.uptimeMs;
-                Debug.Log("KSPSerialIO[BOARD] uptime_ms=" + d.uptimeMs + " loops=" + d.loops + " rx_ok=" + d.rxOk +
+                KSPLogQueue.Log("KSPSerialIO[BOARD] uptime_ms=" + d.uptimeMs + " loops=" + d.loops + " rx_ok=" + d.rxOk +
                           " rx_bad_cs=" + d.rxBadChecksum + " rx_bad_size=" + d.rxBadSize + " tx=" + d.txPackets +
                           " loop_max_us=" + d.loopMaxUs + " tx_max_us=" + d.txMaxUs + " since_rx_ms=" + d.sinceRxMs +
                           " reset=0x" + d.resetCause.ToString("X4") + " flags=0x" + d.flags.ToString("X2") +
@@ -468,7 +552,7 @@ namespace KSPSerialIO
             }
             catch (Exception e)
             {
-                Debug.Log("KSPSerialIO[BOARD] could not decode a debug packet: " + e.Message);
+                KSPLogQueue.Log("KSPSerialIO[BOARD] could not decode a debug packet: " + e.Message);
             }
         }
 
@@ -496,7 +580,7 @@ namespace KSPSerialIO
                     break;
                 default:
                     SerialMutex.ReleaseMutex();
-                    Debug.Log("KSPSerialIO: Packet id unimplementd");
+                    KSPLogQueue.Log("KSPSerialIO: Packet id unimplementd");
                     break;
             }
 
@@ -581,7 +665,7 @@ namespace KSPSerialIO
             }
             catch (Exception e)
             {
-                Debug.Log("KSPSerialIO: could not queue the packet: " + e.Message);
+                KSPLogQueue.Log("KSPSerialIO: could not queue the packet: " + e.Message);
             }
         }
 
@@ -623,11 +707,11 @@ namespace KSPSerialIO
                 catch (Exception e)
                 {
                     SendFailures++;
-                    Debug.Log("KSPSerialIO: send failed (" + SendFailures + "/" + MaxSendFailures + "): " + e.Message);
+                    KSPLogQueue.Log("KSPSerialIO: send failed (" + SendFailures + "/" + MaxSendFailures + "): " + e.Message);
                     if (SendFailures >= MaxSendFailures)
                     {
                         LinkFailed = true;
-                        Debug.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
+                        KSPLogQueue.Log("KSPSerialIO: too many send failures, closing " + PortNumber + " and stopping telemetry");
                         PortLog("closing port after repeated send failures");
                         try { p.Close(); } catch (Exception) { }
                     }
@@ -717,6 +801,7 @@ namespace KSPSerialIO
         /// @brief Unity per-frame callback: processes a packet completed by the worker thread, if any.
         private void Update()
         {
+            KSPLogQueue.Drain();
             if (NewPacketFlag)
             {
                 InboundPacketHandler();
@@ -734,7 +819,7 @@ namespace KSPSerialIO
             ReaderState st = (ReaderState)stateObj;
             SerialPort p = st.port;
             byte[] buffer = new byte[MaxPayloadSize + 4];
-            Debug.Log("KSPSerialIO: Serial Worker thread started");
+            KSPLogQueue.Log("KSPSerialIO: Serial Worker thread started");
             while (doSerialRead && !st.stop)
             {
                 try
@@ -755,20 +840,20 @@ namespace KSPSerialIO
                 catch (InvalidOperationException)
                 {
                     if (st.stop) break;
-                    Debug.Log("KSPSerialIO: Trying to read port that isn't open. Sleeping");
+                    KSPLogQueue.Log("KSPSerialIO: Trying to read port that isn't open. Sleeping");
                     for (int i = 0; i < 5 && !st.stop; i++) Thread.Sleep(100);
                 }
                 catch (Exception exc)
                 {
                     // Never let the parser die silently: reset it and keep reading
                     // Closing the port aborts the read that is pending: expected, no stack trace needed
-                    Debug.Log("KSPSerialIO: SerialWorker read ended: " + exc.GetType().Name + ": " + exc.Message);
+                    KSPLogQueue.Log("KSPSerialIO: SerialWorker read ended: " + exc.GetType().Name + ": " + exc.Message);
                     if (st.stop) break;
                     CurrentState = ReceiveStates.FIRSTHEADER;
                     Thread.Sleep(100);
                 }
             }
-            Debug.Log("KSPSerialIO: Serial worker thread shutting down.");
+            KSPLogQueue.Log("KSPSerialIO: Serial worker thread shutting down.");
         }
 
         /**
@@ -923,6 +1008,7 @@ namespace KSPSerialIO
          */
         void Awake()
         {
+            KSPLogQueue.InitMainThread();
             StopSupervisor();   // in case the previous scene did not clean up
             // Static state survives scene changes: give every flight a clean link
             LinkFailed = false;
@@ -931,7 +1017,7 @@ namespace KSPSerialIO
 
             if (DisplayFound)
             {
-                Debug.Log("KSPSerialIO: running...");
+                KSPLogQueue.Log("KSPSerialIO: running...");
                 Begin();
                 MarkLinkUp(StartGraceMs);   // the port is opened by KSPSerialIO.Start, which takes a few seconds
             }
@@ -939,9 +1025,9 @@ namespace KSPSerialIO
             {
                 String version = System.Reflection.Assembly.GetExecutingAssembly()
                     .GetName().Version.ToString();
-                Debug.Log(String.Format("KSPSerialIO: Version {0}", version));
-                Debug.Log("KSPSerialIO: Getting serial ports...");
-                Debug.Log(String.Format("KSPSerialIO: Output packet size: {0}/{1}",
+                KSPLogQueue.Log(String.Format("KSPSerialIO: Version {0}", version));
+                KSPLogQueue.Log("KSPSerialIO: Getting serial ports...");
+                KSPLogQueue.Log(String.Format("KSPSerialIO: Output packet size: {0}/{1}",
                                         Marshal.SizeOf(VData).ToString(),
                                         MaxPayloadSize));
                 initializeDataPackets();
@@ -949,15 +1035,15 @@ namespace KSPSerialIO
                 try
                 {
                     List<string> candidates = BuildCandidates();
-                    Debug.Log(String.Format("KSPSerialIO: Found {0} serial ports: {1}", candidates.Count, String.Join(",", candidates.ToArray())));
+                    KSPLogQueue.Log(String.Format("KSPSerialIO: Found {0} serial ports: {1}", candidates.Count, String.Join(",", candidates.ToArray())));
                     if (TryConnect(candidates, SettingsNStuff.HandshakeDelay, ReplyWaitMs, -1))
                     {
-                        Debug.Log("KSPSerialIO-hp: found KSP Display at " + PortNumber);
+                        KSPLogQueue.Log("KSPSerialIO-hp: found KSP Display at " + PortNumber);
                         // The first Update (telemetry) may come much later (vessel load): no loss detection meanwhile
                         Interlocked.Exchange(ref quietUntilTicks, NowTicks() + (long)StartGraceMs * System.Diagnostics.Stopwatch.Frequency / 1000);
                     }
                     else
-                        Debug.Log("KSPSerialIO-hp: KSP Display not found, the link supervisor keeps searching");
+                        KSPLogQueue.Log("KSPSerialIO-hp: KSP Display not found, the link supervisor keeps searching");
                 }
                 catch (Exception e)
                 {
@@ -970,7 +1056,7 @@ namespace KSPSerialIO
         /// @brief Logs the handshake reply received from the controller.
         private static void HandShake()
         {
-            Debug.Log("KSPSerialIO: Handshake received - " + HPacket.M1.ToString() + HPacket.M2.ToString() + HPacket.M3.ToString());
+            KSPLogQueue.Log("KSPSerialIO: Handshake received - " + HPacket.M1.ToString() + HPacket.M2.ToString() + HPacket.M3.ToString());
         }
 
         /// @brief Decodes the latest ControlPacket into VControls and flags ControlReceived.
@@ -1020,7 +1106,7 @@ namespace KSPSerialIO
             }
 
             ControlReceived = true;
-            //Debug.Log("KSPSerialIO: ControlPacket received");
+            //KSPLogQueue.Log("KSPSerialIO: ControlPacket received");
         }
 
         /// @brief Returns bit @p n of @p x.
@@ -1038,13 +1124,13 @@ namespace KSPSerialIO
         /// @brief Logs that a packet type has no handler.
         private static void Unimplemented()
         {
-            Debug.Log("KSPSerialIO: Packet id unimplemented");
+            KSPLogQueue.Log("KSPSerialIO: Packet id unimplemented");
         }
 
         /// @brief Debug helper: logs the number of bytes waiting in the port's input buffer.
         private static void debug()
         {
-            Debug.Log(Port.BytesToRead.ToString() + "BTR");
+            KSPLogQueue.Log(Port.BytesToRead.ToString() + "BTR");
         }
 
 
@@ -1159,7 +1245,7 @@ namespace KSPSerialIO
                     SerialCOMSKey.Close();
                 }
             }
-            catch (Exception e) { Debug.Log("KSPSerialIO[LINK] could not read the port list from the registry: " + e.Message); }
+            catch (Exception e) { KSPLogQueue.Log("KSPSerialIO[LINK] could not read the port list from the registry: " + e.Message); }
 
             if (!listed)
             {
@@ -1169,7 +1255,7 @@ namespace KSPSerialIO
                         if (n.IndexOf("Bth", StringComparison.OrdinalIgnoreCase) < 0 && !present.Contains(n)) present.Add(n);
                     listed = true;
                 }
-                catch (Exception e) { Debug.Log("KSPSerialIO[LINK] could not list the serial ports: " + e.Message); }
+                catch (Exception e) { KSPLogQueue.Log("KSPSerialIO[LINK] could not list the serial ports: " + e.Message); }
             }
 
             List<string> ordered = new List<string>();
@@ -1221,7 +1307,7 @@ namespace KSPSerialIO
                     if (Cancelled(gen)) return false;
                     DisplayFound = false;
                     p.Open();
-                    Debug.Log("KSPSerialIO[LINK] candidate " + name + ": opened");
+                    KSPLogQueue.Log("KSPSerialIO[LINK] candidate " + name + ": opened");
 
                     if (Cancelled(gen)) { try { p.Close(); p.Dispose(); } catch (Exception) { } return false; }
                     CurrentState = ReceiveStates.FIRSTHEADER;
@@ -1233,7 +1319,7 @@ namespace KSPSerialIO
                     if (SettingsNStuff.HandshakeDisable == 1)
                     {
                         ok = !Cancelled(gen);
-                        Debug.Log("KSPSerialIO[LINK] candidate " + name + ": handshake disabled, trusting the port");
+                        KSPLogQueue.Log("KSPSerialIO[LINK] candidate " + name + ": handshake disabled, trusting the port");
                     }
                     else
                     {
@@ -1246,13 +1332,13 @@ namespace KSPSerialIO
                             waited += 20;
                         }
                         ok = DisplayFound && !Cancelled(gen);
-                        Debug.Log("KSPSerialIO[LINK] candidate " + name + ": " + (ok ? "handshake ok" : "no handshake reply"));
+                        KSPLogQueue.Log("KSPSerialIO[LINK] candidate " + name + ": " + (ok ? "handshake ok" : "no handshake reply"));
                     }
                 }
                 catch (Exception e)
                 {
-                    if (st == null) Debug.Log("KSPSerialIO[LINK] candidate " + name + ": open failed: " + e.Message);
-                    else Debug.Log("KSPSerialIO[LINK] candidate " + name + ": handshake failed: " + e.Message);
+                    if (st == null) KSPLogQueue.Log("KSPSerialIO[LINK] candidate " + name + ": open failed: " + e.Message);
+                    else KSPLogQueue.Log("KSPSerialIO[LINK] candidate " + name + ": handshake failed: " + e.Message);
                     ok = false;
                 }
 
@@ -1331,7 +1417,7 @@ namespace KSPSerialIO
         private static void SupervisorWorker(object genObj)
         {
             int gen = (int)genObj;
-            Debug.Log("KSPSerialIO[LINK] supervisor started, state=" + LinkState + " port=" + PortNumber);
+            KSPLogQueue.Log("KSPSerialIO[LINK] supervisor started, state=" + LinkState + " port=" + PortNumber);
             long downSince = 0;
             int attempts = 0;
             while (!Cancelled(gen))
@@ -1343,7 +1429,7 @@ namespace KSPSerialIO
                         string reason = CheckLink();
                         if (reason == null) { supStop.WaitOne(200, false); continue; }
                         if (Cancelled(gen)) break;
-                        Debug.Log("KSPSerialIO[LINK] lost: " + reason + " | port=" + PortNumber);
+                        KSPLogQueue.Log("KSPSerialIO[LINK] lost: " + reason + " | port=" + PortNumber);
                         LinkUp = false;          // the main thread stops sending and applying controls from here on
                         DisplayFound = false;
                         downSince = NowTicks();
@@ -1359,12 +1445,12 @@ namespace KSPSerialIO
                     if (Cancelled(gen)) break;
                     attempts++;
                     List<string> candidates = BuildCandidates();
-                    Debug.Log("KSPSerialIO[LINK] searching attempt " + attempts + ": " +
+                    KSPLogQueue.Log("KSPSerialIO[LINK] searching attempt " + attempts + ": " +
                               (candidates.Count > 0 ? String.Join(",", candidates.ToArray()) : "(no serial ports)"));
                     if (TryConnect(candidates, SettleMs, ReplyWaitMs, gen))
                     {
                         ReconnectCount++;
-                        Debug.Log("KSPSerialIO[LINK] reconnected on " + PortNumber + " after " + attempts + " attempts, " +
+                        KSPLogQueue.Log("KSPSerialIO[LINK] reconnected on " + PortNumber + " after " + attempts + " attempts, " +
                                   ((int)TicksToMs(NowTicks() - downSince)) + " ms down");
                         downSince = 0;
                         continue;
@@ -1375,11 +1461,11 @@ namespace KSPSerialIO
                 catch (OperationCanceledException) { }
                 catch (Exception e)
                 {
-                    Debug.Log("KSPSerialIO[LINK] supervisor error: " + e.GetType().Name + ": " + e.Message);
+                    KSPLogQueue.Log("KSPSerialIO[LINK] supervisor error: " + e.GetType().Name + ": " + e.Message);
                     supStop.WaitOne(RetryIntervalMs, false);
                 }
             }
-            Debug.Log("KSPSerialIO[LINK] supervisor stopped");
+            KSPLogQueue.Log("KSPSerialIO[LINK] supervisor stopped");
         }
 
         /// @brief Starts the link supervisor thread (replacing any earlier one).
@@ -1417,7 +1503,7 @@ namespace KSPSerialIO
         {
             bool open = false;
             try { open = Port != null && Port.IsOpen; } catch (Exception) { }
-            Debug.Log("KSPSerialIO[PORT] " + what + " | port=" + PortNumber + " open=" + open +
+            KSPLogQueue.Log("KSPSerialIO[PORT] " + what + " | port=" + PortNumber + " open=" + open +
                       " thread=" + Thread.CurrentThread.ManagedThreadId + " t=" +
                       DateTime.Now.ToString("HH:mm:ss.fff"));
         }
@@ -1446,10 +1532,10 @@ namespace KSPSerialIO
             {
                 long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                 PortLog("closing port (Close() about to be called; no 'closed' line after this means Close() hung)");
-                try { p.Close(); } catch (Exception e) { Debug.Log("KSPSerialIO: port close failed: " + e.Message); }
+                try { p.Close(); } catch (Exception e) { KSPLogQueue.Log("KSPSerialIO: port close failed: " + e.Message); }
                 try { p.Dispose(); } catch (Exception) { }
                 PortLog("closed in " + ((System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency).ToString("F1") + " ms");
-                Debug.Log("KSPSerialIO: Port closed");
+                KSPLogQueue.Log("KSPSerialIO: Port closed");
             }
             else PortLog("cleanup: port was already closed");
             return wasOpen;
@@ -1598,7 +1684,7 @@ namespace KSPSerialIO
             }
             catch (Exception) { }
 
-            Debug.Log(String.Format(System.Globalization.CultureInfo.InvariantCulture,
+            KSPLogQueue.Log(String.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "KSPSerialIO: perf window_s={0:F1} parts={1} frames={2} frame_ms={3:F2} fps={4:F1} " +
                 "upd_avg_ms={5:F3} upd_max_ms={6:F2} upd_share_pct={7:F3} " +
                 "samples={8} sample_avg_ms={9:F3} sample_max_ms={10:F2} send_avg_ms={11:F3} send_max_ms={12:F2} " +
@@ -1629,7 +1715,7 @@ namespace KSPSerialIO
         private static void SafeSetGroup(KSPActionGroup group, bool state)
         {
             try { ActiveVessel.ActionGroups.SetGroup(group, state); }
-            catch (Exception e) { Debug.Log("KSPSerialIO: SetGroup " + group + " failed: " + e.Message); }
+            catch (Exception e) { KSPLogQueue.Log("KSPSerialIO: SetGroup " + group + " failed: " + e.Message); }
         }
 
         /**
@@ -1726,9 +1812,9 @@ namespace KSPSerialIO
                     ActiveVessel = FlightGlobals.ActiveVessel;
                     ActiveVessel.OnPostAutopilotUpdate -= AxisInput;
                     ActiveVessel.OnPostAutopilotUpdate += AxisInput;
-                    Debug.Log("KSPSerialIO: link ready, axes hooked");
+                    KSPLogQueue.Log("KSPSerialIO: link ready, axes hooked");
                 }
-                //Debug.Log("KSPSerialIO: 1");
+                //KSPLogQueue.Log("KSPSerialIO: 1");
                 //If the current active vessel is not what we were using, we need to remove controls from the old 
                 //vessel and attache it to the current one
                 if (ActiveVessel != null && ActiveVessel.id != FlightGlobals.ActiveVessel.id)
@@ -1739,7 +1825,7 @@ namespace KSPSerialIO
                     //sync some inputs on vessel switch
                     ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
                     ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
-                    Debug.Log("KSPSerialIO: ActiveVessel changed");
+                    KSPLogQueue.Log("KSPSerialIO: ActiveVessel changed");
                 }
                 else
                 {
@@ -1751,7 +1837,7 @@ namespace KSPSerialIO
                 theTime = Time.unscaledTime;
                 if ((theTime - lastUpdate) > refreshrate)
                 {
-                    //Debug.Log("KSPSerialIO: 2");
+                    //KSPLogQueue.Log("KSPSerialIO: 2");
 
                     lastUpdate = theTime;
                     long perfSampleStart = SettingsNStuff.PerfLog == 1 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -1774,7 +1860,7 @@ namespace KSPSerialIO
                     KSPSerialPort.VData.TrueAnomaly = (float)ActiveVessel.orbit.trueAnomaly;
                     KSPSerialPort.VData.period = (int)Math.Round(ActiveVessel.orbit.period);
 
-                    //Debug.Log("KSPSerialIO: 3");
+                    //KSPLogQueue.Log("KSPSerialIO: 3");
                     // Altitudes: ASL comes from the body, AGL is derived from terrain altitude; RAlt reports the lower one
                     double ASL = ActiveVessel.mainBody.GetAltitude(ActiveVessel.CoM);
                     double AGL = (ASL - ActiveVessel.terrainAltitude);
@@ -1830,7 +1916,7 @@ namespace KSPSerialIO
 
                     KSPSerialPort.VData.VOrbit = (float)ActiveVessel.orbit.GetVel().magnitude;
 
-                    //Debug.Log("KSPSerialIO: 4");
+                    //KSPLogQueue.Log("KSPSerialIO: 4");
 
                     // Local frame for the navball vector headings: up, north and east at the vessel
                     Vector3d navCoM = ActiveVessel.CoM;
@@ -1863,7 +1949,7 @@ namespace KSPSerialIO
                     KSPSerialPort.VData.ManeuverHeading = FloatAngleToFixed_16(navManeuver.Heading);
                     KSPSerialPort.VData.ManeuverPitch = FloatAngleToFixed_16(navManeuver.Pitch);
 
-                    //Debug.Log("KSPSerialIO: 5");
+                    //KSPLogQueue.Log("KSPSerialIO: 5");
 
                     // Attitude relative to the local surface, converted to the signed ranges the firmware expects
                     Quaternion attitude = updateHeadingPitchRollField(ActiveVessel);
@@ -1946,13 +2032,13 @@ namespace KSPSerialIO
                     #region debugjunk
 
                     /*
-                      Debug.Log("KSPSerialIO: Stage " + KSPSerialPort.VData.CurrentStage.ToString() + ' ' +
+                      KSPLogQueue.Log("KSPSerialIO: Stage " + KSPSerialPort.VData.CurrentStage.ToString() + ' ' +
                       KSPSerialPort.VData.TotalStage.ToString()); 
-                      Debug.Log("KSPSerialIO: Overheat " + KSPSerialPort.VData.MaxOverHeat.ToString());
-                      Debug.Log("KSPSerialIO: Mach " + KSPSerialPort.VData.MachNumber.ToString());
-                      Debug.Log("KSPSerialIO: IAS " + KSPSerialPort.VData.IAS.ToString());
+                      KSPLogQueue.Log("KSPSerialIO: Overheat " + KSPSerialPort.VData.MaxOverHeat.ToString());
+                      KSPLogQueue.Log("KSPSerialIO: Mach " + KSPSerialPort.VData.MachNumber.ToString());
+                      KSPLogQueue.Log("KSPSerialIO: IAS " + KSPSerialPort.VData.IAS.ToString());
                     
-                      Debug.Log("KSPSerialIO: SOI " + ActiveVessel.orbit.referenceBody.name + KSPSerialPort.VData.SOINumber.ToString());
+                      KSPLogQueue.Log("KSPSerialIO: SOI " + ActiveVessel.orbit.referenceBody.name + KSPSerialPort.VData.SOINumber.ToString());
                     
                       ScreenMessages.PostScreenMessage(KSPSerialPort.VData.OxidizerS.ToString() + "/" + KSPSerialPort.VData.OxidizerTotS +
                       "   " + KSPSerialPort.VData.Oxidizer.ToString() + "/" + KSPSerialPort.VData.OxidizerTot);
@@ -1960,14 +2046,14 @@ namespace KSPSerialIO
                     //KSPSerialPort.VData.Roll = Mathf.Atan2(2 * (x * y + w * z), w * w + x * x - y * y - z * z) * 180 / Mathf.PI;
                     //KSPSerialPort.VData.Pitch = Mathf.Atan2(2 * (y * z + w * x), w * w - x * x - y * y + z * z) * 180 / Mathf.PI;
                     //KSPSerialPort.VData.Heading = Mathf.Asin(-2 * (x * z - w * y)) *180 / Mathf.PI;
-                    //Debug.Log("KSPSerialIO: Roll    " + KSPSerialPort.VData.Roll.ToString());
-                    //Debug.Log("KSPSerialIO: Pitch   " + KSPSerialPort.VData.Pitch.ToString());
-                    //Debug.Log("KSPSerialIO: Heading " + KSPSerialPort.VData.Heading.ToString());
-                    //Debug.Log("KSPSerialIO: VOrbit" + KSPSerialPort.VData.VOrbit.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: Roll    " + KSPSerialPort.VData.Roll.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: Pitch   " + KSPSerialPort.VData.Pitch.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: Heading " + KSPSerialPort.VData.Heading.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: VOrbit" + KSPSerialPort.VData.VOrbit.ToString());
                     //ScreenMessages.PostScreenMessage(ActiveVessel.ActionGroups[KSPActionGroup.RCS].ToString());
-                    //Debug.Log("KSPSerialIO: MNTime" + KSPSerialPort.VData.MNTime.ToString() + " MNDeltaV" + KSPSerialPort.VData.MNDeltaV.ToString());
-                    //Debug.Log("KSPSerialIO: Time" + KSPSerialPort.VData.MissionTime.ToString() + " Delta Time" + KSPSerialPort.VData.deltaTime.ToString());
-                    //Debug.Log("KSPSerialIO: Throttle = " + KSPSerialPort.CPacket.Throttle.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: MNTime" + KSPSerialPort.VData.MNTime.ToString() + " MNDeltaV" + KSPSerialPort.VData.MNDeltaV.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: Time" + KSPSerialPort.VData.MissionTime.ToString() + " Delta Time" + KSPSerialPort.VData.deltaTime.ToString());
+                    //KSPLogQueue.Log("KSPSerialIO: Throttle = " + KSPSerialPort.CPacket.Throttle.ToString());
                     //ScreenMessages.PostScreenMessage(KSPSerialPort.VData.Fuelp.ToString());
                     //ScreenMessages.PostScreenMessage(KSPSerialPort.VData.RAlt.ToString());
                     //KSPSerialPort.Port.WriteLine("Success!");
@@ -2003,7 +2089,7 @@ namespace KSPSerialIO
                      ", Abort: " + KSPSerialPort.VControls.Abort.ToString() +
                      ", Stage: " + KSPSerialPort.VControls.Stage.ToString(), 10f, KSPIOScreenStyle);
                     
-                     Debug.Log("KSPSerialIO: SAS: " + KSPSerialPort.VControls.SAS.ToString() +
+                     KSPLogQueue.Log("KSPSerialIO: SAS: " + KSPSerialPort.VControls.SAS.ToString() +
                      ", RCS: " + KSPSerialPort.VControls.RCS.ToString() +
                      ", Lights: " + KSPSerialPort.VControls.Lights.ToString() +
                      ", Gear: " + KSPSerialPort.VControls.Gear.ToString() +
@@ -2063,7 +2149,7 @@ namespace KSPSerialIO
                         int age = Environment.TickCount - stageTick;
                         if (age >= 0 && age <= 1000)
                         {
-                            Debug.Log("KSPSerialIO[CTRL] stage button: stage " + StageManager.CurrentStage +
+                            KSPLogQueue.Log("KSPSerialIO[CTRL] stage button: stage " + StageManager.CurrentStage +
                                       " -> next, vessel throttle=" + FlightInputHandler.state.mainThrottle.ToString("F2") +
                                       " age_ms=" + age + " t=" + DateTime.Now.ToString("HH:mm:ss.fff"));
                             StageManager.ActivateNextStage();
@@ -2176,7 +2262,7 @@ namespace KSPSerialIO
             }//end if null and same vessel
             else
             {
-                //Debug.Log("KSPSerialIO: ActiveVessel not found");
+                //KSPLogQueue.Log("KSPSerialIO: ActiveVessel not found");
             }
 
             if (SettingsNStuff.PerfLog == 1 && FlightGlobals.ActiveVessel != null)
@@ -2709,6 +2795,7 @@ namespace KSPSerialIO
         void OnApplicationQuit()
         {
             KSPSerialPort.PortLog("OnApplicationQuit (KSP is exiting)");
+            KSPLogQueue.Flush();
         }
 
         /// @brief Unity OnDestroy: closes the serial port when the flight scene is unloaded.
@@ -2720,6 +2807,7 @@ namespace KSPSerialIO
             {
                 ScreenMessages.PostScreenMessage("Port closed", 10f, KSPIOScreenStyle);
             }
+            KSPLogQueue.Flush();
         }
     }
 }

@@ -38,3 +38,10 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.
 - `Serial.availableForWrite()` always reads 0 on this core: do not trust it.
+
+## Never call Debug.Log from a worker thread
+
+KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
+(Access Violation in Mesh.Internal_Create, seen in 10 crash reports). All plugin logging uses `KSPLogQueue.Log`
+(direct on the main thread, queued and drained from `Update` otherwise); `./ci verify` check `no direct Debug.Log` enforces it.
+In a fresh worktree copy `build/refasm` from the main checkout before `./ci build_KSPSerialIO`.
