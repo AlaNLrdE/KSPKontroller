@@ -14,6 +14,7 @@ import threading
 import time
 from dataclasses import dataclass, replace
 from .navigation import Navigation, NavigationStreams, attitude, unit
+from .systems import Resource, Stage, Systems, SystemsStreams
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class Snapshot:
     surface_speed: float = 0.0
     vertical_speed: float = 0.0
     nav: Navigation | None = None  #: optional navball telemetry; None means unavailable
+    systems: Systems | None = None  #: vessel totals and read-only staging queue
     received: float = 0.0        #: time.monotonic() when the sample was taken
 
 
@@ -225,6 +227,7 @@ class KrpcSource(Source):
         }
         streams = {}
         navstreams = None
+        systemstreams = None
         try:
             for key, (obj, attr) in fields.items():
                 s = conn.add_stream(getattr, obj, attr)
@@ -237,6 +240,10 @@ class KrpcSource(Source):
                 navstreams = NavigationStreams(conn, sc, vessel, 1.0 / self.period)
             except RPCError as e:
                 log.warning("navball unavailable: %s", _short(e))
+            try:
+                systemstreams = SystemsStreams(conn, vessel)
+            except RPCError as e:
+                log.warning("resources/staging unavailable: %s", _short(e))
             log.info("following %s around %s", name, body_name)
             while not self._stop.is_set():
                 if sc.active_vessel != vessel:  # also a liveness probe: raises when the socket is gone (None = left flight)
@@ -259,11 +266,14 @@ class KrpcSource(Source):
                     period=v["period"], semi_major_axis=v["semi_major_axis"], true_anomaly=v["true_anomaly"],
                     orbital_speed=v["orbital_speed"], surface_speed=v["surface_speed"],
                     vertical_speed=v["vertical_speed"], nav=nav,
+                    systems=systemstreams.sample() if systemstreams is not None else None,
                     received=time.monotonic()))
                 self._stop.wait(self.period)
         finally:
             if navstreams is not None:
                 navstreams.close()
+            if systemstreams is not None:
+                systemstreams.close()
             for s in streams.values():
                 try:
                     s.remove()
@@ -332,6 +342,9 @@ class DemoSource(Source):
                            maneuver=unit((.12, .1, 1)), sas=True, sas_mode='prograde', rcs=True,
                            throttle=.42, g_force=.3, node_dv=320, node_remaining=114.4,
                            node_time=579, burn_seconds=8),
+            systems=Systems(2, (Resource('ElectricCharge', 148, 200), Resource('LiquidFuel', 820, 1440),
+                                Resource('Oxidizer', 1002, 1760), Resource('MonoPropellant', 24, 30)),
+                            (Stage(2, 7, 1430), Stage(1, 4, 820), Stage(0, 2, 0))),
             received=time.monotonic())
 
     def _run(self) -> None:

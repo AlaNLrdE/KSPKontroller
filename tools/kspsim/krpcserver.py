@@ -120,7 +120,8 @@ def services_message() -> K.Services:
     services = K.Services()
     services.services.add(name="KRPC")
     sc = services.services.add(name="SpaceCenter")
-    for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort"):
+    for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
+                "Resources", "Stage", "Part", "Parts"):
         sc.classes.add(name=cls)
     situation = sc.enumerations.add(name="VesselSituation")
     for i, name in enumerate(SITUATIONS):
@@ -403,6 +404,36 @@ class KrpcServer:
             x, y, z = (struct.unpack('<d', item)[0] for item in value.items)
             return enc_tuple(tuple(-x * radial[i] + y * pro[i] + z * normal[i] for i in range(3)))
 
+        if proc.startswith(('Resources_', 'Stage_', 'Parts_')):
+            ident = read_varint(args[0])
+            if ident // 10000 != sim.vessel_uid:
+                raise RpcFailure('Resource/stage object belongs to a previous vessel')
+            r = sim.reported()
+            if proc == 'Parts_get_All':
+                count = max(0, min(100, int(r['stage_parts']))) * (max(0, int(r['stage_number'])) + 1)
+                return enc_list([sim.vessel_uid * 10000 + 5000 + i for i in range(count)])
+            if proc.startswith('Resources_'):
+                data = args[1]
+                length = read_varint(data)
+                offset = len(varint(length))
+                name = data[offset:offset + length].decode('utf-8')
+                fields = {'ElectricCharge': ('electric_charge', 'electric_capacity'),
+                          'LiquidFuel': ('liquid_fuel', 'liquid_capacity'), 'Oxidizer': ('oxidizer', 'oxidizer_capacity'),
+                          'MonoPropellant': ('monopropellant', 'monoprop_capacity'),
+                          'SolidFuel': ('solid_fuel', 'solid_capacity'), 'XenonGas': ('xenon_gas', 'xenon_capacity')}
+                if proc in ('Resources_Amount', 'Resources_Max'):
+                    field = fields.get(name)
+                    return enc_float(r[field[0 if proc == 'Resources_Amount' else 1]]) if field else enc_float(0)
+            else:
+                number = ident % 10000 - 2000
+                if proc == 'Stage_get_Number':
+                    return enc_enum(number)
+                if proc == 'Stage_get_DeltaV':
+                    return enc_float(r['stage_delta_v'] if number == int(r['stage_number']) else physics.MAX_ACCEL * physics.BURN_TIME)
+                if proc == 'Stage_get_Parts':
+                    count = max(0, min(100, int(r['stage_parts'])))
+                    return enc_list([sim.vessel_uid * 10000 + 3000 + number * 100 + i for i in range(count)])
+
         cls, _, member = proc.partition("_")
         if cls in ("Vessel", "Orbit", "Flight", "Control", "Node"):
             self._vessel(args)  # a stale object id fails as in kRPC
@@ -420,6 +451,13 @@ class KrpcServer:
                 return enc_object(sim.vessel_uid * 10 + offset)
             if member == 'get_Control':
                 return enc_object(sim.vessel_uid * 10 + 4)
+            if member == 'get_Resources':
+                return enc_object(sim.vessel_uid * 10000 + 1000)
+            if member == 'get_Parts':
+                return enc_object(sim.vessel_uid * 10000 + 4000)
+            if member == 'get_Stages':
+                current = max(0, min(20, int(r['stage_number'])))
+                return enc_list([sim.vessel_uid * 10000 + 2000 + number for number in range(current + 1)])
             frames = {'get_SurfaceReferenceFrame': 5, 'get_OrbitSpeedReferenceFrame': 6,
                       'get_SurfaceSpeedReferenceFrame': 7, 'get_TargetSpeedReferenceFrame': 8}
             if member in frames:
@@ -428,6 +466,8 @@ class KrpcServer:
             if member in values:
                 return enc_float(values[member])
         elif cls == 'Control':
+            if member == 'get_CurrentStage':
+                return enc_enum(int(r['stage_number']))
             if member == 'get_Nodes':
                 return enc_list([sim.vessel_uid * 10 + 9] if r['node_enabled'] else [])
             if member == 'get_SpeedMode':

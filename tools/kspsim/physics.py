@@ -58,6 +58,11 @@ NAV_DEFAULTS = dict(roll=0.0, speed_mode=0.0, target_enabled=0.0, target_up=0.0,
                     mass=10000.0, available_thrust=160000.0, specific_impulse=300.0)
 REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0)
                         for key in ('pitch', 'heading', *NAV_DEFAULTS))
+RESOURCE_KEYS = ('electric_charge', 'electric_capacity', 'liquid_fuel', 'liquid_capacity',
+                 'oxidizer', 'oxidizer_capacity', 'monopropellant', 'monoprop_capacity',
+                 'solid_fuel', 'solid_capacity', 'xenon_gas', 'xenon_capacity',
+                 'stage_number', 'stage_delta_v', 'stage_parts')
+REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0) for key in RESOURCE_KEYS)
 
 
 def attitude_rotation(pitch, heading, roll):
@@ -204,6 +209,12 @@ class Vessel:
         pitch, heading = self.attitude()
         return dict(NAV_DEFAULTS,
             pitch=pitch, heading=heading,
+            electric_charge=self.electric, electric_capacity=150, monopropellant=self.monoprop, monoprop_capacity=30,
+            liquid_fuel=self.liquid_fuel + LIQUID_FUEL * self.stage, liquid_capacity=LIQUID_FUEL * (self.stage + 1),
+            oxidizer=self.oxidizer + OXIDIZER * self.stage, oxidizer_capacity=OXIDIZER * (self.stage + 1),
+            solid_fuel=0, solid_capacity=0, xenon_gas=0, xenon_capacity=0,
+            stage_number=self.stage, stage_delta_v=MAX_ACCEL * BURN_TIME * self.liquid_fuel / LIQUID_FUEL,
+            stage_parts=8,
             name=self.name, situation=self.situation(), altitude=self.altitude, vertical_speed=self.vertical_speed,
             orbital_speed=self.orbital_speed, surface_speed=self.surface_speed, apoapsis=el.apoapsis,
             periapsis=el.periapsis, time_to_apoapsis=el.time_to_apoapsis, time_to_periapsis=el.time_to_periapsis,

@@ -449,6 +449,19 @@ class KrpcTest(unittest.TestCase):
             self.assertIsNotNone(s.nav.target)
             self.assertIsNotNone(s.nav.maneuver)
             self.assertGreater(s.nav.burn_seconds, 0)
+            sim.set_manual_values(electric_charge=0, electric_capacity=200, liquid_fuel=10, liquid_capacity=100,
+                                  monoprop_capacity=0, stage_number=1, stage_delta_v=450, stage_parts=3)
+            s = wait(lambda s: s.systems is not None and s.systems.current_stage == 1
+                     and s.systems.stages and s.systems.stages[0].delta_v == 450)
+            levels = {r.name: r for r in s.systems.resources}
+            self.assertEqual(levels['ElectricCharge'].fraction, 0)
+            self.assertAlmostEqual(levels['LiquidFuel'].fraction, .1)
+            self.assertIsNone(levels['MonoPropellant'].fraction)
+            self.assertEqual(s.systems.stages[0].parts, 3)
+            sim.set_manual_values(stage_number=0)
+            s = wait(lambda s: s.systems is not None and s.systems.current_stage == 0
+                     and len(s.systems.stages) == 1)
+            self.assertEqual(s.systems.stages[0].number, 0)
             sim.set_manual_values(target_enabled=0, node_enabled=0, speed_mode=1)
             s = wait(lambda s: s.nav is not None and s.nav.node_remaining is None and s.nav.speed_mode == 'surface')
             self.assertIsNone(s.nav.target)

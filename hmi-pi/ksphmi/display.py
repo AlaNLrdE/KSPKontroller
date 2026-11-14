@@ -17,6 +17,7 @@ from . import fmt
 from .netinfo import NetInfo
 from .scenes import VIEWS
 from .navball import Navball
+from .systems import RESOURCE_NAMES, RESOURCE_LABELS
 from .telemetry import CONNECTING, FLIGHT, NO_VESSEL, Snapshot, stale
 
 BG = (10, 14, 20)
@@ -249,6 +250,8 @@ class Display:
 
         if pe_note:
             self.text("PERIAPSIS: " + pe_note.upper(), 1.8, pe_color, (x0 + u, y - .3 * u))
+        self.resources(pygame.Rect(x0, 54 * u, left_w - x0, 25 * u), s)
+        self.staging(pygame.Rect(x0, 80.6 * u, left_w - x0, bottom - 80.6 * u), s)
 
         right_x, right_w = left_w + gap, self.w - left_w - gap - 2.5 * u
         orbit_h = 22 * u
@@ -265,7 +268,56 @@ class Display:
         if note:
             self.text(note, 1.6, LABEL, (rect.right - pad, rect.y + .7 * u), "topright")
 
+    def resources(self, rect: pygame.Rect, snap: Snapshot) -> None:
+        u = self.u
+        self.panel(rect)
+        self.text("RESOURCES", 2.4, LABEL, (rect.x + 1.3 * u, rect.y + u))
+        self.text("VESSEL TOTALS · KSP UNITS", 1.7, MUTED, (rect.right - 1.3 * u, rect.y + u), 'topright')
+        if snap.systems is None:
+            self.text("Resource data unavailable", 2.4, MUTED, rect.center, 'center')
+            return
+        by_name = {r.name: r for r in snap.systems.resources}
+        visible = [name for name in RESOURCE_NAMES if name in by_name and
+                   (name in RESOURCE_NAMES[:4] or (by_name[name].capacity or 0) > 0)]
+        row_h = min(4.5 * u, (rect.h - 5 * u) / max(len(visible), 1))
+        for index, name in enumerate(visible):
+            resource = by_name[name]
+            y = rect.y + 4.6 * u + index * row_h
+            fraction = resource.fraction
+            color = MUTED if fraction is None else BAD if fraction <= .1 else WARN if fraction <= .25 else GOOD
+            label = RESOURCE_LABELS[RESOURCE_NAMES.index(name)]
+            self.text(label, 2.0, LABEL, (rect.x + 1.3 * u, y))
+            if fraction is not None:
+                amount = "%.1f / %.1f   %d%%" % (resource.amount, resource.capacity, round(100 * fraction))
+            else:
+                amount = 'NOT INSTALLED' if resource.capacity == 0 else '--'
+            self.text(amount, 2.0, color, (rect.right - 1.3 * u, y), 'topright')
+            bar = pygame.Rect(rect.x + 1.3 * u, y + 2.1 * u, rect.w - 2.6 * u, .6 * u)
+            pygame.draw.rect(self.screen, GRID, bar, border_radius=max(1, round(.2 * u)))
+            if fraction is not None and fraction > 0:
+                pygame.draw.rect(self.screen, color, (bar.x, bar.y, bar.w * fraction, bar.h))
 
+    def staging(self, rect: pygame.Rect, snap: Snapshot) -> None:
+        u = self.u
+        self.panel(rect)
+        self.text("STAGING", 2.4, LABEL, (rect.x + 1.3 * u, rect.y + u))
+        data = snap.systems
+        current = str(data.current_stage) if data is not None and data.current_stage is not None else '--'
+        self.text("CURRENT " + current, 2.4, ACCENT, (rect.right - 1.3 * u, rect.y + u), 'topright')
+        if data is None or not data.stages:
+            self.text("Stage data unavailable" if data is None else "No pending activation stages", 2.2, MUTED,
+                      (rect.centerx, rect.y + 8 * u), 'center')
+            return
+        for index, stage in enumerate(data.stages[:4]):
+            y = rect.y + (5 + index * 2.7) * u
+            active = stage.number == data.current_stage
+            color = ACCENT if active else VALUE
+            self.text("%02d  %s" % (stage.number, 'CURRENT' if active else 'PENDING'), 2.2,
+                      color, (rect.x + 1.3 * u, y))
+            self.text('%s parts' % (stage.parts if stage.parts is not None else '--'), 2.0, LABEL,
+                      (rect.centerx, y))
+            self.text(('DV ' + fmt.speed(stage.delta_v)) if stage.delta_v is not None else 'DV --', 2.2, color,
+                      (rect.right - 1.3 * u, y), 'topright')
 
     def orbit(self, rect: pygame.Rect, s: Snapshot) -> None:
         """Side view of the orbit in its own plane, periapsis to the right, body centre at the focus."""

@@ -425,7 +425,7 @@ def check_hmi_render(ctx):
                             cwd=HMI_DIR, capture_output=True, text=True, timeout=30,
                             env=dict(os.environ, SDL_VIDEODRIVER='dummy', PYTHONDONTWRITEBYTECODE='1'))
     report('PASS' if result.returncode == 0 else 'FAIL', 'hmi: navball render',
-           'navigation attitude, labels and bounds at three resolutions' if result.returncode == 0
+           'navigation, compact metrics, resource bars and staging bounds at three resolutions' if result.returncode == 0
            else result.stderr[-500:])
     # Draw only in memory; never replace the live framebuffer with demo data.
     script = """import os, time
