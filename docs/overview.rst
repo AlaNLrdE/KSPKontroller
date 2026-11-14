@@ -65,7 +65,7 @@ Hardware used by the demo sketch
      - Action group 1 switch
    * - A0
      - analog input
-     - Throttle potentiometer
+     - Throttle potentiometer: not wired, disabled (``THROTTLEPIN -1``, throttle sent as 0)
    * - 12
      - output
      - Green LED: link alive

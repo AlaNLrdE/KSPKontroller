@@ -28,7 +28,11 @@ void debugReport() {
   DPacket.flags = (Connected ? 1 : 0) | (digitalRead(SASPIN) == HIGH ? 4 : 0) | (dbgWdtOk ? 8 : 0) | (everConnected ? 16 : 0);
   DPacket.rxAvail = Serial.available();
   DPacket.txSkipped = dbgTxSkipped;
+#if THROTTLEPIN >= 0
   DPacket.a0 = analogRead(THROTTLEPIN);
+#else
+  DPacket.a0 = 0;
+#endif
   memcpy(DPacket.matrix, mxCols, sizeof(DPacket.matrix));
 
   dbgLoopMaxUs = 0;

@@ -79,7 +79,11 @@ void controls() {
       ControlGroups(1, LOW);
 
     //This is an example of reading analog inputs to an axis, with deadband and limits
+#if THROTTLEPIN >= 0
     CPacket.Throttle = constrain(map(analogRead(THROTTLEPIN),THROTTLEDB,1024-THROTTLEDB,0,1000),0, 1000);
+#else
+    CPacket.Throttle = 0;  // no potentiometer: a floating analog input must not drive the engine
+#endif
 
     // Send only when something changed, plus a keep-alive. The UNO R4 USB serial is known to stall at random after
     // long, steady traffic, so the board no longer streams 40 identical ControlPackets per second. A change in a

@@ -36,7 +36,7 @@
 #define RCSPIN 9        ///< RCS push button: each press toggles RCS on/off (internal pull-up, wire to GND)
 #define SCREENPIN 3     ///< Screen button: cycles the LED matrix screens (internal pull-up, wire to GND)
 #define CG1PIN 10       ///< Custom action group 1 switch
-#define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
+#define THROTTLEPIN -1  ///< Throttle potentiometer: none wired, so the throttle is sent as 0 (set the analog pin, e.g. 0 for A0, to enable)
 
 #define LINKRESETMS 30000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
