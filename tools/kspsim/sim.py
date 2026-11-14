@@ -40,6 +40,22 @@ class Simulator:
                 self.vessel.apply_controls(physics.Controls(**vars(self.manual)))
         log.info("scenario %s (vessel uid %d)", scenario, self.vessel_uid)
 
+    def set_orbit(self, apoapsis: float, periapsis: float, inclination: float, true_anomaly: float) -> None:
+        """Move the current vessel (same vessel, no switch) onto a new orbit; ValueError explains a bad request."""
+        with self.lock:
+            physics.set_orbit(self.vessel, apoapsis, periapsis, inclination, true_anomaly)
+        log.info("orbit set: Ap %.1f km, Pe %.1f km, inc %.2f deg, true anomaly %.0f deg",
+                 apoapsis / 1e3, periapsis / 1e3, inclination, true_anomaly)
+
+    def set_vessel(self, name: str | None = None, stage_fuel: float | None = None) -> None:
+        with self.lock:
+            if name:
+                self.vessel.name = name
+            if stage_fuel is not None:
+                f = max(0.0, min(100.0, stage_fuel)) / 100
+                self.vessel.liquid_fuel = physics.LIQUID_FUEL * f
+                self.vessel.oxidizer = physics.OXIDIZER * f
+
     def set_scene(self, scene: str) -> None:
         assert scene in SCENES
         with self.lock:

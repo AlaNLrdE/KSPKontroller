@@ -150,6 +150,7 @@ class KrpcSource(Source):
 
         fields = {
             "ut": (sc, "ut"),
+            "name": (vessel, "name"),  # streamed: a rename shows without switching vessels
             "situation": (vessel, "situation"),
             "body_obj": (orbit, "body"),
             "altitude": (flight, "mean_altitude"),
@@ -183,7 +184,7 @@ class KrpcSource(Source):
                 if v["body_obj"] != body:  # sphere of influence change: new reference frame needed
                     return
                 self._publish(Snapshot(
-                    state=FLIGHT, vessel=name, situation=getattr(v["situation"], "name", str(v["situation"])),
+                    state=FLIGHT, vessel=v["name"], situation=getattr(v["situation"], "name", str(v["situation"])),
                     body=body_name, body_radius=radius, atmosphere_depth=atmosphere, ut=v["ut"],
                     altitude=v["altitude"], apoapsis=v["apoapsis"], periapsis=v["periapsis"],
                     time_to_apoapsis=v["time_to_apoapsis"], time_to_periapsis=v["time_to_periapsis"],

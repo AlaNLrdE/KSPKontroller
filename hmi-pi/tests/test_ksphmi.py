@@ -20,6 +20,9 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(fmt.distance(-12_400), "-12.4 km")
         self.assertEqual(fmt.distance(12_400_000), "12.40 Mm")
         self.assertEqual(fmt.distance(float("nan")), "--")
+        self.assertEqual(fmt.distance(-0.3), "0 m")       # no "-0 m" flicker on the pad
+        self.assertEqual(fmt.distance(-40_000_040), "-40.00 Mm")
+        self.assertEqual(fmt.speed(-0.04), "0.0 m/s")
 
     def test_duration_uses_kerbin_days(self):
         self.assertEqual(fmt.duration(45), "45s")

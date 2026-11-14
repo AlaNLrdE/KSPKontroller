@@ -37,7 +37,14 @@ The window
 * **Scenario** loads a new vessel, as switching vessels in KSP does (the HMI re-opens its streams):
   on the pad, an 80 x 250 km orbit, a sub-orbital arc falling back through the atmosphere, an escape
   trajectory (hyperbolic, the HMI shows ``Escape``).
-* **Time warp** 1x to 1000x.
+* **Time warp** 1x to 1000x, or *Pause* to hold every value still.
+* **Set the current vessel**: apoapsis, periapsis (km), inclination, position on the orbit (degrees from
+  the periapsis: 0 = at Pe, 180 = at Ap), name and stage fuel. *Apply* moves the same vessel onto that orbit
+  (no vessel switch) and it keeps flying from there; impossible requests (Ap below Pe, a point under the
+  surface, beyond the sphere of influence) are refused with the reason. *Read current* fills the fields
+  from the vessel, to change one value and keep the rest.
+* On the pad the apoapsis is about 0 m and the periapsis about -598 km: that is the "orbit" of a point
+  turning with the surface, and KSP shows the same values.
 * **Controls**: while ControlPackets arrive the board drives the vessel and the window only mirrors what it
   sends (throttle, SAS, RCS, lights, gear, brakes, action groups, pitch/roll/yaw). Without the board, or
   3 s after it goes quiet, the window's own throttle, switches and STAGE button take over.

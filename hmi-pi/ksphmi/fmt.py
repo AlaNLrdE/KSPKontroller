@@ -4,25 +4,34 @@ from __future__ import annotations
 import math
 
 
+def _no_negative_zero(text: str) -> str:
+    """``-0 m`` / ``-0.0 km`` (a tiny negative value rounded away) reads as a sign flicker: drop the sign."""
+    if text.startswith("-") and not any(c in "123456789" for c in text):
+        return text[1:]
+    return text
+
+
 def distance(m: float) -> str:
     """Metres as m / km / Mm / Gm with 3 significant-ish digits: ``950 m``, ``80.0 km``, ``12.4 Mm``."""
     if not math.isfinite(m):
         return "--"
     a = abs(m)
     if a < 10_000:
-        return "%.0f m" % m
-    if a < 10_000_000:
-        return "%.1f km" % (m / 1e3)
-    if a < 10_000_000_000:
-        return "%.2f Mm" % (m / 1e6)
-    return "%.2f Gm" % (m / 1e9)
+        text = "%.0f m" % m
+    elif a < 10_000_000:
+        text = "%.1f km" % (m / 1e3)
+    elif a < 10_000_000_000:
+        text = "%.2f Mm" % (m / 1e6)
+    else:
+        text = "%.2f Gm" % (m / 1e9)
+    return _no_negative_zero(text)
 
 
 def speed(ms: float) -> str:
     if not math.isfinite(ms):
         return "--"
     if abs(ms) < 10_000:
-        return "%.1f m/s" % ms
+        return _no_negative_zero("%.1f m/s" % ms)
     return "%.2f km/s" % (ms / 1e3)
 
 

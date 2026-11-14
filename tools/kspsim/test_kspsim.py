@@ -94,6 +94,19 @@ class PhysicsTest(unittest.TestCase):
         self.assertTrue(v.landed)
         self.assertEqual(v.situation(), "landed")
 
+    def test_set_orbit(self):
+        v = physics.scenario("pad")
+        physics.set_orbit(v, 500_000, 100_000, 12.0, 90)
+        el = v.elements()
+        self.assertAlmostEqual(el.apoapsis, 500_000, delta=1)
+        self.assertAlmostEqual(el.periapsis, 100_000, delta=1)
+        self.assertAlmostEqual(math.degrees(el.nu), 90, places=6)
+        self.assertFalse(v.landed)
+        self.assertEqual(v.situation(), "orbiting")
+        for ap, pe, nu in ((100_000, 200_000, 0), (100_000, -700_000, 180), (70_000, -300_000, 0)):
+            with self.assertRaises(ValueError):  # Ap below Pe, Pe below the centre, a point under the surface
+                physics.set_orbit(v, ap, pe, 0.0, nu)
+
     def test_stage_on_rising_edge_only(self):
         v = physics.scenario("pad")
         for level in (True, True, False, True):
@@ -129,6 +142,13 @@ class KrpcTest(unittest.TestCase):
             self.assertAlmostEqual(s.apoapsis, 250_000, delta=5)
             self.assertAlmostEqual(s.periapsis, 80_000, delta=5)
             self.assertAlmostEqual(s.inclination, 0.4, places=6)
+
+            sim.set_orbit(400_000, 120_000, 5.0, 180)  # edited in the window: same vessel, new values
+            sim.set_vessel(name="Renamed")
+            s = wait(lambda s: s.vessel == "Renamed" and abs(s.periapsis - 120_000) < 5)
+            self.assertAlmostEqual(s.apoapsis, 400_000, delta=5)
+            self.assertAlmostEqual(s.altitude, 400_000, delta=50)  # at the apoapsis
+            self.assertAlmostEqual(s.inclination, 5.0, places=6)
 
             sim.set_scene("space_center")
             wait(lambda s: s.state == NO_VESSEL)

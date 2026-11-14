@@ -55,8 +55,8 @@ class App:
         wf = ttk.LabelFrame(mid, text="Time warp")
         wf.pack(side="left", fill="y", padx=4)
         self.warp = tk.DoubleVar(value=sim.warp)
-        for w in (1, 5, 10, 50, 100, 1000):
-            ttk.Radiobutton(wf, text="%dx" % w, value=w, variable=self.warp,
+        for w in (0, 1, 5, 10, 50, 100, 1000):
+            ttk.Radiobutton(wf, text="Pause" if w == 0 else "%dx" % w, value=w, variable=self.warp,
                             command=lambda: setattr(sim, "warp", self.warp.get())).pack(anchor="w")
 
         ctl = ttk.LabelFrame(mid, text="Controls")
@@ -81,12 +81,68 @@ class App:
         self.groups_text = tk.StringVar()
         ttk.Label(ctl, textvariable=self.groups_text).pack(anchor="w", padx=4)
 
+        # Edit the current vessel: the same vessel keeps flying from the new state (no vessel switch)
+        ef = ttk.LabelFrame(self.root, text="Set the current vessel (Enter or Apply)")
+        ef.pack(fill="x", **pad)
+        self.edit = {}
+        fields = (("apoapsis", "Apoapsis km", "250"), ("periapsis", "Periapsis km", "80"),
+                  ("inclination", "Inclination °", "0.4"), ("anomaly", "Position ° from Pe", "0"),
+                  ("name", "Name", ""), ("fuel", "Stage fuel %", "100"))
+        for col, (key, label, default) in enumerate(fields):
+            ttk.Label(ef, text=label).grid(row=0, column=col, sticky="w", padx=4)
+            var = tk.StringVar(value=default)
+            entry = ttk.Entry(ef, textvariable=var, width=12 if key == "name" else 9)
+            entry.grid(row=1, column=col, sticky="w", padx=4)
+            entry.bind("<Return>", lambda _e: self._apply())
+            self.edit[key] = var
+        ttk.Button(ef, text="Apply orbit", command=self._apply).grid(row=1, column=len(fields), padx=6)
+        ttk.Button(ef, text="Apply name / fuel", command=self._apply_vessel).grid(row=1, column=len(fields) + 1, padx=2)
+        ttk.Button(ef, text="Read current", command=self._read_current).grid(row=1, column=len(fields) + 2, padx=2)
+        self.edit_msg = tk.StringVar(value="Position 0 = at the periapsis, 180 = at the apoapsis.")
+        ttk.Label(ef, textvariable=self.edit_msg).grid(row=2, column=0, columnspan=len(fields) + 3, sticky="w", padx=4)
+
         vf = ttk.LabelFrame(self.root, text="Vessel")
         vf.pack(fill="both", expand=True, **pad)
         self.vessel_text = tk.StringVar()
         ttk.Label(vf, textvariable=self.vessel_text, justify="left", font=("Consolas", 11)).pack(anchor="w", padx=6, pady=4)
 
         self.root.after(200, self._refresh)
+
+    def _number(self, key: str) -> float:
+        text = self.edit[key].get().strip().replace(",", ".")
+        try:
+            return float(text)
+        except ValueError:
+            raise ValueError("'%s' is not a number" % text) from None
+
+    def _apply(self) -> None:
+        try:
+            ap, pe = self._number("apoapsis") * 1e3, self._number("periapsis") * 1e3
+            self.sim.set_orbit(ap, pe, self._number("inclination"), self._number("anomaly"))
+            self.edit_msg.set("Orbit set: Ap %.1f km, Pe %.1f km. The vessel keeps flying from there." % (ap / 1e3, pe / 1e3))
+        except ValueError as e:
+            self.edit_msg.set("Not applied: %s" % e)
+
+    def _apply_vessel(self) -> None:
+        try:
+            name = self.edit["name"].get().strip() or None
+            fuel = self._number("fuel") if self.edit["fuel"].get().strip() else None
+            self.sim.set_vessel(name, fuel)
+            self.edit_msg.set("Vessel updated.")
+        except ValueError as e:
+            self.edit_msg.set("Not applied: %s" % e)
+
+    def _read_current(self) -> None:
+        with self.sim.lock:
+            v = self.sim.vessel
+            el = v.elements()
+            values = {"apoapsis": el.apoapsis / 1e3, "periapsis": el.periapsis / 1e3, "inclination": v.inclination,
+                      "anomaly": math.degrees(el.nu), "fuel": 100 * v.liquid_fuel / physics.LIQUID_FUEL}
+            name = v.name
+        for key, value in values.items():
+            self.edit[key].set("%.1f" % value if math.isfinite(value) else "")
+        self.edit["name"].set(name)
+        self.edit_msg.set("Current values loaded; change any and Apply.")
 
     def _stage(self) -> None:
         self.sim.set_manual(stage=True)

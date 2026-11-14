@@ -262,6 +262,33 @@ def orbit_vessel(name: str, periapsis: float, apoapsis: float, inclination: floa
     return Vessel(name, r, 0.0, 0.0, v, inclination=inclination, mission_time=600.0)
 
 
+def set_orbit(v: Vessel, apoapsis: float, periapsis: float, inclination: float, true_anomaly_deg: float) -> None:
+    """Put an existing vessel on the orbit with these altitudes (m) at this true anomaly (0 = periapsis).
+    Raises ValueError with a message for the window when the request makes no sense."""
+    if apoapsis < periapsis:
+        raise ValueError("the apoapsis must not be below the periapsis")
+    if periapsis <= -RADIUS:
+        raise ValueError("the periapsis must be above -%d km (the centre of Kerbin)" % (RADIUS / 1e3))
+    if apoapsis + RADIUS >= SOI_RADIUS:
+        raise ValueError("the apoapsis must be below the edge of Kerbin's sphere of influence (%d km)"
+                         % ((SOI_RADIUS - RADIUS) / 1e3))
+    rp, ra = RADIUS + periapsis, RADIUS + apoapsis
+    a, e = (rp + ra) / 2, (ra - rp) / (ra + rp)
+    nu = math.radians(true_anomaly_deg) % (2 * math.pi)
+    p = a * (1 - e * e)
+    r = p / (1 + e * math.cos(nu))
+    if r <= RADIUS:
+        raise ValueError("at %.0f degrees from the periapsis that orbit is %.1f km below the surface: "
+                         "choose an angle nearer the apoapsis (180)" % (true_anomaly_deg, (RADIUS - r) / 1e3))
+    k = math.sqrt(MU / p)
+    v.x, v.y = r * math.cos(nu), r * math.sin(nu)
+    v.vx, v.vy = -k * math.sin(nu), k * (e + math.cos(nu))
+    v.landed = False
+    v.inclination = inclination
+    if v.mission_time == 0:
+        v.mission_time = 1.0  # off the pad: no longer "pre-launch"
+
+
 def scenario(name: str) -> Vessel:
     """The ready-made situations the simulator window offers."""
     if name == "pad":
