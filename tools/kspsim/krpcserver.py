@@ -338,10 +338,10 @@ class KrpcServer:
 
     def _space_center(self, proc: str, args: dict) -> bytes | None:
         sim = self.sim
+        if proc == "get_ActiveVessel":  # real kRPC 0.7: null outside flight (seen at the Space Center), not an error
+            return enc_object(sim.vessel_uid * 10) if sim.scene == "flight" else None
         if sim.scene != "flight":
             raise RpcFailure("Procedure not available in game scene '%s'" % "SpaceCenter")
-        if proc == "get_ActiveVessel":
-            return enc_object(sim.vessel_uid * 10)
         if proc == "get_UT":
             return enc_double(sim.ut)
 

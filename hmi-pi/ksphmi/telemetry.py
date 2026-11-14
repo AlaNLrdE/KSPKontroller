@@ -162,8 +162,12 @@ class KrpcSource(Source):
         while not self._stop.is_set():
             try:
                 vessel = sc.active_vessel
-            except RPCError as e:  # not in the flight scene
-                self._publish(Snapshot(state=NO_VESSEL, detail=_short(e), received=time.monotonic()))
+            except RPCError as e:  # not in the flight scene (some scenes raise)
+                vessel, why = None, _short(e)
+            else:
+                why = "no active vessel"
+            if vessel is None:  # kRPC 0.7 at the Space Center / Tracking Station returns null instead of raising
+                self._publish(Snapshot(state=NO_VESSEL, detail=why, received=time.monotonic()))
                 self._stop.wait(1.0)
                 continue
             try:
@@ -210,7 +214,7 @@ class KrpcSource(Source):
                 streams[key] = s
             log.info("following %s around %s", name, body_name)
             while not self._stop.is_set():
-                if sc.active_vessel != vessel:  # also a liveness probe: raises when the socket is gone
+                if sc.active_vessel != vessel:  # also a liveness probe: raises when the socket is gone (None = left flight)
                     return
                 v = {k: s() for k, s in streams.items()}
                 if v["body_obj"] != body:  # sphere of influence change: new reference frame needed

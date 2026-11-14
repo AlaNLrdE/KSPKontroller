@@ -61,3 +61,9 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 Run `./ci verify` and read every `hmi:` / `kRPC:` line **before** they launch. If anything the test needs is
 missing (mod, firewall, cursor rule), stop them and say so first; do not start monitors for a session that cannot
 work. Remind them the board and the HMI only get data once a vessel is **in flight**.
+
+## Real kRPC vs the stand-in
+
+- Real kRPC 0.7 returns **null** for `SpaceCenter.ActiveVessel` at the Space Center (no RPC error): the HMI read
+  `None.orbit` and reconnected in a loop (seen live 2026-11-14). Handle None as NOT IN FLIGHT; kspsim now answers
+  null too. Any behaviour seen only in the real game goes into `tools/kspsim/krpcserver.py` and a test.
