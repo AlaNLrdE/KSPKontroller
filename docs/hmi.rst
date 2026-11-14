@@ -30,9 +30,50 @@ How it works
 * the **display** (``ksphmi/display.py``, pygame) draws the latest snapshot at ``fps`` frames per second. The
   layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
 
-The header shows ``LIVE``, ``NOT IN FLIGHT`` (space center, editors), ``OFFLINE`` (no kRPC) or ``NO DATA``
+The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
+leaving resource bars and a read-only staging queue below them. Resource bars show vessel-wide amount/capacity
+and percentage for ElectricCharge, LiquidFuel, Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when
+installed. Zero capacity means not installed, an empty installed tank shows 0%, and unavailable telemetry shows
+``--``. Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
+activation stages with part counts and KSP's stage delta-v. Resource and stage streams refresh at 2 Hz, and
+their collections are rebuilt when the vessel's parts or staging queue changes (including docking/decoupling).
+These displays do not activate stages or transfer resources.
+
+The flight layout places compact orbital data on the left, a smaller ORBIT diagram at the upper right,
+and a stock-inspired NavBall below it. ``ksphmi/navball.py`` renders the blue/brown sphere and graduations
+from kRPC's surface-frame attitude quaternion, including inverted and vertical flight. Fixed boresight,
+heading, pitch/roll, Orbit/Surface/Target speed, SAS/RCS, throttle, G-force, all six orbital direction markers,
+target/anti-target and maneuver markers follow the game's live telemetry. SAS mode buttons are read-only
+status indicators. Zero-velocity frames and missing targets/nodes hide their undefined markers.
+The maneuver readout includes remaining delta-v, countdown, progress and an estimated burn duration/start
+using current mass, available thrust and specific impulse; this estimate assumes a constant engine configuration
+and is not a staging-aware copy of KSP's burn prediction. Missing navigation telemetry leaves the orbital data usable.
+The simulator's manual fields include attitude, speed mode (0 orbit, 1 surface, 2 target), target vectors and
+node/engine parameters. ``./ci verify`` runs headless navigation render checks when ``build/hmi-venv`` exists.
+
+Outside flight, dedicated preparation checklists are shown for Space Center, VAB, SPH, Mission Control,
+Astronaut Complex, Research & Development, Administration and Tracking Station. These are contextual guides,
+not live contract or crew lists. Flight data resumes automatically after launching or switching to a vessel.
+
+KSPSerialIO 0.19.3.15 adds a read-only UDP context responder on port 50002. The Pi sends ``KSPHMI/1`` once per
+non-flight sample; the response is ``KSPHMI/1 <scene>``. Facility spawn/despawn events distinguish buildings
+that all use KSP's Space Center scene. Deploy both the plugin and HMI to enable these views, and allow UDP
+50002 from the Pi through the PC firewall. No serial port is used. A missing responder, unknown scene or
+blocked port falls back to the generic waiting screen; flight telemetry still uses kRPC unchanged.
+The simulator serves the same context protocol and offers all buildings in its scene selector.
+
+The header shows ``LIVE``, ``CONNECTED`` (outside flight), ``OFFLINE`` (no kRPC) or ``NO DATA``
 (connected, but no new sample for 3 s: the game froze or the link stalled). A periapsis inside the atmosphere is
 orange and one below the surface red.
+
+ORBIT's white ring is the measured vessel position relative to the body's centre, projected into a fixed
+inertial view plane. The source streams ``Vessel.position`` and ``Vessel.velocity`` in the body's
+``non_rotating_reference_frame`` and fixes the view axes while following that vessel/body. The conic is
+derived from the same position, velocity and gravitational parameter, so it rotates together with its apsides
+without rotating the camera. This avoids apparent vessel jumps during RCS docking in near-circular orbits,
+where true anomaly and the periapsis direction are ill-conditioned. Ap/Pe are hidden for effectively circular
+orbits without a meaningful apsis direction. This is a 2D inertial projection, not a surface-longitude map;
+switching vessels or bodies initializes a new view. The clip still contains unbounded escape trajectories.
 
 On the Pi there is no desktop: frames are drawn in memory and copied to the Linux framebuffer ``/dev/fb0``
 (``output = fbdev``, set by the service through ``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode
@@ -64,6 +105,15 @@ Settings
 overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds ``KSPHMI_KRPC_ADDRESS``, which
 ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to ``HMI_KRPC_ADDRESS`` if set).
 
+The Pi initiates all connections, so a DHCP change of its own address does not affect the display.
+If the configured PC address stops working, the HMI broadcasts ``KSPHMI/1`` on UDP 50002 to the local
+IPv4 network and retries kRPC at the responding KSPSerialIO server. This reuses the scene responder;
+no additional plugin or Pi address registry is needed. Both machines must be on the same broadcast network,
+with UDP 50002 and kRPC TCP 50000/50001 allowed. With multiple KSP PCs the first responder is selected.
+If broadcast is blocked, the configured address remains the fallback; use a DHCP reservation for that case.
+Set ``krpc.discovery = false`` in the local configuration, or use ``--address``, to pin a specific server.
+The SSH alias is separate: use a DHCP reservation or a resolvable hostname to keep administrative access stable.
+
 One-time setup
 --------------
 
@@ -77,6 +127,18 @@ On the Pi (Raspberry Pi OS Lite 64-bit, wired to the same LAN), as your user:
    # stop the text console's cursor blinking over the HMI frames (now and at every boot)
    echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
    sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf
+
+After deploying the HMI, enable appliance-style boot once on the Pi:
+
+.. code-block:: bash
+
+   sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh
+
+This backs up the boot files with a ``.ksphmi-backup`` suffix, hides firmware splash and console boot text,
+masks the tty1 login prompt and persists the cursor setting. SSH stays available. The HMI service is enabled
+by deployment and starts without login through lingering. Boot changes take effect at the next reboot;
+the display is blank until the HMI paints its waiting or live screen. Do not cut power to shut down Linux;
+use ``sudo poweroff`` first to avoid filesystem damage.
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's
 address, ``User``, ``IdentityFile``). The repo never stores the address or the user name; ``HMI_HOST`` overrides

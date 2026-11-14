@@ -59,7 +59,35 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
 - A board frozen with the orange LED not pulsing: double-tap RESET (orange pulses), or unplug USB for 10 s, then
   `./ci upload_sketch`. A plain RESET often does not recover it.
+- HMI facility screens need KSPSerialIO UDP 50002 context as well as kRPC: stock kRPC active_vessel is null
+  outside flight and does not distinguish the Space Center building dialogs. Use facility spawn/despawn events.
+- HMI reconnects discover the PC by broadcasting the same context request on UDP 50002 after the saved address
+  fails. Disable discovery in isolated client tests so an open real game cannot redirect their connections.
+- Pi kiosk boot setup is `sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh` (run by the user): hide boot text and
+  firmware splash, mask tty1 getty, persist cursor settings; user-service lingering starts the HMI without login.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
   the repo). pip's pygame has no `kmsdrm`: the Pi uses Debian `python3-pygame`; anything needing `sudo` there
   is run by the user. `hmi-pi/` is LF (`.gitattributes`), not CRLF.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
+- NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
+  `target_speed_reference_frame`: `orbital_reference_frame` co-moves with the vessel and reads zero speed.
+  Attitude uses the surface-frame quaternion; vessel axes are right, forward, down, surface axes up, north, east.
+- NavBall markings use bold compass bearings only on the 0 and +/-45 degree pitch bands, and regular pitch
+  labels every 10 degrees. Lift horizon bearings 5 degrees into the blue hemisphere so their backgrounds
+  do not cover the brown ground. The fixed yellow boresight includes a center dot. Marker
+  edge margins must account for the complete glyph size, so larger symbols cannot spill outside the globe.
+- NavBall volume lighting is a cached low-resolution alpha map, scaled once per size. Shade the globe and
+  graduations before drawing navigation markers; avoid per-pixel Python work inside the Pi's frame loop.
+- ORBIT must clip its contents to the panel interior and restore the caller's clip in a finally block:
+  hyperbolic curves and distant vessel markers can extend arbitrarily far beyond the diagram scale.
+- NavBall degree labels must not be hidden by screen-space rectangle collision tests: rolling changes rounded
+  rectangles and causes flicker. Use continuous foreshortening and limb fading; pitch ladders have 10-degree
+  major ticks and 5-degree minor ticks, with stroke widths scaled to display height.
+- The +/-45 degree NavBall parallels use thin, long horizontal segments interrupted at the compass-bearing
+  columns; keep these bands in addition to the local five-degree pitch ladder ticks.
+- Keep the ten flight metric tiles in the upper-left block below 40% of screen height. Resources are vessel
+  totals in KSP units (0 capacity = absent, 0 amount = empty, missing data = unknown); staging is read-only.
+  Rebuild resource/stage collections after stage or parts changes, including docking and decoupling.
+- ORBIT's live vessel marker must use Cartesian position in the body's non-rotating reference frame, with
+  fixed view axes per vessel/body. Never anchor the camera or live marker to periapsis/true anomaly:
+  near-circular RCS impulses can flip apsis direction without moving the vessel's position.
