@@ -11,13 +11,16 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 | Wire protocol, packet sizes | `docs/protocol.rst`, `docs/vesseldata.rst` |
 | Plugin behaviour, settings, perf/port logs | `docs/plugin.rst` |
 | Firmware, pins, LED matrix, recovery | `docs/firmware.rst`, `docs/overview.rst` |
+| Raspberry Pi HMI (`hmi-pi/`, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
 | Build, deploy, flash | `docs/building.rst`, `./ci help` |
 | Past decisions | `KSPSerialIO/CHANGELOG.md` (top entries), `git log -10` |
 
 ## Non-negotiable rules
 
-1. **KSP must be closed** before deploying, flashing or probing the board (it owns COM5):
-   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs.
+1. **KSP must be closed** before deploying into `GameData` or probing the board with scripts (it owns COM5):
+   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs. **Flashing the sketch is allowed with KSP
+   open** (user, 2026-11-14); it still needs the user's explicit OK. KSP may lose the port while the board resets:
+   check the log afterwards (the plugin reconnects by itself).
 2. **The `wk-rea` KSP install is shared with another Claude session** (`ksp-workbench-*`, owns the other
    mods). Before `./ci deploy` or flashing: SendMessage it, wait for "OK deploy", tell it when done.
    We only write `GameData/KSPSerialIO`, never `--remove`, never touch other mods. `./ci verify` checks it.
@@ -53,4 +56,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
 - A board frozen with the orange LED not pulsing: double-tap RESET (orange pulses), or unplug USB for 10 s, then
   `./ci upload_sketch`. A plain RESET often does not recover it.
+- Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
+  the repo). pip's pygame has no `kmsdrm`: the Pi uses Debian `python3-pygame`; anything needing `sudo` there
+  is run by the user. `hmi-pi/` is LF (`.gitattributes`), not CRLF.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
