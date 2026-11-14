@@ -75,9 +75,36 @@ On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/c
 address, ``User``, ``IdentityFile``). The repo never stores the address or the user name; ``HMI_HOST`` overrides
 the alias. A DHCP reservation on the router keeps the Pi's address fixed.
 
-In KSP (with KSP closed, coordinated with the other session that shares the install): install the kRPC mod into
-``GameData/kRPC``. In the game, open the kRPC window, set the server address to the PC's LAN address (not
-``127.0.0.1``), tick auto-start and auto-accept, and allow TCP 50000-50001 in the Windows firewall.
+In KSP (with KSP closed): kRPC **0.7.0** (built for KSP 1.12.5, protocol version 1, matching ``krpc==0.7.0``
+on the Pi; the 0.5.x mods speak protocol 0 and the 0.7 client refuses them) from
+`github.com/krpc/krpc/releases <https://github.com/krpc/krpc/releases>`_, ``GameData/kRPC`` copied as is. The
+shipped ``PluginData/settings.cfg`` is empty (kRPC writes defaults on first start, listening on ``127.0.0.1``
+only), so it is replaced with:
+
+.. code-block:: text
+
+   KRPCConfiguration
+   {
+       autoStartServers = True
+       autoAcceptConnections = True
+       servers { item { name = KSPKontroller HMI  protocol = ProtocolBuffersOverTCP
+                        settings { item { key = address  value = 0.0.0.0 }
+                                   item { key = rpc_port  value = 50000 }
+                                   item { key = stream_port  value = 50001 } } } }
+   }
+
+(one value per line in the real file). The wired LAN is a **Public** network in Windows, and the KSP install
+has no firewall rule of its own, so an administrator PowerShell must allow the ports once:
+
+.. code-block:: powershell
+
+   New-NetFirewallRule -DisplayName "KSP kRPC (wk-rea)" -Direction Inbound -Action Allow -Protocol TCP `
+     -LocalPort 50000,50001 -RemoteAddress LocalSubnet `
+     -Program "C:\Users\alanl\wk\wk-rea\Kerbal Space Program\KSP_x64.exe"
+
+``./ci verify`` (``check_krpc``) checks the mod version against the Pi's client, the server settings (auto-start,
+auto-accept, not localhost) and the firewall rule. ``tools/kspsim`` must not run while KSP does: both want port
+50000 (and COM5).
 
 Commands
 --------

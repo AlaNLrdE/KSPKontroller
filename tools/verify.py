@@ -456,6 +456,50 @@ def check_hmi(ctx):
         report("PASS", "hmi: screen", "framebuffer on")
 
 
+FIREWALL_RULE = "KSP kRPC (wk-rea)"
+
+
+def check_krpc(ctx):
+    """The kRPC mod the Pi HMI needs: installed, same version as the Pi's client, server set to start by itself,
+    accept clients and listen beyond localhost, and an inbound firewall rule (the wired LAN is a Public network)."""
+    mod = os.path.join(ctx["ksp"], "GameData", "kRPC")
+    if not os.path.isdir(mod):
+        report("FAIL", "kRPC: installed", "no GameData/kRPC: the Pi HMI gets no game data (docs/hmi.rst)")
+        return
+    want = re.search(r"^krpc==([\d.]+)", read(os.path.join(ROOT, "hmi-pi", "requirements.txt")), re.M)
+    try:
+        v = json.loads(read(os.path.join(mod, "kRPC.version")))["VERSION"]
+        have = "%d.%d.%d" % (v["MAJOR"], v["MINOR"], v["PATCH"])
+    except (OSError, ValueError, KeyError):
+        have = "?"
+    if want and have != want.group(1):
+        report("FAIL", "kRPC: version", "mod %s but the Pi client is krpc==%s (protocol mismatch)" % (have, want.group(1)))
+    else:
+        report("PASS", "kRPC: version", have)
+    cfg_path = os.path.join(mod, "PluginData", "settings.cfg")
+    cfg = read(cfg_path) if os.path.isfile(cfg_path) else ""
+    problems = []
+    if not re.search(r"autoStartServers\s*=\s*True", cfg, re.I):
+        problems.append("server does not auto-start")
+    if not re.search(r"autoAcceptConnections\s*=\s*True", cfg, re.I):
+        problems.append("clients not auto-accepted")
+    addr = re.search(r"key\s*=\s*address\s*value\s*=\s*(\S+)", cfg)
+    if not addr or addr.group(1) in ("127.0.0.1", "localhost"):
+        problems.append("listens on %s only: the Pi cannot reach it" % (addr.group(1) if addr else "127.0.0.1 (default)"))
+    report("WARN" if problems else "PASS", "kRPC: server settings",
+           "; ".join(problems) if problems else "auto-start, auto-accept, address %s" % addr.group(1))
+    try:
+        out = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", "name=" + FIREWALL_RULE],
+                             capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if "50000" in out:
+        report("PASS", "kRPC: firewall", "rule '%s' present" % FIREWALL_RULE)
+    else:
+        report("WARN", "kRPC: firewall", "no inbound rule '%s' for TCP 50000-50001: the Pi may be blocked "
+               "(docs/hmi.rst, needs an administrator)" % FIREWALL_RULE)
+
+
 def check_sim(ctx):
     """kspsim tests: wire packing against the firmware sizes, the flight model, and the HMI kRPC client
     against the simulated server (catches a krpc client upgrade that the stand-in no longer serves)."""
@@ -481,7 +525,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_krpc, check_sim, check_git]
 
 
 def main():
