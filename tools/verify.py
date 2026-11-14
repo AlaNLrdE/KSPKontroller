@@ -423,7 +423,9 @@ def check_hmi(ctx):
     host = os.environ.get("HMI_HOST", "ksphmi")
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
              "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
-             "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"")
+             "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"; "
+             "echo \"cursorblink=$(cat /sys/class/graphics/fbcon/cursor_blink 2>/dev/null)\"; "
+             "echo \"cursorrule=$(test -f /etc/tmpfiles.d/ksphmi-cursor.conf && echo yes || echo no)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
                            capture_output=True, text=True, timeout=15)
@@ -454,6 +456,14 @@ def check_hmi(ctx):
                "framebuffer blanked (fb0/blank=%s): nothing shows; the HMI unblanks it, redeploy or restart it" % blank)
     elif blank == "0":
         report("PASS", "hmi: screen", "framebuffer on")
+    # The text console's cursor blinks over the frames unless fbcon's blinking is off (root only, docs/hmi.rst).
+    # The live value alone is not enough: it reads 0 while fbcon's cursor timer happens to be stopped, and the
+    # blinking comes back after a reboot or console output; only the tmpfiles rule makes it stick.
+    if env.get("cursorrule") == "no":
+        report("WARN", "hmi: console cursor", "no /etc/tmpfiles.d/ksphmi-cursor.conf: the cursor can blink over the "
+               "HMI (now: blink=%s; docs/hmi.rst)" % env.get("cursorblink", "?"))
+    elif env.get("cursorrule") == "yes":
+        report("PASS", "hmi: console cursor", "blinking off at every boot (blink=%s)" % env.get("cursorblink", "?"))
 
 
 FIREWALL_RULE = "KSP kRPC (wk-rea)"

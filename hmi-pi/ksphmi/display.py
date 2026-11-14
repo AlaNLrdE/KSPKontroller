@@ -14,6 +14,7 @@ import time
 import pygame
 
 from . import fmt
+from .netinfo import NetInfo
 from .telemetry import CONNECTING, FLIGHT, NO_VESSEL, Snapshot, stale
 
 BG = (10, 14, 20)
@@ -94,6 +95,9 @@ class Display:
         pygame.display.init()
         pygame.font.init()
         self.day_hours = int(cfg["format"]["day_hours"])
+        k = cfg["krpc"]
+        self.server_text = "kRPC server: %s:%s" % (k["address"], k["rpc_port"])
+        self.net = NetInfo(str(k["address"]))
         if output == "fbdev" and not windowed:
             self.fb = Framebuffer(dcfg.get("fbdev", "/dev/fb0"))
             self.screen = pygame.Surface(self.fb.size)
@@ -182,6 +186,9 @@ class Display:
         self.text(hint, 3.4, LABEL, (cx, cy + 13 * u), "midtop")
         if snap.detail:
             self.text(snap.detail[:110], 2.8, MUTED, (cx, cy + 19 * u), "midtop")
+        # where to find this display (SSH, deploys) and where it looks for the game
+        self.text(self.net.line(), 3.4, VALUE, (cx, self.h - 9.5 * u), "midtop")
+        self.text(self.server_text, 3.0, LABEL, (cx, self.h - 5 * u), "midtop")
 
     # ------------------------------------------------------------------------------------------ flight
     def flight(self, s: Snapshot) -> None:

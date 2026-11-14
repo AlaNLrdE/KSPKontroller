@@ -41,6 +41,10 @@ but left the screen black on the Pi 4; fbdev needs no EGL and no DRM master, cos
 The framebuffer can be left *blanked* (``/sys/class/graphics/fb0/blank`` = 4, powered down; it happened after
 the kmsdrm attempts): frames are then written but nothing shows, while the HMI log looks healthy. The HMI
 unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./ci verify`` checks the value.
+The console underneath (fbcon, tty1) still blinks its cursor into the framebuffer between frames; only
+root can turn that off, hence the tmpfiles rule above. With blinking off the cursor is never redrawn and the
+next frame covers it. The waiting screens show this display's own address (the one it uses to reach the
+kRPC server first) and the server it looks for, to find the Pi without a keyboard.
 
 .. important::
 
@@ -70,6 +74,9 @@ On the Pi (Raspberry Pi OS Lite 64-bit, wired to the same LAN), as your user:
    # pygame with the kmsdrm-capable system SDL, plus the Mesa EGL/GLES libraries kmsdrm needs (not in Lite)
    sudo apt install -y python3-pygame libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri
    sudo loginctl enable-linger $USER        # start the user service at boot, nobody logged in
+   # stop the text console's cursor blinking over the HMI frames (now and at every boot)
+   echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
+   sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's
 address, ``User``, ``IdentityFile``). The repo never stores the address or the user name; ``HMI_HOST`` overrides

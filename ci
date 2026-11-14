@@ -516,6 +516,12 @@ deploy_hmi() {
   [ -z "$missing" ] || die "the Pi needs its one-time setup:
 $missing
 run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
+  # The text console's blinking cursor is drawn over the HMI frames; only root can stop it (not fatal)
+  # (the live cursor_blink value is not enough: it reads 0 whenever fbcon's timer happens to be stopped)
+  if ! hmi_ssh 'test -f /etc/tmpfiles.d/ksphmi-cursor.conf'; then
+    log "WARNING: the console cursor blinks over the HMI. Once, on the Pi:"
+    log "  %s" "echo '\''w /sys/class/graphics/fbcon/cursor_blink - - - - 0'\'' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
+  fi
   pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
 
   log "Copying hmi-pi to $HMI_HOST:~/ksphmi/app (kRPC server: $pc_ip)"

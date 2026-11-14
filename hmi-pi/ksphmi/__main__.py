@@ -35,6 +35,8 @@ def main(argv=None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     cfg = config.load(args.config)
+    if args.address:  # one place for the address: the source and the waiting screen both read cfg
+        cfg["krpc"] = {**cfg["krpc"], "address": args.address}
     size = tuple(int(v) for v in args.size.lower().split("x")) if args.size else None
 
     import pygame  # after argparse, so --help works without pygame

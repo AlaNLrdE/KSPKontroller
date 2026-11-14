@@ -85,6 +85,18 @@ class DemoTest(unittest.TestCase):
         self.assertFalse(stale(Snapshot(), now + 100))  # not in flight: nothing to go stale
 
 
+class NetInfoTest(unittest.TestCase):
+    def test_line_names_this_machine(self):
+        from ksphmi.netinfo import NetInfo, route_address
+        info = NetInfo("127.0.0.1")
+        line = info.line()
+        self.assertTrue(line.startswith("This display: "))
+        self.assertIn(info.hostname, line)
+        self.assertEqual(route_address("127.0.0.1"), "127.0.0.1")
+        self.assertEqual(route_address("not a host name"), "")
+        self.assertNotIn("127.", info.primary)  # loopback never shown as the display's address
+
+
 class ConfigTest(unittest.TestCase):
     def test_layers(self):
         with tempfile.TemporaryDirectory() as d:
