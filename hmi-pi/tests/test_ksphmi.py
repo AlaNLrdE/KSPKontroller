@@ -97,6 +97,44 @@ class NetInfoTest(unittest.TestCase):
         self.assertNotIn("127.", info.primary)  # loopback never shown as the display's address
 
 
+class ConnectTimeoutTest(unittest.TestCase):
+    def test_a_server_that_never_answers_does_not_hang_the_hmi(self):
+        import socket
+        import threading as th
+        from ksphmi.telemetry import CONNECTING, KrpcSource
+
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(4)
+        held = []
+        stop = th.Event()
+
+        def accept_and_ignore():  # accepts, reads nothing back: like kRPC with maxTimePerUpdate = 0
+            srv.settimeout(0.2)
+            while not stop.is_set():
+                try:
+                    held.append(srv.accept()[0])
+                except OSError:
+                    pass
+        th.Thread(target=accept_and_ignore, daemon=True).start()
+        port = srv.getsockname()[1]
+        src = KrpcSource("127.0.0.1", port, port, retry_seconds=0.1)
+        src.CONNECT_TIMEOUT = 0.5
+        src.start()
+        try:
+            end = time.monotonic() + 5
+            while time.monotonic() < end and "did not answer" not in src.latest().detail:
+                time.sleep(0.05)
+            self.assertEqual(src.latest().state, CONNECTING)
+            self.assertIn("did not answer", src.latest().detail)
+        finally:
+            src.stop()
+            stop.set()
+            for c in held:
+                c.close()
+            srv.close()
+
+
 class ConfigTest(unittest.TestCase):
     def test_layers(self):
         with tempfile.TemporaryDirectory() as d:

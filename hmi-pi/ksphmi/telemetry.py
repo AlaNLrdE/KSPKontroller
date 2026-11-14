@@ -104,9 +104,9 @@ class KrpcSource(Source):
         while not self._stop.is_set():
             self._publish(Snapshot(state=CONNECTING, detail="connecting to kRPC at " + where))
             try:
-                conn = krpc.connect(name=self.client_name, address=self.address,
-                                    rpc_port=self.rpc_port, stream_port=self.stream_port)
+                conn = self._connect(krpc)
             except Exception as e:  # refused (KSP closed), timeout, handshake rejected by the server
+                log.warning("kRPC at %s: %s", where, _short(e))
                 self._publish(Snapshot(state=CONNECTING, detail="kRPC at %s: %s" % (where, _short(e))))
                 self._stop.wait(self.retry)
                 continue
@@ -122,6 +122,37 @@ class KrpcSource(Source):
                 except Exception:
                     pass
             self._stop.wait(self.retry)
+
+    CONNECT_TIMEOUT = 15.0
+
+    def _connect(self, krpc):
+        """krpc.connect() with a deadline on the whole handshake. Its own ``timeout`` only covers the TCP connect:
+        a server that accepts but never answers (kRPC with maxTimePerUpdate = 0 did exactly that) hung the HMI
+        forever. The stuck attempt is left to a daemon thread; if it ever completes, its connection is closed."""
+        box: dict = {}
+
+        def attempt() -> None:
+            try:
+                box["conn"] = krpc.connect(name=self.client_name, address=self.address, rpc_port=self.rpc_port,
+                                           stream_port=self.stream_port, timeout=self.CONNECT_TIMEOUT)
+            except Exception as e:
+                box["error"] = e
+            if box.get("abandoned") and "conn" in box:
+                try:
+                    box["conn"].close()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=attempt, name="krpc-connect", daemon=True)
+        t.start()
+        t.join(self.CONNECT_TIMEOUT)
+        if t.is_alive():
+            box["abandoned"] = True
+            raise TimeoutError("the server accepted but did not answer within %.0f s (kRPC busy, paused, or "
+                               "misconfigured)" % self.CONNECT_TIMEOUT)
+        if "error" in box:
+            raise box["error"]
+        return box["conn"]
 
     def _session(self, conn) -> None:
         from krpc.error import RPCError
