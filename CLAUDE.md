@@ -91,3 +91,47 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - ORBIT's live vessel marker must use Cartesian position in the body's non-rotating reference frame, with
   fixed view axes per vessel/body. Never anchor the camera or live marker to periapsis/true anomaly:
   near-circular RCS impulses can flip apsis direction without moving the vessel's position.
+
+## Handoff: 2026-11-14 Raspberry Pi HMI session
+
+**Implementation baseline:** these six commits were pushed to `origin/main`, ending at `d91eab8`:
+
+- `ea90041`: facility-specific screens and KSPSerialIO UDP scene responder.
+- `da74c2f`: LAN discovery after DHCP changes and the optional kiosk boot installer.
+- `710fac8`: streamed NavBall, stock-style markings, lighting and compact flight metrics.
+- `d938a5c`: vessel resource totals and read-only staging queue.
+- `4e19e81`: ORBIT clipping and measured inertial vessel position, fixing near-circular RCS/docking jumps.
+- `d91eab8`: documentation and the technical lessons recorded above.
+
+**Deployed:** KSPSerialIO **0.19.3.15** is installed in the shared game; the latest HMI code is deployed to the
+Pi and was following a real vessel through kRPC. The Pi runs one application process, `python -m ksphmi`,
+managed by the user service `ksphmi.service`; PIDs change on restart. HMI-only deployment is allowed while KSP
+is running. No firmware flash is needed for these changes. Use `docs/hmi.rst` for architecture and commands.
+
+**Validation:** plugin and firmware builds succeeded; final code passed **30 HMI tests** (with pygame) and
+**27 simulator tests**. Each of the five intermediate feature commits also passed its HMI and simulator suites
+in an isolated source snapshot. Screens were rendered at 3:2, 16:9 and the Pi's 2520x1680 resolution.
+The final ORBIT correction was tested with fixed position and opposite tiny velocity impulses, including a
+180-degree periapsis flip; the white vessel ring remained stationary. See `build/verify-after-inertial-orbit.log`
+for the last deployment verification (local artifact, not in Git).
+
+**Pending / known state at last verification:**
+
+- `verify` was not fully green: the GameData snapshot reports missing `Kraken's Kreations`, and the game log
+  shows Arduino receive gaps that started before the final HMI deployments. Do not restore another mod or
+  reset the snapshot merely to hide this, and do not probe/flash the board while KSP owns its serial port.
+- Kiosk boot is **not confirmed configured**: autostart and lingering pass, but tty1/cursor setup still warns.
+  The installer is deployed; the user must run `sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh` on the Pi.
+  It needs their sudo password. Do not claim the console-free boot is complete until checked after reboot.
+- The named TCP firewall rule check warns despite successful live kRPC connections. The UDP 50002 rule was
+  installed and verified. The installed kRPC update budget is 9400 instead of the template's 5000; do not
+  overwrite the shared kRPC configuration without investigating why it differs.
+- Pi drawing takes about 81 ms/frame plus about 21 ms to copy the framebuffer; the 75 ms render-budget check
+  warns. Lighting is cached and tests/benchmarks draw offscreen without replacing the live screen with demo data.
+- An SSH alias lookup failure inside the Codex sandbox previously meant it could not read the user's SSH
+  configuration, not that the Pi was offline. Approved execution outside the sandbox reached `ssh ksphmi`.
+- `AGENTS.md`, `.agents/skills/` and `.codex/agents/kspcontroller-dev.toml` are versioned project
+  instructions/configuration. `.vscode/settings.json` stays local and untracked, at the user's request.
+  Use explicit paths when staging changes. Shared technical lessons are also recorded above.
+
+This handoff is versioned alongside the repository agent configuration so another agent can continue from it.
