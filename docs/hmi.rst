@@ -41,6 +41,10 @@ On the Pi there is no desktop: SDL draws straight on the HDMI output with its ``
    The pygame wheels from pip bundle an SDL **without** ``kmsdrm`` (``pygame.error: kmsdrm not available``).
    The Pi uses Debian's ``python3-pygame`` (pygame 2.6.1 on the system SDL) through a venv created with
    ``--system-site-packages``; only ``krpc`` comes from pip. The PC venv pins the same pygame 2.6.1.
+   SDL's ``kmsdrm`` also needs Mesa EGL/GLES (``pygame.error: EGL not initialized`` without them), which
+   Raspberry Pi OS Lite does not install; ``./ci deploy_hmi`` checks for every package it needs.
+   The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
+   Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
 
 Settings
 --------
@@ -57,7 +61,8 @@ On the Pi (Raspberry Pi OS Lite 64-bit, wired to the same LAN), as your user:
 
 .. code-block:: bash
 
-   sudo apt install -y python3-pygame       # pygame with the kmsdrm-capable system SDL
+   # pygame with the kmsdrm-capable system SDL, plus the Mesa EGL/GLES libraries kmsdrm needs (not in Lite)
+   sudo apt install -y python3-pygame libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri
    sudo loginctl enable-linger $USER        # start the user service at boot, nobody logged in
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's

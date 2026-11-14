@@ -474,6 +474,7 @@ deploy_all() {
 
 HMI_DIR="$ROOT/hmi-pi"
 HMI_HOST="${HMI_HOST:-ksphmi}"
+HMI_APT_PACKAGES="python3-pygame libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri"
 
 hmi_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"; }
 
@@ -506,10 +507,12 @@ deploy_hmi() {
   hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
   test_hmi
   local missing pc_ip
-  missing="$(hmi_ssh 'dpkg -s python3-pygame >/dev/null 2>&1 || echo "  python3-pygame not installed"; [ -e "/var/lib/systemd/linger/$USER" ] || echo "  lingering off"')"
+  # SDL's kmsdrm driver needs Mesa EGL/GLES even for 2D drawing; Raspberry Pi OS Lite does not ship them
+  missing="$(hmi_ssh "for p in $HMI_APT_PACKAGES; do dpkg -s \$p >/dev/null 2>&1 || echo \"  \$p not installed\"; done
+    [ -e /var/lib/systemd/linger/\$USER ] || echo '  lingering off'")"
   [ -z "$missing" ] || die "the Pi needs its one-time setup:
 $missing
-run on the Pi: sudo apt install -y python3-pygame && sudo loginctl enable-linger \$USER"
+run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
   pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
 
   log "Copying hmi-pi to $HMI_HOST:~/ksphmi/app (kRPC server: $pc_ip)"
@@ -528,16 +531,18 @@ run on the Pi: sudo apt install -y python3-pygame && sudo loginctl enable-linger
     systemctl --user daemon-reload
     systemctl --user enable ksphmi.service 2>/dev/null
     systemctl --user restart ksphmi.service"
-  sleep 4
+  # Restart=always hides a crash loop behind "active": wait past RestartSec and require zero restarts
+  sleep 8
   local state
-  state="$(hmi_ssh 'systemctl --user is-active ksphmi.service' || true)"
+  state="$(hmi_ssh 'echo "$(systemctl --user is-active ksphmi.service)/$(systemctl --user show ksphmi.service -p NRestarts --value)"' || true)"
   hmi_logs 15
-  [ "$state" = "active" ] || die "the HMI service is '$state' on $HMI_HOST (log above)"
+  [ "$state" = "active/0" ] || die "the HMI service is not running cleanly on $HMI_HOST (state/restarts: $state, log above)"
   log "Done: HMI running on $HMI_HOST"
 }
 
 hmi_logs() {
-  hmi_ssh "journalctl --user -u ksphmi.service -n ${1:-60} --no-pager -o short"
+  # Raspberry Pi OS keeps no per-user journal: read the unit's lines from the system journal (user is in adm)
+  hmi_ssh "journalctl _SYSTEMD_USER_UNIT=ksphmi.service -n ${1:-60} --no-pager -o short"
 }
 
 clean() {
