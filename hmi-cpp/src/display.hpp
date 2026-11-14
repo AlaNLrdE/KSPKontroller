@@ -5,6 +5,7 @@
 #include <array>
 #include <functional>
 #include <map>
+#include <tuple>
 #include <memory>
 #include <optional>
 
@@ -56,9 +57,10 @@ private:
     void orbit_contents(const Rect& rect, const Snapshot& s);
     void inertial_orbit(const Rect& rect, const Snapshot& s);
     int apsis_label_width();
-    /// Static dial face (bezel, track, warning zones, ticks), rendered once per size at twice the resolution,
-    /// smoothed down and kept as a texture.
-    SDL_Texture* gauge_face(int radius, bool live);
+    /// Static dial face (chrome bezel, shaded face, scale, E/F, resource icon, odometer window), rendered once
+    /// per size, state (live, unknown, absent) and resource at twice the resolution, smoothed down and kept as a
+    /// texture.
+    SDL_Texture* gauge_face(int radius, int state, const std::string& name);
 
     struct GaugeLayout {
         Rect rect;
@@ -68,7 +70,7 @@ private:
         float label_units = 0;
     };
     std::optional<GaugeLayout> gauge_layout_;
-    std::map<std::pair<int, bool>, SDL_Texture*> gauge_faces_;
+    std::map<std::tuple<int, int, std::string>, SDL_Texture*> gauge_faces_;
 
     Canvas& c_;
     int day_hours_;

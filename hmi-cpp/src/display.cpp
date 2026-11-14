@@ -1,6 +1,8 @@
 #include "display.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
 
 #include "fmt.hpp"
 #include "gauges.hpp"
@@ -21,7 +23,6 @@ std::string amount_text(double v) { return fmt::str(std::fabs(v) >= 100 ? "%.0f"
 
 // Text sizes (units) below each dial: label, amount and the gap between them.
 constexpr float GAUGE_LABEL = 1.9f, GAUGE_AMOUNT = 1.8f, GAUGE_GAP = .3f;
-constexpr Color FACE{11, 16, 23};
 
 // Ring between two radii and two fractions of the dial, as convex quads (Canvas::polygon wants convex shapes).
 void dial_sector(Canvas& c, double cx, double cy, double r_out, double r_in, double f0, double f1, Color color,
@@ -32,6 +33,73 @@ void dial_sector(Canvas& c, double cx, double cy, double r_out, double r_in, dou
         auto d = gauges::point(cx, cy, r_in, fs[i + 1]), e = gauges::point(cx, cy, r_in, fs[i]);
         c.polygon({{float(a.first), float(a.second)}, {float(b.first), float(b.second)},
                    {float(d.first), float(d.second)}, {float(e.first), float(e.second)}}, color, false);
+    }
+}
+
+constexpr int GAUGE_LIVE = 0, GAUGE_UNKNOWN = 1, GAUGE_ABSENT = 2;  // dial face states (index of the face colours)
+constexpr Color NEEDLE_RED{222, 36, 28}, DIGITS{236, 236, 226};    // dial needle, light digits of the windows
+
+Color mix(Color a, Color b, double t) {
+    return Color{uint8_t(std::lround(a.r + (b.r - a.r) * t)), uint8_t(std::lround(a.g + (b.g - a.g) * t)),
+                 uint8_t(std::lround(a.b + (b.b - a.b) * t))};
+}
+
+// A disc shaded top to bottom through grey stops {position 0..1, level 0..255}, slightly cool so it reads as
+// polished steel. Drawn once into cached faces.
+void gradient_disc(Canvas& c, double cx, double cy, double radius, std::initializer_list<std::pair<double, double>> stops) {
+    const std::vector<std::pair<double, double>> s(stops);
+    int rr = static_cast<int>(radius);
+    for (int dy = -rr; dy <= rr; ++dy) {
+        double t = (dy + radius) / (2 * radius), v = s.back().second;
+        for (size_t i = 0; i + 1 < s.size(); ++i)
+            if (t <= s[i + 1].first) {
+                v = s[i].second + (s[i + 1].second - s[i].second) * (t - s[i].first) / std::max(s[i + 1].first - s[i].first, 1e-9);
+                break;
+            }
+        double half = std::sqrt(std::max(radius * radius - double(dy) * dy, 0.0));
+        auto level = [&](double k) { return uint8_t(std::clamp(std::lround(v - k), 0L, 255L)); };
+        c.fill_rect(float(cx - half), float(cy + dy), float(2 * half), 1.0f, Color{level(4), level(6), level(10)});
+    }
+}
+
+// Centred text of about `px` pixels on a face canvas (whose unit is 1 % of its own height).
+void face_text(Canvas& f, const std::string& s, double px, Color color, double x, double y) {
+    f.text(s, static_cast<float>((std::round(px) + .5) / f.u), color, x, y, Anchor::Center);
+}
+
+// A small symbol per resource, drawn with primitives into a cached face; `s` is its height, `face` the colour
+// behind it (for cut-outs).
+void gauge_icon(Canvas& f, const std::string& name, double x, double y, double s, Color color, Color face) {
+    auto P = [&](double px, double py) { return Pt{float(x + px * s), float(y + py * s)}; };
+    auto tri = [&](Pt a, Pt b, Pt c) { f.polygon({a, b, c}, color, false); };
+    float line = std::max(2.0f, rnd(.09 * s));
+    if (name == "ElectricCharge") {  // lightning bolt, split into convex pieces
+        Pt a = P(.10, -.52), b = P(-.30, .06), c = P(-.02, .06), d = P(-.14, .52), e = P(.30, -.10), g = P(.02, -.10),
+           h = P(.16, -.52);
+        tri(a, b, c), tri(a, c, g), tri(a, g, h), tri(c, d, e), tri(c, e, g);
+    } else if (name == "LiquidFuel") {  // fuel pump with its hose and nozzle
+        f.rounded_rect(Rect::f(x - .36 * s, y - .46 * s, .46 * s, .92 * s), rnd(.06 * s), color);
+        f.fill_rect(float(x - .27 * s), float(y - .36 * s), float(.28 * s), float(.24 * s), face);
+        f.polyline({P(.08, -.30), P(.24, -.18), P(.24, .26), P(.34, .26), P(.34, -.28)}, false, line, color);
+        tri(P(.28, -.32), P(.42, -.40), P(.42, -.24));
+    } else if (name == "Oxidizer") {  // droplet marked O2
+        f.circle(float(x), float(y + .14 * s), float(.34 * s), color);
+        tri(P(0, -.52), P(-.30, -.02), P(.30, -.02));
+        face_text(f, "O", .52 * s, face, x - .06 * s, y + .14 * s);
+        face_text(f, "2", .30 * s, face, x + .15 * s, y + .26 * s);
+    } else if (name == "MonoPropellant") {  // RCS tank marked MP
+        f.rounded_rect(Rect::f(x - .50 * s, y - .38 * s, s, .76 * s), rnd(.36 * s), color);
+        face_text(f, "MP", .56 * s, face, x, y + .02 * s);
+    } else if (name == "SolidFuel") {  // solid booster: nose cone, casing, fins and nozzle
+        tri(P(0, -.56), P(-.15, -.30), P(.15, -.30));
+        f.fill_rect(float(x - .15 * s), float(y - .30 * s), float(.30 * s), float(.66 * s), color);
+        tri(P(-.15, .10), P(-.30, .38), P(-.15, .34));
+        tri(P(.15, .10), P(.30, .38), P(.15, .34));
+        f.polygon({P(-.08, .36), P(.08, .36), P(.13, .52), P(-.13, .52)}, color, false);
+        f.line(P(-.15, -.08), P(.15, -.08), line, face);
+    } else if (name == "XenonGas") {  // element symbol in a ring
+        f.ring(float(x), float(y), float(.44 * s), line, color);
+        face_text(f, "Xe", .56 * s, color, x, y + .02 * s);
     }
 }
 
@@ -240,11 +308,11 @@ void Display::resources(const Rect& rect, const Snapshot& snap) {
     }
 }
 
-SDL_Texture* Display::gauge_face(int radius, bool live) {
-    auto key = std::make_pair(radius, live);
+SDL_Texture* Display::gauge_face(int radius, int state, const std::string& name) {
+    auto key = std::make_tuple(radius, state, name);
     auto found = gauge_faces_.find(key);
     if (found != gauge_faces_.end()) return found->second;
-    if (gauge_faces_.size() > 16) {
+    if (gauge_faces_.size() > 40) {
         for (auto& [k, texture] : gauge_faces_) SDL_DestroyTexture(texture);
         gauge_faces_.clear();
     }
@@ -257,27 +325,53 @@ SDL_Texture* Display::gauge_face(int radius, bool live) {
         {
             Canvas f(renderer, big, big, false);
             f.clear(PANEL);
-            double c = side, r = 2.0 * radius;
-            f.circle(c, c, r, live ? Color{30, 40, 54} : Color{25, 33, 45});
-            f.circle(c, c, std::round(.93 * r), FACE);
-            dial_sector(f, c, c, .86 * r, .70 * r, 0, 1, Color{27, 36, 50}, 2);
+            const double c = side, r = 2.0 * radius;
+            const bool live = state == GAUGE_LIVE;
+            // chrome: an outer ring lit from above, a reversed bevel inside it, a dark seat, then the face
+            gradient_disc(f, c, c, r, {{0, 250}, {.38, 196}, {.52, 92}, {.70, 128}, {1, 205}});
+            f.ring(float(c), float(c), float(r), std::max(1.0f, rnd(.012 * r)), Color{40, 44, 50});
+            gradient_disc(f, c, c, std::round(.88 * r), {{0, 70}, {.5, 150}, {1, 240}});
+            f.circle(float(c), float(c), float(std::round(.83 * r)), Color{26, 28, 32});
+            f.arc(float(c), float(c), float(.95 * r), 100 * PI / 180, 160 * PI / 180, std::max(2.0f, rnd(.03 * r)),
+                  Color{255, 255, 255});
+            static const Color RIM[3] = {{176, 178, 182}, {116, 120, 126}, {58, 62, 68}};
+            static const Color MID[3] = {{250, 250, 247}, {164, 168, 174}, {88, 92, 98}};
+            const Color rim = RIM[state], mid = MID[state];
+            int fr = static_cast<int>(std::lround(gauges::FACE * r));
+            for (int i = fr; i > 0; i -= std::max(1, fr / 48)) {
+                double t = std::pow(std::clamp((fr - i) / (.45 * fr), 0.0, 1.0), .7);  // darker towards the rim
+                f.circle(float(c), float(c), float(i), mix(rim, mid, t));
+            }
+            const Color ink = live ? Color{18, 18, 20} : state == GAUGE_UNKNOWN ? Color{70, 74, 80} : Color{48, 52, 58};
+            auto [px, py] = gauges::pivot(c, c, r);
             if (live) {
-                auto dim = [](Color k) {
-                    return Color{uint8_t(std::lround(.55 * k.r + .45 * FACE.r)), uint8_t(std::lround(.55 * k.g + .45 * FACE.g)),
-                                 uint8_t(std::lround(.55 * k.b + .45 * FACE.b))};
-                };
-                dial_sector(f, c, c, .91 * r, .87 * r, 0, gauges::BAD_BELOW, dim(BAD), 2);
-                dial_sector(f, c, c, .91 * r, .87 * r, gauges::BAD_BELOW, gauges::WARN_BELOW, dim(WARN), 2);
+                dial_sector(f, px, py, gauges::ZONE_OUT * r, gauges::ZONE_IN * r, 0, gauges::BAD_BELOW,
+                            Color{214, 30, 30}, 1);
+                dial_sector(f, px, py, gauges::ZONE_OUT * r, gauges::ZONE_IN * r, gauges::BAD_BELOW,
+                            gauges::WARN_BELOW, Color{236, 150, 20}, 1);
             }
-            for (int step = 0; step <= 20; ++step) {
-                double fr = step / 20.0;
-                bool major = step % 10 == 0, ten = step % 2 == 0;
-                double inner = major ? .55 : ten ? .60 : .64;
-                Color color = live ? (major ? VALUE : ten ? LABEL : MUTED) : GRID;
-                auto p0 = gauges::point(c, c, inner * r, fr), p1 = gauges::point(c, c, .68 * r, fr);
-                f.line({float(p0.first), float(p0.second)}, {float(p1.first), float(p1.second)},
-                       std::max(2.0f, rnd((major ? .045 : .03) * r)), color);
+            for (int step = 0; step <= 8; ++step) {
+                double length = step == 4 ? .22 : step % 2 == 0 ? .16 : .09;
+                double half = (step % 2 == 0 ? .050 : .026) * r / 2;
+                double a = gauges::angle(step / 8.0), dx = std::cos(a), dy = -std::sin(a), nx = std::sin(a),
+                       ny = std::cos(a);
+                double outer = gauges::SCALE * r, inner = (gauges::SCALE - length) * r;
+                f.polygon({{float(px + dx * outer + nx * half), float(py + dy * outer + ny * half)},
+                           {float(px + dx * outer - nx * half), float(py + dy * outer - ny * half)},
+                           {float(px + dx * inner - nx * half), float(py + dy * inner - ny * half)},
+                           {float(px + dx * inner + nx * half), float(py + dy * inner + ny * half)}},
+                          ink, false);
             }
+            for (auto [s, fraction] : {std::pair{"E", 0.0}, std::pair{"F", 1.0}}) {
+                auto p = gauges::point(px, py, gauges::LETTERS * r, fraction);
+                face_text(f, s, .40 * r, ink, p.first, p.second);
+            }
+            gauge_icon(f, name, c, c - .13 * r, .34 * r, live ? ink : rim, mid);
+            int ww = static_cast<int>(std::lround(gauges::WINDOW_W * r));
+            int wh = static_cast<int>(std::lround((gauges::WINDOW_BOTTOM - gauges::WINDOW_TOP) * r));
+            Rect window(static_cast<int>(c) - ww / 2, static_cast<int>(std::lround(c + gauges::WINDOW_TOP * r)), ww, wh);
+            f.rounded_rect(window.inflate(std::round(.05 * r), std::round(.05 * r)), rnd(.06 * r), Color{120, 124, 130});
+            f.rounded_rect(window, rnd(.04 * r), Color{8, 8, 10});
             f.flush();
         }
         SDL_RenderPresent(renderer);
@@ -298,33 +392,38 @@ void Display::gauge(const Resource& resource, const std::string& label, double c
     const double u = c_.u;
     auto fraction = resource.fraction();
     int r = std::max(4, static_cast<int>(radius));
+    bool absent = !fraction && resource.capacity && *resource.capacity == 0;
+    int state = fraction ? GAUGE_LIVE : absent ? GAUGE_ABSENT : GAUGE_UNKNOWN;
     if (on_gauge) on_gauge(label, Rect::f(cx - radius, cy - radius, 2 * radius, 2 * radius));
-    if (SDL_Texture* face = gauge_face(r, fraction.has_value())) {
+    if (SDL_Texture* face = gauge_face(r, state, resource.name)) {
         float side = static_cast<float>(2 * r + 4);
         // pygame centres the face with integer rects: get_rect(center=(int(cx), int(cy)))
         int left = static_cast<int>(cx) - (2 * r + 4) / 2, top = static_cast<int>(cy) - (2 * r + 4) / 2;
         c_.image(face, static_cast<float>(left), static_cast<float>(top), side, side);
     }
-    Color color = MUTED;
-    std::string centre, amount, reference;
+    auto [px, py] = gauges::pivot(static_cast<int>(cx), static_cast<int>(cy), r);
+    Color color = MUTED, digits = MUTED;
+    std::string window, amount, reference;
     if (fraction) {
         color = *fraction <= gauges::BAD_BELOW ? BAD : *fraction <= gauges::WARN_BELOW ? WARN : GOOD;
-        if (*fraction > 0) dial_sector(c_, cx, cy, .86 * r, .70 * r, 0, *fraction, color);
-        // pointer across the track at the current level
-        double a = gauges::angle(*fraction), dx = std::cos(a), dy = -std::sin(a);
-        double nx = -dy * .035 * r, ny = dx * .035 * r;
-        double x0 = cx + dx * .62 * r, y0 = cy + dy * .62 * r, x1 = cx + dx * .93 * r, y1 = cy + dy * .93 * r;
-        c_.polygon({{float(x0 + nx), float(y0 + ny)}, {float(x1 + nx), float(y1 + ny)},
-                    {float(x1 - nx), float(y1 - ny)}, {float(x0 - nx), float(y0 - ny)}}, VALUE);
-        centre = fmt::str("%lld%%", py_round(100 * *fraction));
+        digits = color == GOOD ? DIGITS : color;
+        std::vector<Pt> needle;
+        for (auto [x, y] : gauges::needle(px, py, r, *fraction)) needle.push_back({float(x), float(y)});
+        c_.polygon(needle, NEEDLE_RED);
+        window = fmt::str("%lld%%", py_round(100 * *fraction));
         amount = amount_text(*resource.amount) + " / " + amount_text(*resource.capacity);
         reference = amount_text(*resource.capacity) + " / " + amount_text(*resource.capacity);
     } else {
-        bool absent = resource.capacity && *resource.capacity == 0;
-        centre = absent ? "N/A" : "--";
+        window = absent ? "N/A" : "--";
         amount = reference = absent ? "NOT INSTALLED" : "--";
     }
-    c_.text(centre, static_cast<float>(.44 * r / u), color, cx, cy, Anchor::Center);
+    // charcoal hub with a small highlight, over the needle
+    float hub = static_cast<float>(.13 * r), hx = static_cast<float>(std::round(px)), hy = static_cast<float>(std::round(py));
+    c_.circle(hx, hy, hub, Color{20, 21, 24});
+    c_.circle(hx, hy, .78f * hub, Color{58, 60, 66});
+    c_.circle(hx - .22f * hub, hy - .22f * hub, .22f * hub, Color{92, 95, 102});
+    c_.text(window, static_cast<float>(.34 * r / u), digits, cx,
+            cy + (gauges::WINDOW_TOP + gauges::WINDOW_BOTTOM) / 2 * r, Anchor::Center);
     double top = cy + gauges::BELOW_CENTRE * r;
     c_.text(label, label_units, fraction ? LABEL : MUTED, cx, top, Anchor::MidTop);
     int width = c_.text_width(c_.font(GAUGE_AMOUNT), reference);

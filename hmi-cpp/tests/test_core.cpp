@@ -564,21 +564,39 @@ TEST(launch_pad_errors_drop_only_the_failing_values) {
     CHECK(pad.count("Vessel_get_SurfaceSpeedReferenceFrame") <= 2 + static_cast<int>(elapsed / .5));  // retry 0.5 s
 }
 
-TEST(gauge_angle_sweeps_clockwise_through_the_top) {
+TEST(gauge_angle_sweeps_the_fuel_gauge_arc_from_e_to_f) {
     const double deg = 180.0 / 3.14159265358979323846;
-    CHECK_NEAR(gauges::angle(0) * deg, 210, 1e-9);
+    CHECK(gauges::SWEEP >= 100 && gauges::SWEEP <= 120);
+    CHECK_NEAR(gauges::angle(0) * deg, 90 + gauges::SWEEP / 2, 1e-9);
     CHECK_NEAR(gauges::angle(.5) * deg, 90, 1e-9);
-    CHECK_NEAR(gauges::angle(1) * deg, -30, 1e-9);
+    CHECK_NEAR(gauges::angle(1) * deg, 90 - gauges::SWEEP / 2, 1e-9);
     CHECK_NEAR(gauges::angle(-1), gauges::angle(0), 1e-12);
     CHECK_NEAR(gauges::angle(7), gauges::angle(1), 1e-12);
-    auto top = gauges::point(100, 100, 10, .5);  // screen y grows downwards: the middle of the scale is on top
-    CHECK_NEAR(top.first, 100, 1e-9);
-    CHECK_NEAR(top.second, 90, 1e-9);
+    auto hub = gauges::pivot(100, 100, 10);
+    CHECK_NEAR(hub.first, 100, 1e-9);
+    CHECK(hub.second > 100);  // the hub is in the lower half of the face
+    auto top = gauges::point(hub.first, hub.second, 5, .5);  // screen y grows downwards: mid-scale straight up
+    CHECK_NEAR(top.first, hub.first, 1e-9);
+    CHECK_NEAR(top.second, hub.second - 5, 1e-9);
     auto a = gauges::point(0, 0, 1, 0), b = gauges::point(0, 0, 1, 1);
-    CHECK(a.first < 0 && b.first > 0 && a.second > 0);
+    CHECK(a.first < 0 && b.first > 0 && a.second < 0);  // E left, F right, both above the hub
     CHECK_NEAR(a.second, b.second, 1e-9);
     auto s = gauges::steps(0, .5);
-    CHECK(s.front() == 0 && s.back() == .5 && s.size() == 31);
+    CHECK(s.front() == 0 && s.back() == .5 && s.size() == 15);
+}
+
+TEST(gauge_scale_needle_and_window_stay_on_the_face) {
+    auto hub = gauges::pivot(0, 0, 1);
+    for (int step = 0; step <= 40; ++step) {
+        double f = step / 40.0;
+        for (double radius : {gauges::ZONE_OUT, gauges::SCALE, gauges::LETTERS}) {
+            auto p = gauges::point(hub.first, hub.second, radius, f);
+            CHECK(std::hypot(p.first, p.second) < gauges::FACE);
+        }
+        for (auto [x, y] : gauges::needle(hub.first, hub.second, 1, f)) CHECK(std::hypot(x, y) < gauges::FACE);
+    }
+    CHECK(std::hypot(gauges::WINDOW_W / 2, gauges::WINDOW_BOTTOM) < gauges::FACE);
+    CHECK(gauges::WINDOW_TOP > gauges::PIVOT);  // the window is under the hub
 }
 
 TEST(gauge_layout_fits_the_panel_at_every_resolution) {

@@ -13,9 +13,23 @@ double clamp01(double fraction) { return fraction < 0 ? 0.0 : fraction > 1 ? 1.0
 
 double angle(double fraction) { return (START - SWEEP * clamp01(fraction)) * PI / 180.0; }
 
-std::pair<double, double> point(double cx, double cy, double radius, double fraction) {
+std::pair<double, double> pivot(double cx, double cy, double radius) { return {cx, cy + PIVOT * radius}; }
+
+std::pair<double, double> point(double px, double py, double radius, double fraction) {
     double a = angle(fraction);
-    return {cx + radius * std::cos(a), cy - radius * std::sin(a)};
+    return {px + radius * std::cos(a), py - radius * std::sin(a)};
+}
+
+std::vector<std::pair<double, double>> needle(double px, double py, double radius, double fraction) {
+    double a = angle(fraction), dx = std::cos(a), dy = -std::sin(a), nx = -dy, ny = dx;
+    double tail = -.10 * radius, tip = NEEDLE * radius;
+    double base = .048 * radius, point_w = .012 * radius, tail_w = .032 * radius;
+    return {{px + dx * tail + nx * tail_w, py + dy * tail + ny * tail_w},
+            {px + nx * base, py + ny * base},
+            {px + dx * tip + nx * point_w, py + dy * tip + ny * point_w},
+            {px + dx * tip - nx * point_w, py + dy * tip - ny * point_w},
+            {px - nx * base, py - ny * base},
+            {px + dx * tail - nx * tail_w, py + dy * tail - ny * tail_w}};
 }
 
 std::vector<double> steps(double f0, double f1, double step_degrees) {
