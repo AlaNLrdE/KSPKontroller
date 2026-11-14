@@ -201,6 +201,8 @@ class KrpcSource(Source):
 
     def _follow(self, conn, sc, vessel) -> None:
         """Stream one vessel around one body; returns when either changes so the caller re-opens the streams."""
+        from krpc.error import RPCError  # local like in _session: the demo and the tests do not need krpc
+
         orbit = vessel.orbit
         body = orbit.body
         flight = vessel.flight(body.reference_frame)  # surface-relative speeds
@@ -210,6 +212,7 @@ class KrpcSource(Source):
         inertial_frame = body.non_rotating_reference_frame
         mu = body.gravitational_parameter
         axes = None
+        nav_failed = False  # log a failing NavBall sample once per session
 
         fields = {
             "ut": (sc, "ut"),
@@ -273,6 +276,11 @@ class KrpcSource(Source):
                         nav = navstreams.sample()
                     except RPCError:
                         navstreams.key = None  # transient target, node or speed frame change
+                    except Exception as e:  # never let the optional NavBall end the vessel session
+                        if not nav_failed:
+                            log.warning("navball sample failed: %s", _short(e))
+                        nav_failed = True
+                        navstreams.key = None
                 self._publish(Snapshot(
                     state=FLIGHT, vessel=v["name"], situation=getattr(v["situation"], "name", str(v["situation"])),
                     body=body_name, body_radius=radius, atmosphere_depth=atmosphere, ut=v["ut"],

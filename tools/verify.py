@@ -483,6 +483,36 @@ def check_hmi_context(ctx):
            "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
 
 
+def check_hmi_except_names(ctx):
+    """An undefined exception name in an ``except`` clause only fails when that exception happens
+    (2026-11-14: RPCError imported in one method, caught in another, dropped every flight session)."""
+    import ast
+    import builtins
+    import glob
+    bad = []
+    for path in sorted(glob.glob(os.path.join(ROOT, "hmi-pi", "ksphmi", "*.py"))):
+        tree = ast.parse(read(path))
+        module = {n.asname or n.name.split(".")[0] for node in tree.body
+                  if isinstance(node, (ast.Import, ast.ImportFrom)) for n in node.names}
+        module |= {node.name for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))}
+        module |= {t.id for node in tree.body if isinstance(node, ast.Assign) for t in node.targets
+                   if isinstance(t, ast.Name)}
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            local = {n.asname or n.name.split(".")[0] for node in ast.walk(func)
+                     if isinstance(node, (ast.Import, ast.ImportFrom)) for n in node.names}
+            for node in ast.walk(func):
+                if not isinstance(node, ast.ExceptHandler) or node.type is None:
+                    continue
+                types = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+                for t in types:
+                    if isinstance(t, ast.Name) and t.id not in local | module and not hasattr(builtins, t.id):
+                        bad.append("%s:%d %s" % (os.path.basename(path), node.lineno, t.id))
+    report("FAIL" if bad else "PASS", "hmi: except names defined",
+           ", ".join(bad) if bad else "every caught exception name is imported in its function or module")
+
+
 def check_hmi(ctx):
     """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
     p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=HMI_DIR,
@@ -677,7 +707,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_except_names, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
 
 
 def main():
