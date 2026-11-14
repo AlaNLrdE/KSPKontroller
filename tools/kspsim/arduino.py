@@ -190,7 +190,7 @@ def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -
     rho = physics.density(alt) if math.isfinite(alt) else 0.0
     surf = r["surface_speed"] if math.isfinite(r["surface_speed"]) else 0.0
     e, a = r["eccentricity"], r["semi_major_axis"]
-    pitch, heading = v.attitude()
+    pitch, heading = r["pitch"], r["heading"]
     ag = r.get("action_groups")  # the game state (Simulator.reported()); without it, echo the controls
     if ag is None:
         ag = (c.sas << 0 | c.rcs << 1 | c.lights << 2 | c.gear << 3 | c.brakes << 4 | c.abort << 5
@@ -217,7 +217,7 @@ def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -
         IntakeAirTot=0.0, IntakeAir=0.0, SolidFuelTot=0.0, SolidFuel=0.0, XenonGasTot=0.0, XenonGas=0.0,
         LiquidFuelTotS=physics.LIQUID_FUEL, LiquidFuelS=lf_s, OxidizerTotS=physics.OXIDIZER,
         OxidizerS=ox_s, MissionTime=int(v.mission_time), deltaTime=delta_time, VOrbit=_f(r["orbital_speed"]),
-        MNTime=0, MNDeltaV=0.0, Pitch=pitch, Roll=0.0, Heading=heading, ActionGroups=ag, SOINumber=KERBIN_SOI,
+        MNTime=0, MNDeltaV=0.0, Pitch=pitch, Roll=r["roll"], Heading=heading, ActionGroups=ag, SOINumber=KERBIN_SOI,
         MaxOverHeat=overheat, MachNumber=surf / 340.0 if rho > 0 else 0.0,
         IAS=surf * math.sqrt(rho / physics.SEA_DENSITY), CurrentStage=v.stage, TotalStage=physics.STAGES,
         TargetDist=0.0, TargetV=0.0, NavballSASMode=(1 + 1) << 4 | (int(r.get("sas_mode", 1)) & 0x0F if sas_on else 0),

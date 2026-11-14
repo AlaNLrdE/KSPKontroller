@@ -413,6 +413,50 @@ def check_git(ctx):
 HMI_DIR = os.path.join(ROOT, "hmi-pi")
 
 
+def check_hmi_render(ctx):
+    """Navball orientation and bounds checks need the development pygame environment."""
+    candidates = (os.path.join(ROOT, 'build', 'hmi-venv', 'Scripts', 'python.exe'),
+                  os.path.join(ROOT, 'build', 'hmi-venv', 'bin', 'python'))
+    python = next((p for p in candidates if os.path.isfile(p)), None)
+    if not python:
+        report('WARN', 'hmi: navball render', 'run ./ci hmi --demo once to create the pygame environment')
+        return
+    result = subprocess.run([python, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'],
+                            cwd=HMI_DIR, capture_output=True, text=True, timeout=30,
+                            env=dict(os.environ, SDL_VIDEODRIVER='dummy', PYTHONDONTWRITEBYTECODE='1'))
+    report('PASS' if result.returncode == 0 else 'FAIL', 'hmi: navball render',
+           'navigation attitude, labels and bounds at three resolutions' if result.returncode == 0
+           else result.stderr[-500:])
+    # Draw only in memory; never replace the live framebuffer with demo data.
+    script = """import os, time
+os.environ['SDL_VIDEODRIVER'] = 'dummy'
+from ksphmi import config
+from ksphmi.display import Display
+from ksphmi.telemetry import DemoSource
+import pygame
+d = Display(config.load(), windowed=True, size=(2520, 1680))
+s = DemoSource()
+d.draw(s.sample(0))
+start = time.perf_counter()
+for i in range(5):
+    d.draw(s.sample(i))
+print('HMI_RENDER_MS=%.1f' % ((time.perf_counter() - start) * 200))
+pygame.quit()
+"""
+    host = os.environ.get('HMI_HOST', 'ksphmi')
+    try:
+        remote = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', host,
+                                 'cd ~/ksphmi/app && ../venv/bin/python -'], input=script,
+                                capture_output=True, text=True, timeout=15)
+        match = re.search(r'HMI_RENDER_MS=([\d.]+)', remote.stdout)
+    except (OSError, subprocess.SubprocessError):
+        match = None
+    if match:
+        milliseconds = float(match.group(1))
+        report('PASS' if milliseconds < 75 else 'WARN', 'hmi: Pi render budget',
+               '%.1f ms/frame at 2520x1680, excluding framebuffer copy (~21 ms)' % milliseconds)
+    else:
+        report('WARN', 'hmi: Pi render budget', 'offscreen benchmark unavailable over SSH')
 
 
 def check_hmi_context(ctx):
@@ -633,7 +677,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
 
 
 def main():

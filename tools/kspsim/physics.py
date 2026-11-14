@@ -50,6 +50,27 @@ REPORTED_FIELDS = (
     ("g_force", "G force", "g", 1.0),
 )
 
+# Additional HMI values are numeric so the existing manual-value editor exposes every one.
+NAV_DEFAULTS = dict(roll=0.0, speed_mode=0.0, target_enabled=0.0, target_up=0.0, target_north=20.0,
+                    target_east=40.0, relative_up=0.0, relative_north=0.0, relative_east=12.0,
+                    node_enabled=0.0, node_dv=120.0, node_remaining=114.0, node_time=300.0,
+                    burn_up=.2, burn_north=0.0, burn_east=1.0,
+                    mass=10000.0, available_thrust=160000.0, specific_impulse=300.0)
+REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0)
+                        for key in ('pitch', 'heading', *NAV_DEFAULTS))
+
+
+def attitude_rotation(pitch, heading, roll):
+    def multiply(a, b):
+        x, y, z, w = a
+        u, v, t, s = b
+        return (w*u + x*s + y*t - z*v, w*v - x*t + y*s + z*u,
+                w*t + x*v - y*u + z*s, w*s - x*u - y*v - z*t)
+    p, h, r = (math.radians(a) / 2 for a in (pitch, heading, roll))
+    q = multiply((math.sin(h), 0, 0, math.cos(h)), (0, -math.sqrt(.5), 0, math.sqrt(.5)))
+    q = multiply(q, (-math.sin(p), 0, 0, math.cos(p)))
+    return multiply(q, (0, -math.sin(r), 0, math.cos(r)))
+
 
 @dataclass
 class Controls:
@@ -180,7 +201,9 @@ class Vessel:
     def report(self) -> dict:
         """Every value sent to the board and the HMI, computed from the flight model (see REPORTED_FIELDS)."""
         el = self.elements()
-        return dict(
+        pitch, heading = self.attitude()
+        return dict(NAV_DEFAULTS,
+            pitch=pitch, heading=heading,
             name=self.name, situation=self.situation(), altitude=self.altitude, vertical_speed=self.vertical_speed,
             orbital_speed=self.orbital_speed, surface_speed=self.surface_speed, apoapsis=el.apoapsis,
             periapsis=el.periapsis, time_to_apoapsis=el.time_to_apoapsis, time_to_periapsis=el.time_to_periapsis,

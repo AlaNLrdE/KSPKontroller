@@ -13,6 +13,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass, replace
+from .navigation import Navigation, NavigationStreams, attitude, unit
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class Snapshot:
     orbital_speed: float = 0.0
     surface_speed: float = 0.0
     vertical_speed: float = 0.0
+    nav: Navigation | None = None  #: optional navball telemetry; None means unavailable
     received: float = 0.0        #: time.monotonic() when the sample was taken
 
 
@@ -222,6 +224,7 @@ class KrpcSource(Source):
             "true_anomaly": (orbit, "true_anomaly"),
         }
         streams = {}
+        navstreams = None
         try:
             for key, (obj, attr) in fields.items():
                 s = conn.add_stream(getattr, obj, attr)
@@ -230,6 +233,10 @@ class KrpcSource(Source):
                 except Exception:  # very old servers have no per-stream rate
                     pass
                 streams[key] = s
+            try:
+                navstreams = NavigationStreams(conn, sc, vessel, 1.0 / self.period)
+            except RPCError as e:
+                log.warning("navball unavailable: %s", _short(e))
             log.info("following %s around %s", name, body_name)
             while not self._stop.is_set():
                 if sc.active_vessel != vessel:  # also a liveness probe: raises when the socket is gone (None = left flight)
@@ -237,6 +244,12 @@ class KrpcSource(Source):
                 v = {k: s() for k, s in streams.items()}
                 if v["body_obj"] != body:  # sphere of influence change: new reference frame needed
                     return
+                nav = None
+                if navstreams is not None:
+                    try:
+                        nav = navstreams.sample()
+                    except RPCError:
+                        navstreams.key = None  # transient target, node or speed frame change
                 self._publish(Snapshot(
                     state=FLIGHT, vessel=v["name"], situation=getattr(v["situation"], "name", str(v["situation"])),
                     body=body_name, body_radius=radius, atmosphere_depth=atmosphere, ut=v["ut"],
@@ -245,10 +258,12 @@ class KrpcSource(Source):
                     inclination=math.degrees(v["inclination"]), eccentricity=v["eccentricity"],
                     period=v["period"], semi_major_axis=v["semi_major_axis"], true_anomaly=v["true_anomaly"],
                     orbital_speed=v["orbital_speed"], surface_speed=v["surface_speed"],
-                    vertical_speed=v["vertical_speed"],
+                    vertical_speed=v["vertical_speed"], nav=nav,
                     received=time.monotonic()))
                 self._stop.wait(self.period)
         finally:
+            if navstreams is not None:
+                navstreams.close()
             for s in streams.values():
                 try:
                     s.remove()
@@ -311,6 +326,12 @@ class DemoSource(Source):
             time_to_periapsis=((2 * math.pi - m) % (2 * math.pi)) / n,
             inclination=2.5, eccentricity=e, period=2 * math.pi / n, semi_major_axis=a, true_anomaly=nu,
             orbital_speed=speed, surface_speed=max(speed - KERBIN_ROTATION_SPEED, 0.0), vertical_speed=radial,
+            nav=Navigation(rotation=attitude(14, 90, -25), pitch=14, heading=90, roll=-25,
+                           speed_mode='orbit', speed=speed, prograde=unit((radial, 0, speed)),
+                           normal=(0, -1, 0), radial=(1, 0, 0), target=unit((.1, .4, .9)),
+                           maneuver=unit((.12, .1, 1)), sas=True, sas_mode='prograde', rcs=True,
+                           throttle=.42, g_force=.3, node_dv=320, node_remaining=114.4,
+                           node_time=579, burn_seconds=8),
             received=time.monotonic())
 
     def _run(self) -> None:

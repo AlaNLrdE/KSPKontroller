@@ -71,6 +71,14 @@ def enc_object(object_id: int) -> bytes:
     return varint(object_id)
 
 
+def enc_tuple(values):
+    return K.Tuple(items=[enc_double(v) for v in values]).SerializeToString()
+
+
+def enc_list(values):
+    return K.List(items=[enc_object(v) for v in values]).SerializeToString()
+
+
 def enc_enum(v: int) -> bytes:
     return varint((v << 1) ^ (v >> 31))  # zigzag sint32
 
@@ -112,11 +120,17 @@ def services_message() -> K.Services:
     services = K.Services()
     services.services.add(name="KRPC")
     sc = services.services.add(name="SpaceCenter")
-    for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame"):
+    for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort"):
         sc.classes.add(name=cls)
     situation = sc.enumerations.add(name="VesselSituation")
     for i, name in enumerate(SITUATIONS):
         situation.values.add(name="".join(p.capitalize() for p in name.split("_")), value=i)
+    for enum, names in (('SpeedMode', ('Orbit', 'Surface', 'Target')),
+                        ('SASMode', ('StabilityAssist', 'Maneuver', 'Prograde', 'Retrograde', 'Normal',
+                                     'AntiNormal', 'Radial', 'AntiRadial', 'Target', 'AntiTarget'))):
+        item = sc.enumerations.add(name=enum)
+        for i, name in enumerate(names):
+            item.values.add(name=name, value=i)
     return services
 
 
@@ -195,7 +209,6 @@ class KrpcServer:
                 continue
             except OSError:
                 return
-
 
     def stop(self) -> None:
         """Close the ports and drop every client, as when KSP quits."""
@@ -367,9 +380,31 @@ class KrpcServer:
             raise RpcFailure("Procedure not available in game scene '%s'" % "SpaceCenter")
         if proc == "get_UT":
             return enc_double(sim.ut)
+        if proc in ('get_TargetVessel', 'get_TargetDockingPort'):
+            return None
+        if proc == 'get_TargetBody':
+            return enc_object(BODY_KERBIN) if sim.reported()['target_enabled'] else None
+        if proc == 'TransformDirection':
+            r = sim.reported()
+            frame = read_varint(args[1]) % 10
+            mode = {6: 'orbital_speed', 7: 'surface_speed'}.get(frame)
+            speed = r[mode] if mode else math.sqrt(sum(r['relative_' + a] ** 2 for a in ('up', 'north', 'east')))
+            vertical = r['vertical_speed'] if mode else r['relative_up']
+            pro = (vertical, 0, math.sqrt(max(0, speed * speed - vertical * vertical))) if mode else tuple(r['relative_' + a] for a in ('up', 'north', 'east'))
+            length = math.sqrt(sum(x*x for x in pro)) or 1
+            pro = tuple(x / length for x in pro)
+            # A planar orbit has northward anti-normal; radial is perpendicular to velocity.
+            horizontal = math.hypot(pro[1], pro[2])
+            normal = (0, -pro[2] / horizontal, pro[1] / horizontal) if horizontal > 1e-8 else (0, -1, 0)
+            radial = (pro[1]*normal[2] - pro[2]*normal[1], pro[2]*normal[0] - pro[0]*normal[2],
+                      pro[0]*normal[1] - pro[1]*normal[0])
+            value = K.Tuple()
+            value.ParseFromString(args[0])
+            x, y, z = (struct.unpack('<d', item)[0] for item in value.items)
+            return enc_tuple(tuple(-x * radial[i] + y * pro[i] + z * normal[i] for i in range(3)))
 
         cls, _, member = proc.partition("_")
-        if cls in ("Vessel", "Orbit", "Flight"):
+        if cls in ("Vessel", "Orbit", "Flight", "Control", "Node"):
             self._vessel(args)  # a stale object id fails as in kRPC
             r = sim.reported()  # the flight model's values, or the ones typed in manual mode
         if cls == "Vessel":
@@ -380,7 +415,35 @@ class KrpcServer:
             if member == "get_Situation":
                 return enc_enum(SITUATIONS.index(r["situation"]))
             if member == "Flight":
-                return enc_object(sim.vessel_uid * 10 + 2)
+                frame = read_varint(args.get(1, b'\x00'))
+                offset = {5: 3, 6: 6, 7: 7, 8: 8}.get(frame % 10, 2)
+                return enc_object(sim.vessel_uid * 10 + offset)
+            if member == 'get_Control':
+                return enc_object(sim.vessel_uid * 10 + 4)
+            frames = {'get_SurfaceReferenceFrame': 5, 'get_OrbitSpeedReferenceFrame': 6,
+                      'get_SurfaceSpeedReferenceFrame': 7, 'get_TargetSpeedReferenceFrame': 8}
+            if member in frames:
+                return enc_object(sim.vessel_uid * 10 + frames[member])
+            values = {'get_Mass': r['mass'], 'get_AvailableThrust': r['available_thrust'], 'get_SpecificImpulse': r['specific_impulse']}
+            if member in values:
+                return enc_float(values[member])
+        elif cls == 'Control':
+            if member == 'get_Nodes':
+                return enc_list([sim.vessel_uid * 10 + 9] if r['node_enabled'] else [])
+            if member == 'get_SpeedMode':
+                return enc_enum(int(r['speed_mode']))
+            if member == 'get_SASMode':
+                return enc_enum((0, 2, 3, 4, 5, 7, 6, 8, 9, 1)[sim.sas_mode - 1])
+            if member in ('get_SAS', 'get_RCS'):
+                return enc_bool(bool(r['action_groups'] & (1 if member == 'get_SAS' else 2)))
+            if member == 'get_Throttle':
+                return enc_float(sim.vessel.controls.throttle)
+        elif cls == 'Node':
+            values = {'get_RemainingDeltaV': r['node_remaining'], 'get_DeltaV': r['node_dv'], 'get_TimeTo': r['node_time']}
+            if member in values:
+                return enc_double(values[member])
+            if member == 'BurnVector':
+                return enc_tuple(tuple(r['burn_' + a] for a in ('up', 'north', 'east')))
         elif cls == "Orbit":
             values = {
                 "get_ApoapsisAltitude": r["apoapsis"], "get_PeriapsisAltitude": r["periapsis"],
@@ -395,12 +458,27 @@ class KrpcServer:
             if member == "get_Body":
                 return enc_object(BODY_KERBIN)
         elif cls == "Flight":
+            if member in ('get_Pitch', 'get_Heading', 'get_Roll'):
+                return enc_float(r[member[4:].lower()])
+            if member == 'get_Rotation':
+                return enc_tuple(physics.attitude_rotation(r['pitch'], r['heading'], r['roll']))
             values = {"get_MeanAltitude": r["altitude"], "get_SurfaceAltitude": max(r["altitude"], 0.0),
                       "get_Speed": r["surface_speed"], "get_VerticalSpeed": r["vertical_speed"],
                       "get_GForce": r["g_force"]}
             if member in values:
+                if member == 'get_Speed':
+                    frame = read_varint(args[0]) % 10
+                    if frame == 6:
+                        return enc_double(r['orbital_speed'])
+                    if frame == 8:
+                        return enc_double(math.sqrt(sum(r['relative_' + a] ** 2 for a in ('up', 'north', 'east'))))
+                if member == 'get_GForce':
+                    return enc_float(values[member])
                 return enc_double(values[member])
         elif cls == "CelestialBody":
+            if member == 'Position':
+                r = sim.reported()
+                return enc_tuple(tuple(r['target_' + a] for a in ('up', 'north', 'east')))
             values = {"get_Name": enc_string("Kerbin"), "get_EquatorialRadius": enc_double(physics.RADIUS),
                       "get_HasAtmosphere": enc_bool(True), "get_AtmosphereDepth": enc_double(physics.ATMOSPHERE),
                       "get_GravitationalParameter": enc_double(physics.MU),

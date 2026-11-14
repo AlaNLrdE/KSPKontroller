@@ -1,3 +1,3 @@
-"""KSP HMI: a full-screen flight data display for a Raspberry Pi, fed by the kRPC mod running in KSP."""
+"""KSP HMI: mission telemetry and navigation for Raspberry Pi, fed by kRPC and KSPSerialIO."""
 
 __version__ = "0.1.0"

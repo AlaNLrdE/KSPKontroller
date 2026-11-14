@@ -16,6 +16,7 @@ import pygame
 from . import fmt
 from .netinfo import NetInfo
 from .scenes import VIEWS
+from .navball import Navball
 from .telemetry import CONNECTING, FLIGHT, NO_VESSEL, Snapshot, stale
 
 BG = (10, 14, 20)
@@ -116,6 +117,7 @@ class Display:
         self.u = self.h / 100.0  # layout unit: 1 % of the screen height
         self._fonts: dict[int, pygame.font.Font] = {}
         self._text_cache: dict[tuple, pygame.Surface] = {}
+        self.navball = Navball()
 
     # ----------------------------------------------------------------------------------------- helpers
     def font(self, size_units: float) -> pygame.font.Font:
@@ -210,25 +212,25 @@ class Display:
         self.text("Scene context live  |  Flight telemetry resumes when you launch", 2.6,
                   MUTED, (4 * u, 87 * u))
 
-
     # ------------------------------------------------------------------------------------------ flight
     def flight(self, s: Snapshot) -> None:
         u = self.u
         top, bottom, gap = 13 * u, self.h - 2.5 * u, 1.6 * u
-        left_w = self.w * 0.52
+        left_w = self.w * 0.44
         x0 = 2.5 * u
-        col_w = (left_w - x0 - gap) / 2
+        metric_gap = .8 * u
+        col_w = (left_w - x0 - metric_gap) / 2
 
-        # Ap / Pe: the two numbers that matter most, large
-        big_h = 22 * u
+        # Compact Ap / Pe row keeps countdowns in the label line.
+        big_h = 7 * u
         pe_color = BAD if s.periapsis < 0 else WARN if s.periapsis < s.atmosphere_depth else ACCENT
         hyperbolic = s.eccentricity >= 1
         self.tile(pygame.Rect(x0, top, col_w, big_h), "APOAPSIS",
                   "Escape" if hyperbolic else fmt.distance(s.apoapsis), GOOD,
-                  "" if hyperbolic else "in " + fmt.duration(s.time_to_apoapsis, self.day_hours), big=True)
+                  "" if hyperbolic else "T " + fmt.duration(s.time_to_apoapsis, self.day_hours), big=True)
         pe_note = "below the surface" if s.periapsis < 0 else ("inside the atmosphere" if s.periapsis < s.atmosphere_depth else "")
-        self.tile(pygame.Rect(x0 + col_w + gap, top, col_w, big_h), "PERIAPSIS", fmt.distance(s.periapsis), pe_color,
-                  "in " + fmt.duration(s.time_to_periapsis, self.day_hours) + ("  ·  " + pe_note if pe_note else ""), big=True)
+        self.tile(pygame.Rect(x0 + col_w + metric_gap, top, col_w, big_h), "PERIAPSIS", fmt.distance(s.periapsis), pe_color,
+                  "T " + fmt.duration(s.time_to_periapsis, self.day_hours), big=True)
 
         rows = [
             ("ALTITUDE", fmt.distance(s.altitude), VALUE, "VERTICAL SPEED", fmt.speed(s.vertical_speed),
@@ -238,24 +240,32 @@ class Display:
             ("PERIOD", "--" if hyperbolic else fmt.duration(s.period, self.day_hours), VALUE,
              "SEMI-MAJOR AXIS", fmt.distance(s.semi_major_axis), VALUE),
         ]
-        y = top + big_h + gap
-        row_h = (bottom - y - gap * (len(rows) - 1)) / len(rows)
+        y = top + big_h + metric_gap
+        row_h = 7 * u
         for la, va, ca, lb, vb, cb in rows:
             self.tile(pygame.Rect(x0, y, col_w, row_h), la, va, ca)
-            self.tile(pygame.Rect(x0 + col_w + gap, y, col_w, row_h), lb, vb, cb)
-            y += row_h + gap
+            self.tile(pygame.Rect(x0 + col_w + metric_gap, y, col_w, row_h), lb, vb, cb)
+            y += row_h + metric_gap
 
-        self.orbit(pygame.Rect(left_w + gap, top, self.w - left_w - gap - 2.5 * u, bottom - top), s)
+        if pe_note:
+            self.text("PERIAPSIS: " + pe_note.upper(), 1.8, pe_color, (x0 + u, y - .3 * u))
+
+        right_x, right_w = left_w + gap, self.w - left_w - gap - 2.5 * u
+        orbit_h = 22 * u
+        self.orbit(pygame.Rect(right_x, top, right_w, orbit_h), s)
+        self.navball.draw(self, pygame.Rect(right_x, top + orbit_h + gap, right_w,
+                                           bottom - top - orbit_h - gap), s)
 
     def tile(self, rect: pygame.Rect, label: str, value: str, color, note: str = "", big: bool = False) -> None:
         u = self.u
         self.panel(rect)
-        pad = 1.8 * u
-        self.text(label, 2.6, LABEL, (rect.x + pad, rect.y + pad))
-        vsize = 9.5 if big else min(6.5, rect.h / u * 0.48)
-        self.text(value, vsize, color, (rect.x + pad, rect.y + pad + 3.2 * u))
+        pad = 1 * u
+        self.text(label, 1.9, LABEL, (rect.x + pad, rect.y + .7 * u))
+        self.text(value, 4.0, color, (rect.x + pad, rect.y + 2.9 * u))
         if note:
-            self.text(note, 3.0, LABEL, (rect.x + pad, rect.bottom - pad), "bottomleft")
+            self.text(note, 1.6, LABEL, (rect.right - pad, rect.y + .7 * u), "topright")
+
+
 
     def orbit(self, rect: pygame.Rect, s: Snapshot) -> None:
         """Side view of the orbit in its own plane, periapsis to the right, body centre at the focus."""

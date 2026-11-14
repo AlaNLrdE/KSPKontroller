@@ -416,7 +416,8 @@ class KrpcTest(unittest.TestCase):
         server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
-        src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5, discovery=False)
+        src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5,
+                         discovery=False)
         src.context_port = server.context_port
         src.start()
 
@@ -435,6 +436,24 @@ class KrpcTest(unittest.TestCase):
             self.assertAlmostEqual(s.apoapsis, 250_000, delta=5)
             self.assertAlmostEqual(s.periapsis, 80_000, delta=5)
             self.assertAlmostEqual(s.inclination, 0.4, places=6)
+            wait(lambda s: s.nav is not None)
+            self.assertEqual(src.latest().nav.speed_mode, 'orbit')
+            self.assertAlmostEqual(src.latest().nav.speed, src.latest().orbital_speed, delta=1)
+            sim.set_manual_mode(True)
+            sim.set_manual_values(pitch=35, heading=135, roll=-45, speed_mode=2,
+                                  target_enabled=1, relative_up=3, relative_north=0, relative_east=4,
+                                  node_enabled=1, node_dv=200, node_remaining=125, node_time=240)
+            s = wait(lambda s: s.nav is not None and s.nav.node_remaining == 125 and s.nav.speed_mode == 'target')
+            self.assertEqual((s.nav.pitch, s.nav.heading, s.nav.roll), (35, 135, -45))
+            self.assertAlmostEqual(s.nav.speed, 5)
+            self.assertIsNotNone(s.nav.target)
+            self.assertIsNotNone(s.nav.maneuver)
+            self.assertGreater(s.nav.burn_seconds, 0)
+            sim.set_manual_values(target_enabled=0, node_enabled=0, speed_mode=1)
+            s = wait(lambda s: s.nav is not None and s.nav.node_remaining is None and s.nav.speed_mode == 'surface')
+            self.assertIsNone(s.nav.target)
+            self.assertIsNone(s.nav.maneuver)
+            sim.set_manual_mode(False)
 
             sim.set_orbit(400_000, 120_000, 5.0, 180)  # edited in the window: same vessel, new values
             sim.set_vessel(name="Renamed")
