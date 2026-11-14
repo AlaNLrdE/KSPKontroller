@@ -409,6 +409,45 @@ def check_git(ctx):
         report("PASS", "git: unpushed commits", "none" if ahead.isdigit() else "no upstream")
 
 
+# --------------------------------------------------------------------------------------------- Raspberry Pi HMI
+HMI_DIR = os.path.join(ROOT, "hmi-pi")
+
+
+def check_hmi(ctx):
+    """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
+    p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=HMI_DIR,
+                       capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    last = (p.stderr.strip().splitlines() or ["no output"])[-1]
+    report("PASS" if p.returncode == 0 else "FAIL", "hmi: unit tests", last if p.returncode == 0 else p.stderr.strip()[-300:])
+
+    host = os.environ.get("HMI_HOST", "ksphmi")
+    probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
+             "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"")
+    try:
+        r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        report("WARN", "hmi: Pi", "skipped: ssh %s failed (%s)" % (host, e))
+        return
+    lines = r.stdout.split()
+    if r.returncode not in (0, 3) or len(lines) < 2:  # is-active exits 3 when the unit is not running
+        report("WARN", "hmi: Pi", "skipped: %s not reachable over SSH (%s)" % (host, (r.stderr.strip() or "no answer")[:120]))
+        return
+    state, restarts = lines[0], lines[1]
+    if state == "active" and restarts in ("0", ""):
+        report("PASS", "hmi: service", "active on %s" % host)
+    elif state == "active":
+        report("WARN", "hmi: service", "active but restarted %s time(s): ./ci hmi_logs" % restarts)
+    else:
+        report("FAIL" if state == "failed" else "WARN", "hmi: service", "%s on %s (./ci deploy_hmi, ./ci hmi_logs)" % (state, host))
+    env = dict(l.split("=", 1) for l in lines[2:] if "=" in l)
+    addr, client = env.get("KSPHMI_KRPC_ADDRESS"), env.get("client")
+    if addr and client and addr != client and not os.environ.get("HMI_KRPC_ADDRESS"):
+        report("WARN", "hmi: kRPC address", "Pi uses %s but this PC is %s: ./ci deploy_hmi" % (addr, client))
+    elif addr:
+        report("PASS", "hmi: kRPC address", addr)
+
+
 # --------------------------------------------------------------------------------------------- hardware
 def check_board(ctx):
     if ksp_running():
@@ -424,7 +463,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_git]
 
 
 def main():

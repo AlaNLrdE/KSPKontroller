@@ -1,0 +1,2 @@
+# Python packages for the Pi (pygame comes from Debian: apt install python3-pygame, see docs/hmi.rst).
+krpc>=0.5.4,<0.8

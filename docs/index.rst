@@ -17,6 +17,7 @@ over a USB serial link. The plugin is based on `hugopeeters/KSPSerialIO
    vesseldata
    plugin
    firmware
+   hmi
    building
    debugging
 

@@ -18,6 +18,10 @@
 #   ./ci test_arduino [PORT] Compile, upload and test the board over serial (NO_UPLOAD=1 skips the upload)
 #   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
 #                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
+#   ./ci hmi [ARGS]          Run the Raspberry Pi HMI on this PC in a window (--demo: simulated orbit, no KSP needed)
+#   ./ci test_hmi            Unit tests of the HMI (no pygame, no kRPC needed)
+#   ./ci deploy_hmi          Test, copy hmi-pi/ to the Pi over SSH, install its service and restart it
+#   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -31,6 +35,8 @@
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
 #   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
 #   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
+#   HMI_HOST      SSH destination of the Raspberry Pi (default: ksphmi, a Host entry in ~/.ssh/config)
+#   HMI_KRPC_ADDRESS  kRPC server address the Pi uses (default: this PC's address as the Pi sees it)
 
 set -euo pipefail
 
@@ -464,12 +470,82 @@ deploy_all() {
   log "Done: plugin installed in $KSPDIR, board flashed"
 }
 
+# ------------------------------------------------------------------ Raspberry Pi HMI (hmi-pi/)
+
+HMI_DIR="$ROOT/hmi-pi"
+HMI_HOST="${HMI_HOST:-ksphmi}"
+
+hmi_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"; }
+
+# PC development venv (build/hmi-venv): pygame + krpc, kept apart from the tools venv
+hmi_venv() {
+  local py bin
+  py="$(find_python)"
+  [ -d "$BUILD/hmi-venv" ] || { log "Creating the HMI virtual environment" >&2; "$py" -m venv "$BUILD/hmi-venv" >&2; }
+  bin="$BUILD/hmi-venv/bin"
+  [ -d "$BUILD/hmi-venv/Scripts" ] && bin="$BUILD/hmi-venv/Scripts"
+  "$bin/python" -m pip install --quiet --disable-pip-version-check -r "$HMI_DIR/requirements-dev.txt" >&2
+  echo "$bin"
+}
+
+hmi() {
+  local bin
+  bin="$(hmi_venv)"
+  cd "$HMI_DIR"
+  "$bin/python" -m ksphmi --windowed "$@"
+}
+
+test_hmi() {
+  log "HMI unit tests"
+  (cd "$HMI_DIR" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest discover -s tests)
+}
+
+# Layout on the Pi: ~/ksphmi/app (replaced on every deploy), ~/ksphmi/venv (with the Debian pygame),
+# ~/ksphmi/env (kRPC address), ~/ksphmi/config.local.toml (yours, never touched).
+deploy_hmi() {
+  hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
+  test_hmi
+  local missing pc_ip
+  missing="$(hmi_ssh 'dpkg -s python3-pygame >/dev/null 2>&1 || echo "  python3-pygame not installed"; [ -e "/var/lib/systemd/linger/$USER" ] || echo "  lingering off"')"
+  [ -z "$missing" ] || die "the Pi needs its one-time setup:
+$missing
+run on the Pi: sudo apt install -y python3-pygame && sudo loginctl enable-linger \$USER"
+  pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
+
+  log "Copying hmi-pi to $HMI_HOST:~/ksphmi/app (kRPC server: $pc_ip)"
+  # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
+  (cd "$HMI_DIR" && tar --exclude=__pycache__ -cf - ksphmi config.toml requirements.txt systemd) |
+    hmi_ssh 'set -e; rm -rf ~/ksphmi/app.new; mkdir -p ~/ksphmi/app.new; tar -C ~/ksphmi/app.new -xf -; rm -rf ~/ksphmi/app; mv ~/ksphmi/app.new ~/ksphmi/app'
+
+  log "Installing the Python packages and the service"
+  hmi_ssh "set -e
+    cd ~/ksphmi
+    [ -x venv/bin/python ] || python3 -m venv --system-site-packages venv
+    venv/bin/pip install --quiet --disable-pip-version-check -r app/requirements.txt
+    printf 'KSPHMI_KRPC_ADDRESS=%s\n' '$pc_ip' > env
+    mkdir -p ~/.config/systemd/user
+    cp app/systemd/ksphmi.service ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable ksphmi.service 2>/dev/null
+    systemctl --user restart ksphmi.service"
+  sleep 4
+  local state
+  state="$(hmi_ssh 'systemctl --user is-active ksphmi.service' || true)"
+  hmi_logs 15
+  [ "$state" = "active" ] || die "the HMI service is '$state' on $HMI_HOST (log above)"
+  log "Done: HMI running on $HMI_HOST"
+}
+
+hmi_logs() {
+  hmi_ssh "journalctl --user -u ksphmi.service -n ${1:-60} --no-pager -o short"
+}
+
 clean() {
   log "Removing build outputs"
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,30p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,39p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -489,6 +565,10 @@ case "${1:-help}" in
   upload_sketch)     shift; upload_sketch "$@" ;;
   test_arduino)      shift; test_arduino "$@" ;;
   verify)            shift; "$(ensure_venv "$ROOT/tools/requirements.txt")/python" "$ROOT/tools/verify.py" "$@" ;;
+  hmi)               shift; hmi "$@" ;;
+  test_hmi)          test_hmi ;;
+  deploy_hmi)        deploy_hmi ;;
+  hmi_logs)          shift; hmi_logs "$@" ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;

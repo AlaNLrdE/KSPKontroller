@@ -1,0 +1,18 @@
+# systemd *user* unit, installed by ./ci deploy_hmi into ~/.config/systemd/user/.
+# Runs without a desktop: SDL draws straight on the HDMI output (kmsdrm). Needs lingering
+# (sudo loginctl enable-linger $USER) so it starts at boot without anybody logged in.
+[Unit]
+Description=KSP HMI flight data display
+
+[Service]
+Environment=SDL_VIDEODRIVER=kmsdrm
+Environment=PYTHONUNBUFFERED=1
+Environment=KSPHMI_LOCAL_CONFIG=%h/ksphmi/config.local.toml
+EnvironmentFile=-%h/ksphmi/env
+WorkingDirectory=%h/ksphmi/app
+ExecStart=%h/ksphmi/venv/bin/python -m ksphmi
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

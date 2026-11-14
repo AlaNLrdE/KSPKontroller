@@ -1,0 +1,23 @@
+# KSP HMI settings. On the Pi, ~/ksphmi/config.local.toml (kept across deploys) overrides any of these,
+# and ./ci deploy_hmi sets the kRPC address to the PC it was run from (KSPHMI_KRPC_ADDRESS in ~/ksphmi/env).
+
+source = "krpc"          # krpc = the game through the kRPC mod; demo = a simulated orbit, no game needed
+
+[krpc]
+address = "localhost"    # PC running KSP with the kRPC server listening on its LAN address
+rpc_port = 50000
+stream_port = 50001
+rate_hz = 10             # samples per second requested from the game
+retry_seconds = 3
+
+[demo]
+speed = 20               # time acceleration of the simulated orbit
+
+[display]
+fps = 10
+fullscreen = true
+width = 0                # 0 = the monitor's own resolution
+height = 0
+
+[format]
+day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time
