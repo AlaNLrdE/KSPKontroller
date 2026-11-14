@@ -70,16 +70,14 @@ class SystemsStreams:
 
     @staticmethod
     def read(stream):
-        from krpc.error import RPCError
         if stream is None:
             return None
         try:
             return stream()
-        except RPCError:
+        except Exception:  # kRPC raises RuntimeError too, e.g. delta-v not available for a stage
             return None
 
     def sample(self):
-        from krpc.error import RPCError
         current = self.read(self.common['current'])
         objects = self.read(self.common['stages'])
         parts = self.read(self.common['parts'])
@@ -100,17 +98,23 @@ class SystemsStreams:
                 selected = [(number, stage) for number, stage in selected if current is None or number <= current][:4]
                 for number, stage in selected:
                     self.add(self.stage_streams, (number, 'parts'), getattr, stage, 'parts')
-                    self.add(self.stage_streams, (number, 'delta_v'), getattr, stage, 'delta_v')
+                    try:
+                        self.add(self.stage_streams, (number, 'delta_v'), getattr, stage, 'delta_v')
+                    except Exception:  # "delta-v information is not available" for this stage
+                        pass
                     self.stage_numbers.append(number)
-            except RPCError:  # docking or staging invalidated an object during setup
+            except Exception:  # docking or staging invalidated an object, or no delta-v for a stage
                 self.key = None
         resources = tuple(Resource(name, self.read(self.resource_streams.get((name, 'amount'))),
                                    self.read(self.resource_streams.get((name, 'capacity')))) for name in RESOURCE_NAMES)
         stages = []
         for number in self.stage_numbers:
             parts = self.read(self.stage_streams[(number, 'parts')])
-            dv = self.read(self.stage_streams[(number, 'delta_v')])
-            if parts is None or dv is None:
+            # Unknown delta-v is normal (KSP has not computed it, e.g. on the pad): show it
+            # as unknown without rebuilding every stream each sample. Missing parts means
+            # the stage object went stale (staging, docking): rebuild.
+            dv = self.read(self.stage_streams.get((number, 'delta_v')))
+            if parts is None:
                 self.key = None
             stages.append(Stage(number, len(parts) if parts is not None else None, dv))
         return Systems(current, resources, tuple(stages))

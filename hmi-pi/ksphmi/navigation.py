@@ -123,8 +123,12 @@ class NavigationStreams:
         self.clear(self.common)
         self.clear(self.extra)
 
+    def drop(self, names):
+        """Remove failing optional streams and rebuild them shortly, without a rebuild every sample."""
+        self.clear({name: self.extra.pop(name) for name in names if name in self.extra})
+        self.retry_frame_at = time.monotonic() + .5
+
     def sample(self):
-        from krpc.error import RPCError
         v = {k: s() for k, s in self.common.items()}
         if not all(math.isfinite(x) for x in (*v['rotation'], v['pitch'], v['heading'], v['roll'])):
             return None
@@ -136,30 +140,37 @@ class NavigationStreams:
             self.clear(self.extra)
             self.key = key
             self.retry_frame_at = 0
+            # Each optional marker group is independent. kRPC raises plain RuntimeError
+            # (InvalidOperationException), not RPCError, e.g. "surface speed reference frame
+            # is singular" on the launch pad: the attitude must still be shown.
             try:
                 # The speed frames follow the body/surface/target velocity. The
                 # orbital_reference_frame co-moves with the vessel and reads zero speed.
                 frame = getattr(self.vessel, mode + '_speed_reference_frame')
-            except RPCError:
-                frame = None  # no target, or zero relative velocity: markers are undefined
-                self.retry_frame_at = time.monotonic() + .5
-            if frame is not None:
                 self.add(self.extra, 'speed', getattr, self.vessel.flight(frame), 'speed')
                 for name, vector in (('prograde', (0, 1, 0)), ('normal', (0, 0, 1)), ('radial', (-1, 0, 0))):
                     self.add(self.extra, name, self.sc.transform_direction, vector, frame, self.frame)
+            except Exception:
+                self.drop(('speed', 'prograde', 'normal', 'radial'))  # no target or zero relative velocity
             if target is not None:
-                self.add(self.extra, 'target', target.position, self.frame)
+                try:
+                    self.add(self.extra, 'target', target.position, self.frame)
+                except Exception:
+                    self.drop(('target',))
             if node is not None:
-                self.add(self.extra, 'maneuver', node.burn_vector, self.frame)
-                for name, attr in (('node_remaining', 'remaining_delta_v'), ('node_dv', 'delta_v'), ('node_time', 'time_to')):
-                    self.add(self.extra, name, getattr, node, attr)
+                try:
+                    self.add(self.extra, 'maneuver', node.burn_vector, self.frame)
+                    for name, attr in (('node_remaining', 'remaining_delta_v'), ('node_dv', 'delta_v'), ('node_time', 'time_to')):
+                        self.add(self.extra, name, getattr, node, attr)
+                except Exception:
+                    self.drop(('maneuver', 'node_remaining', 'node_dv', 'node_time'))
         extra = {}
-        for key, stream in self.extra.items():
+        for key, stream in list(self.extra.items()):
             try:
                 extra[key] = stream()
-            except RPCError:
-                # Target/node removed or frame became singular between updates. Rebuild next sample.
-                self.key = None
+            except Exception:
+                # Target/node removed or frame became singular between updates.
+                self.drop((key,))
         v['throttle'] = max(0, min(1, v['throttle'])) if math.isfinite(v['throttle']) else 0
         v['g_force'] = v['g_force'] if math.isfinite(v['g_force']) else 0
         return Navigation(**{k: v[k] for k in ('rotation', 'pitch', 'heading', 'roll', 'sas', 'rcs', 'throttle', 'g_force')},

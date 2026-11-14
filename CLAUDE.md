@@ -90,6 +90,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Keep the ten flight metric tiles in the upper-left block below 40% of screen height. Resources are vessel
   totals in KSP units (0 capacity = absent, 0 amount = empty, missing data = unknown); staging is read-only.
   Rebuild resource/stage collections after stage or parts changes, including docking and decoupling.
+- kRPC server exceptions (InvalidOperationException, ArgumentException) reach Python as plain `RuntimeError`,
+  not `krpc.error.RPCError`. On the launch pad `surface_speed_reference_frame` is singular and stage `delta_v`
+  is unavailable: optional HMI streams catch `Exception`, drop only the failing marker or value and retry
+  later, never rebuild every sample and never end the vessel session.
 - ORBIT's live vessel marker must use Cartesian position in the body's non-rotating reference frame, with
   fixed view axes per vessel/body. Never anchor the camera or live marker to periapsis/true anomaly:
   near-circular RCS impulses can flip apsis direction without moving the vessel's position.

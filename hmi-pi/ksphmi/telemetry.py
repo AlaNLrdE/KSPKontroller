@@ -108,6 +108,17 @@ class KrpcSource(Source):
         self.client_name = client_name
         self.discovery = discovery
 
+    @staticmethod
+    def _systems(streams):
+        """Optional resources/staging sample; a failure blanks the panel, never the session."""
+        if streams is None:
+            return None
+        try:
+            return streams.sample()
+        except Exception as e:
+            log.debug("resources/staging sample failed: %s", _short(e))
+            return None
+
     def _publish(self, snap: Snapshot) -> None:
         super()._publish(replace(snap, server="kRPC %s:%d" % (self.address, self.rpc_port)))
 
@@ -290,7 +301,7 @@ class KrpcSource(Source):
                     period=v["period"], semi_major_axis=v["semi_major_axis"], true_anomaly=v["true_anomaly"],
                     orbital_speed=v["orbital_speed"], surface_speed=v["surface_speed"],
                     vertical_speed=v["vertical_speed"], nav=nav,
-                    systems=systemstreams.sample() if systemstreams is not None else None,
+                    systems=self._systems(systemstreams),
                     orbit_state=OrbitState(v['position'], v['velocity'], mu, axes),
                     received=time.monotonic()))
                 self._stop.wait(self.period)
