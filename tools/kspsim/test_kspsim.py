@@ -114,6 +114,23 @@ class PhysicsTest(unittest.TestCase):
         self.assertEqual(v.stage, physics.STAGES - 3)
 
 
+class SimulatorTest(unittest.TestCase):
+    def test_board_throttle_can_be_ignored(self):
+        sim = Simulator("orbit")
+        board = physics.Controls(throttle=0.19, rcs=True, sas=True)
+        sim.board_controls(board)
+        self.assertAlmostEqual(sim.vessel.controls.throttle, 0.19)
+        sim.board_throttle = False
+        sim.set_manual(throttle=0.0)
+        self.assertEqual(sim.vessel.controls.throttle, 0.0)  # engine off at once
+        self.assertTrue(sim.vessel.controls.rcs and sim.vessel.controls.sas)  # the rest still from the board
+        sim.board_controls(board)
+        self.assertEqual(sim.vessel.controls.throttle, 0.0)
+        sim.set_manual(throttle=0.5)
+        self.assertAlmostEqual(sim.vessel.controls.throttle, 0.5)
+        self.assertAlmostEqual(sim.last_board.throttle, 0.19)
+
+
 class KrpcTest(unittest.TestCase):
     def test_hmi_client_end_to_end(self):
         from kspsim.krpcserver import KrpcServer

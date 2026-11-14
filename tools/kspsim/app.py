@@ -67,6 +67,9 @@ class App:
         self.throttle_scale = ttk.Scale(ctl, from_=0, to=100, variable=self.throttle, orient="horizontal",
                                         command=lambda _v: sim.set_manual(throttle=self.throttle.get() / 100))
         self.throttle_scale.pack(fill="x", padx=4)
+        self.use_board_throttle = tk.BooleanVar(value=sim.board_throttle)
+        ttk.Checkbutton(ctl, text="Use the board's throttle (untick: the engine follows this slider)",
+                        variable=self.use_board_throttle, command=self._throttle_source).pack(anchor="w", padx=4)
         row = ttk.Frame(ctl)
         row.pack(fill="x", padx=4)
         self.flags = {}
@@ -144,6 +147,13 @@ class App:
         self.edit["name"].set(name)
         self.edit_msg.set("Current values loaded; change any and Apply.")
 
+    def _throttle_source(self) -> None:
+        with self.sim.lock:
+            self.sim.board_throttle = self.use_board_throttle.get()
+        if not self.sim.board_throttle:
+            self.throttle.set(0)  # the slider was mirroring the board: start from engine off
+        self.sim.set_manual(throttle=self.throttle.get() / 100)  # re-apply at once
+
     def _stage(self) -> None:
         self.sim.set_manual(stage=True)
         self.root.after(300, lambda: self.sim.set_manual(stage=False))
@@ -180,17 +190,19 @@ class App:
             self.driver.set("Driven by the Arduino (window controls disabled)" if sim.board_driven
                             else "Driven by this window (no Arduino controls)")
             state = "disabled" if sim.board_driven else "!disabled"
-            self.throttle_scale.state([state])
+            slider_free = not sim.board_driven or not sim.board_throttle
+            self.throttle_scale.state(["!disabled" if slider_free else "disabled"])
             self.stage_btn.state([state])
             for name, (var, cb) in self.flags.items():
                 cb.state([state])
                 if sim.board_driven:
                     var.set(getattr(c, name))
-            if sim.board_driven:
+            if sim.board_driven and sim.board_throttle:
                 self.throttle.set(c.throttle * 100)
             self.groups_text.set("Action groups: " + " ".join(
                 str(n) if c.groups >> n & 1 else "." for n in range(1, 11))
-                + "   throttle %d%%  pitch %+.2f roll %+.2f yaw %+.2f" % (c.throttle * 100, c.pitch, c.roll, c.yaw))
+                + "   engine %d%%  board throttle %d%%  pitch %+.2f roll %+.2f yaw %+.2f" % (
+                    c.throttle * 100, sim.last_board.throttle * 100, c.pitch, c.roll, c.yaw))
             el = v.elements()
             lf = 100 * v.liquid_fuel / physics.LIQUID_FUEL
             self.vessel_text.set(

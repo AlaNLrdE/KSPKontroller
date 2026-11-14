@@ -48,6 +48,9 @@ The window
 * **Controls**: while ControlPackets arrive the board drives the vessel and the window only mirrors what it
   sends (throttle, SAS, RCS, lights, gear, brakes, action groups, pitch/roll/yaw). Without the board, or
   3 s after it goes quiet, the window's own throttle, switches and STAGE button take over.
+  *Use the board's throttle* (on by default; ``--no-board-throttle``) can be unticked: the engine then
+  follows the window's slider while everything else still comes from the board. A throttle axis that
+  does not rest at 0 % (the panel's reads about 19 %) otherwise keeps the engine burning, as it would in KSP.
 * Link panels: board state, packets each way, bad frames, the board's uptime from its DebugPacket; the kRPC
   clients connected with their calls and streams.
 

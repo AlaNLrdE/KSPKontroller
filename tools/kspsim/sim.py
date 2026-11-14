@@ -24,6 +24,8 @@ class Simulator:
         self.tick = tick
         self.board_driven = False       # True while ControlPackets arrive (the window's controls step aside)
         self.manual = physics.Controls()
+        self.board_throttle = True      # False: the engine follows the window's throttle even with the board linked
+        self.last_board = physics.Controls()  # what the board sent last, shown in the window as received
         self._last_board = 0.0
         self._ksp_check = (0.0, False)
         self._stop = threading.Event()
@@ -68,14 +70,19 @@ class Simulator:
         with self.lock:
             for k, v in changes.items():
                 setattr(self.manual, k, v)
-            if not self.board_driven and self.vessel:
+            if self.vessel and not self.board_driven:
                 self.vessel.apply_controls(physics.Controls(**vars(self.manual)))
+            elif self.vessel and not self.board_throttle:  # board linked, engine on the window's throttle
+                self.vessel.apply_controls(physics.Controls(**{**vars(self.last_board), "throttle": self.manual.throttle}))
 
     # -- used by the links --------------------------------------------------------------------------
     def board_controls(self, c: physics.Controls) -> None:
         with self.lock:
             self._last_board = time.monotonic()
             self.board_driven = True
+            self.last_board = c
+            if not self.board_throttle:
+                c = physics.Controls(**{**vars(c), "throttle": self.manual.throttle})
             if self.vessel:
                 self.vessel.apply_controls(c)
 
