@@ -244,14 +244,19 @@ class KrpcSource(Source):
             for key, method in (('position', vessel.position), ('velocity', vessel.velocity)):
                 stream = conn.add_stream(method, inertial_frame)
                 streams[key] = stream
-                stream.rate = 1.0 / self.period
+                try:
+                    stream.rate = 1.0 / self.period
+                except Exception:  # very old servers have no per-stream rate
+                    pass
+            # Optional panels: any failure (RPC error, or a procedure missing in another kRPC
+            # version) disables that panel only and never interrupts the orbital telemetry.
             try:
                 navstreams = NavigationStreams(conn, sc, vessel, 1.0 / self.period)
-            except RPCError as e:
+            except Exception as e:
                 log.warning("navball unavailable: %s", _short(e))
             try:
                 systemstreams = SystemsStreams(conn, vessel)
-            except RPCError as e:
+            except Exception as e:
                 log.warning("resources/staging unavailable: %s", _short(e))
             log.info("following %s around %s", name, body_name)
             while not self._stop.is_set():

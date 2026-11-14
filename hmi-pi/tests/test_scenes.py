@@ -33,6 +33,13 @@ class ContextTest(unittest.TestCase):
             self.assertEqual(requests, [b'KSPHMI/1'])
             self.assertEqual(discover(port, timeout=0.02, targets=('127.0.0.1',)), '')
 
+    def test_discovery_accepts_only_local_peers(self):
+        from ksphmi.discovery import is_local
+        for address in ('127.0.0.1', '192.168.100.10', '10.0.0.5', '172.16.1.1', '169.254.3.4'):
+            self.assertTrue(is_local(address), address)
+        for address in ('8.8.8.8', '1.1.1.1', 'not-an-ip'):
+            self.assertFalse(is_local(address), address)
+
     def test_reconnect_discovers_server_after_configured_address_fails(self):
         from ksphmi.telemetry import KrpcSource
         source = KrpcSource('old-server.invalid')
