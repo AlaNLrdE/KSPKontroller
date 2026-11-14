@@ -42,9 +42,15 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1; the krpc 0.7 Python client refuses older servers
   (0.5.x = protocol 0). Mod version and `hmi-pi/requirements.txt` must match (`check_krpc`). Web search results
   were stale (said 0.5.4 was latest): check `api.github.com/repos/krpc/krpc/releases` instead.
-- The mod ships an empty `PluginData/settings.cfg` (defaults: 127.0.0.1 only). We write `KRPCConfiguration` with
-  `autoStartServers`, `autoAcceptConnections`, server `address = 0.0.0.0`, ports 50000/50001 (format in
-  docs/hmi.rst). Confirm on the first run from KSP.log `[kRPC]` lines which address it really bound.
+- The mod ships an empty `PluginData/settings.cfg` (defaults: 127.0.0.1 only). Install the complete template
+  `tools/krpc/settings.cfg` (every key, kRPC's own format, server `address = 0.0.0.0`, ports 50000/50001).
+  Confirm on the first run from KSP.log `[kRPC]` lines which address it really bound.
+- **Never hand-write a partial settings.cfg** (2026-11-14): `ConfigurationFile.AfterLoad` copies every persistent
+  field, so missing keys become 0/False, not defaults. `maxTimePerUpdate = 0` = server accepts the client but never
+  answers any RPC (HMI hung a whole session). `check_krpc` FAILs on maxTimePerUpdate/recvTimeout missing or 0 and
+  WARNs on any difference from the template.
+- The krpc Python client's `timeout` only covers the TCP connect, not the handshake/first RPC: the HMI uses a
+  5 s TCP timeout plus its own 20 s deadline on the whole connect, and logs connect failures.
 - The wired LAN is a **Public** network in Windows and the wk-rea KSP has no firewall rule: the user must add
   "KSP kRPC (wk-rea)" in an administrator PowerShell (command in docs/hmi.rst). Creating it yourself is blocked.
 - Installing into `GameData/kRPC` is a GameData change: KSP closed, peer `ksp-workbench-*` informed, snapshot

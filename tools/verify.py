@@ -467,6 +467,38 @@ def check_hmi(ctx):
 
 
 FIREWALL_RULE = "KSP kRPC (wk-rea)"
+KRPC_TEMPLATE = os.path.join(ROOT, "tools", "krpc", "settings.cfg")
+# UI state kRPC rewrites on its own: not compared against the template.
+KRPC_UI_KEYS = ("mainwindowvisible", "infowindowvisible", "id")
+KRPC_UI_NODES = ("mainwindowposition", "infowindowposition")
+
+
+def krpc_values(cfg):
+    """Flatten a kRPC settings.cfg (ConfigNode) into {lower-case key: value}: top-level fields, server fields and
+    the server's key/value Items (address, rpc_port, stream_port). Window position nodes and UI flags are skipped."""
+    vals, stack, last, pending = {}, [], "", None
+    for line in cfg.splitlines():
+        t = line.strip()
+        if t == "{":
+            stack.append(last.lower())
+        elif t == "}":
+            if stack:
+                stack.pop()
+        elif "=" in t:
+            if any(n in KRPC_UI_NODES for n in stack):
+                continue
+            k, v = (x.strip() for x in t.split("=", 1))
+            k = k.lower()
+            if k == "key":
+                pending = v
+            elif k == "value" and pending:
+                vals[pending.lower()] = v
+                pending = None
+            elif k not in KRPC_UI_KEYS:
+                vals[k] = v
+        elif t:
+            last = t
+    return vals
 
 
 def check_krpc(ctx):
@@ -498,6 +530,33 @@ def check_krpc(ctx):
         problems.append("listens on %s only: the Pi cannot reach it" % (addr.group(1) if addr else "127.0.0.1 (default)"))
     report("WARN" if problems else "PASS", "kRPC: server settings",
            "; ".join(problems) if problems else "auto-start, auto-accept, address %s" % addr.group(1))
+    # kRPC's ConfigurationFile.AfterLoad copies every persistent field, so a key missing from a hand-written file
+    # becomes 0/False, not the default: maxTimePerUpdate = 0 accepts clients but never answers an RPC.
+    vals = krpc_values(cfg)
+    dead = ["%s %s" % (k, "missing" if k not in vals else "= 0")
+            for k in ("maxtimeperupdate", "recvtimeout") if vals.get(k, "0") in ("0", "")]
+    if dead:
+        report("FAIL", "kRPC: update budget", "%s: the server accepts the Pi but never answers any RPC "
+               "(install tools/krpc/settings.cfg, docs/hmi.rst)" % ", ".join(dead))
+    else:
+        report("PASS", "kRPC: update budget", "maxTimePerUpdate %s, recvTimeout %s"
+               % (vals["maxtimeperupdate"], vals["recvtimeout"]))
+    off = [k for k in ("adaptiveratecontrol", "blockingrecv") if vals.get(k, "False").lower() != "true"]
+    if off:
+        report("WARN", "kRPC: rate control", "%s False (kRPC default True): slower or stalled RPCs" % ", ".join(off))
+    else:
+        report("PASS", "kRPC: rate control", "adaptiveRateControl, blockingRecv True")
+    want_vals = krpc_values(read(KRPC_TEMPLATE)) if os.path.isfile(KRPC_TEMPLATE) else {}
+    diff = ["%s=%s (want %s)" % (k, vals.get(k, "missing"), v) for k, v in sorted(want_vals.items())
+            if vals.get(k, "").lower() != v.lower()]
+    diff += ["%s=%s (not in template)" % (k, vals[k]) for k in sorted(vals) if k not in want_vals]
+    if not want_vals:
+        report("WARN", "kRPC: matches template", "tools/krpc/settings.cfg missing")
+    elif diff:
+        report("WARN", "kRPC: matches template", "installed settings.cfg differs from tools/krpc/settings.cfg: "
+               + ", ".join(diff))
+    else:
+        report("PASS", "kRPC: matches template", "%d keys equal to tools/krpc/settings.cfg" % len(want_vals))
     try:
         out = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", "name=" + FIREWALL_RULE],
                              capture_output=True, text=True, timeout=15).stdout

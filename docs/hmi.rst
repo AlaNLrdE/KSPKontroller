@@ -86,21 +86,27 @@ In KSP (with KSP closed): kRPC **0.7.0** (built for KSP 1.12.5, protocol version
 on the Pi; the 0.5.x mods speak protocol 0 and the 0.7 client refuses them) from
 `github.com/krpc/krpc/releases <https://github.com/krpc/krpc/releases>`_, ``GameData/kRPC`` copied as is. The
 shipped ``PluginData/settings.cfg`` is empty (kRPC writes defaults on first start, listening on ``127.0.0.1``
-only), so it is replaced with:
+only), so it is replaced by copying the repo's complete ``tools/krpc/settings.cfg`` over it:
 
-.. code-block:: text
+.. code-block:: bash
 
-   KRPCConfiguration
-   {
-       autoStartServers = True
-       autoAcceptConnections = True
-       servers { item { name = KSPKontroller HMI  protocol = ProtocolBuffersOverTCP
-                        settings { item { key = address  value = 0.0.0.0 }
-                                   item { key = rpc_port  value = 50000 }
-                                   item { key = stream_port  value = 50001 } } } }
-   }
+   cp tools/krpc/settings.cfg "$KSPDIR/GameData/kRPC/PluginData/settings.cfg"
 
-(one value per line in the real file). The wired LAN is a **Public** network in Windows, and the KSP install
+The template holds every key kRPC 0.7.0 writes, in its own format, with kRPC's defaults plus our choices:
+``autoStartServers = True``, ``autoAcceptConnections = True``, ``confirmRemoveClient = False`` and one server
+``KSPKontroller HMI`` (``ProtocolBuffersOverTCP``, ``address = 0.0.0.0``, ``rpc_port = 50000``,
+``stream_port = 50001``).
+
+.. warning::
+
+   Never hand-write a partial file. kRPC's ``ConfigurationFile.AfterLoad`` copies **every** persistent field, so
+   a missing key becomes ``0``/``False`` instead of its default. With ``maxTimePerUpdate`` missing (0) the server
+   accepts the Pi's connection but never answers a single RPC: the HMI hung for a whole game session this way.
+   The real defaults (``core/src/Configuration.cs``) are ``maxTimePerUpdate = 5000``, ``recvTimeout = 1000``,
+   ``tickHoldTimeout = 1000000``, ``adaptiveRateControl = True``, ``blockingRecv = True``,
+   ``oneRPCPerUpdate = False``, ``verboseErrors = True``, ``pauseServerWithGame = False``.
+
+The wired LAN is a **Public** network in Windows, and the KSP install
 has no firewall rule of its own, so an administrator PowerShell must allow the ports once:
 
 .. code-block:: powershell
@@ -110,7 +116,9 @@ has no firewall rule of its own, so an administrator PowerShell must allow the p
      -Program "C:\Users\alanl\wk\wk-rea\Kerbal Space Program\KSP_x64.exe"
 
 ``./ci verify`` (``check_krpc``) checks the mod version against the Pi's client, the server settings (auto-start,
-auto-accept, not localhost) and the firewall rule. ``tools/kspsim`` must not run while KSP does: both want port
+auto-accept, not localhost), fails if ``maxTimePerUpdate`` or ``recvTimeout`` is missing or 0, warns if
+``adaptiveRateControl``/``blockingRecv`` are False or if any key differs from ``tools/krpc/settings.cfg``
+(window positions ignored), and checks the firewall rule. ``tools/kspsim`` must not run while KSP does: both want port
 50000 (and COM5).
 
 Commands
