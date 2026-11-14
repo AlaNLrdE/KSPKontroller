@@ -158,7 +158,7 @@ with the reset cause (a watchdog reset sets bit 8 or 9 of ``reset``).
      - Reset status read at boot (bit 0 power on, 8 and 9 watchdog, 10 software).
    * - ``flags``
      - byte
-     - bit 0 connected, bit 2 stage pin level, bit 3 watchdog started, bit 4 ever connected.
+     - bit 0 connected, bit 2 SAS pin (pin 2) level, bit 3 watchdog started, bit 4 ever connected.
    * - ``rx_avail``
      - int16
      - Bytes waiting in the receive buffer.

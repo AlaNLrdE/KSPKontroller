@@ -25,6 +25,89 @@ Files
      - ``output()`` and ``controls()``: read the panel and send ``ControlPacket``.
    * - ``utilities.ino``
      - LED indicators and packet id initialization.
+   * - ``matrix.ino``
+     - The 12x8 LED matrix: splash, waiting / lost animations, screens, screen button.
+   * - ``debug.ino``
+     - ``debugReport()``: the once-per-second ``DebugPacket``.
+
+Feature status
+--------------
+
+What the current sketch does, and how to change it. All defines are in ``KSPIODemo9.ino``. ``tools/kspsim``
+exercises every item without KSP (see :doc:`simulator`, *Game state / LEDs* and *Board tests* tabs).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 12 64
+
+   * - Feature
+     - Status
+     - Behaviour, and how to enable or change it
+   * - SAS button, pin 2
+     - enabled
+     - Each press sets the SAS bit to the opposite of the reported ``AGSAS`` (150 ms debounce, idle level learned
+       while disconnected). ``SASPIN``.
+   * - RCS button, pin 9
+     - enabled
+     - Same as SAS with ``AGRCS``. ``RCSPIN``.
+   * - Screen button, pin 3
+     - enabled
+     - Cycles the six matrix screens, then automatic. ``SCREENPIN``.
+   * - Action group 1 switch, pin 10
+     - enabled
+     - Sent as a level: pin HIGH sets group 1. With the internal pull-up an open (or unwired) switch means
+       group 1 ON and a switch closed to GND means OFF. ``CG1PIN``.
+   * - Stage button
+     - disabled
+     - ``STAGEPIN -1``. Set a pin number: the STAGE bit is held 150 ms per press (``STAGEHOLD``).
+   * - Throttle axis
+     - disabled
+     - ``THROTTLEPIN -1``, throttle sent as 0. Set the analog pin (``0`` for A0); deadband ``THROTTLEDB``,
+       sent on a change of ``THROTTLEDELTA``.
+   * - Other controls
+     - not implemented
+     - Lights, gear, brakes, precision and abort bits, groups 2-10, pitch / roll / yaw, translation, wheel
+       axes, ``Mode`` and ``NavballSASMode`` are always 0. Add them in ``controls()`` (see *Adding a control*).
+   * - Green LED, pin 12
+     - enabled
+     - On with any valid packet, off after ``IDLETIMER`` (2 s) without one.
+   * - Yellow LED, pin 6
+     - enabled
+     - ``G > GCAUTION`` (5) or stage fuel ``LiquidFuelS / LiquidFuelTotS`` below ``FUELCAUTION`` (50 %).
+   * - Red LED, pin 5
+     - enabled
+     - ``G > GWARN`` (9) or stage fuel below ``FUELWARN`` (5 %). Also inverts the matrix at 2 Hz. A stage
+       without liquid fuel (``LiquidFuelTotS`` 0) raises neither.
+   * - SAS / RCS / group 1 LEDs, pins 8 / 7 / 11
+     - enabled
+     - Mirror ``ActionGroups`` bits 0, 1 and 6 of each ``VesselData``.
+   * - Overheat (``MaxOverHeat``)
+     - not used
+     - Received but no LED or screen reads it. Add a condition in ``Indicators()`` to use it.
+   * - LED matrix
+     - enabled
+     - Screens below; ``SCR_*`` in ``matrix.ino``.
+   * - ``DisplayCommand`` (id 2)
+     - enabled (test tools)
+     - Forces a matrix screen for 4 s: 0-5 the screens (fuel, stage, horizon, vertical speed, SAS mode, data
+       rotation), 16-20 the label and 32-36 the value page of Ap, Pe, inclination, altitude, speed, 64 the
+       waiting animation, 255 automatic. Other values are ignored. KSP never sends it; it counts as a valid packet.
+   * - ``DebugPacket`` (id 102)
+     - enabled
+     - Once per second while connected (see :doc:`protocol`). ``txSkipped`` is never incremented (always 0).
+   * - Idle timeout
+     - enabled
+     - ``IDLETIMER`` 2000 ms: disconnected, LEDs off, no more ControlPackets or DebugPackets, matrix shows X.
+   * - Link reset
+     - enabled
+     - ``LINKRESETMS`` 30000 ms without a valid packet, once connected since power on: ``NVIC_SystemReset()``.
+   * - Watchdog
+     - enabled
+     - ``WATCHDOGMS`` 2000 ms: resets the board if ``loop()`` stops.
+
+The SAS and RCS buttons rely on the plugin applying a bit only when it changes (``VControlsOld``). If the state
+is changed in the game (key T or R) after a board press, the button's next press repeats the bit it already
+sent, so the plugin ignores it until the game state flips back; the simulator reproduces this.
 
 Main loop
 ---------
