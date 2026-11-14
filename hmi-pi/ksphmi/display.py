@@ -194,7 +194,7 @@ class Display:
             self.text(snap.detail[:110], 2.8, MUTED, (cx, cy + 19 * u), "midtop")
         # where to find this display (SSH, deploys) and where it looks for the game
         self.text(self.net.line(), 3.4, VALUE, (cx, self.h - 9.5 * u), "midtop")
-        self.text(self.server_text, 3.0, LABEL, (cx, self.h - 5 * u), "midtop")
+        self.text(snap.server or self.server_text, 3.0, LABEL, (cx, self.h - 5 * u), "midtop")
 
     def facility(self, snap: Snapshot) -> None:
         u = self.u

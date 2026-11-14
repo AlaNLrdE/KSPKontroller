@@ -413,6 +413,8 @@ def check_git(ctx):
 HMI_DIR = os.path.join(ROOT, "hmi-pi")
 
 
+
+
 def check_hmi_context(ctx):
     """Keep the optional read-only scene channel consistent across game, HMI and simulator."""
     source = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "HmiContext.cs"))
@@ -437,7 +439,6 @@ def check_hmi_context(ctx):
            "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
 
 
-
 def check_hmi(ctx):
     """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
     p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=HMI_DIR,
@@ -450,7 +451,13 @@ def check_hmi(ctx):
              "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
              "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"; "
              "echo \"cursorblink=$(cat /sys/class/graphics/fbcon/cursor_blink 2>/dev/null)\"; "
-             "echo \"cursorrule=$(test -f /etc/tmpfiles.d/ksphmi-cursor.conf && echo yes || echo no)\"")
+             "echo \"cursorrule=$(test -f /etc/tmpfiles.d/ksphmi-cursor.conf && echo yes || echo no)\"; "
+             "echo \"linger=$(loginctl show-user $(id -un) -p Linger --value)\"; "
+             "echo \"autostart=$(systemctl --user is-enabled ksphmi.service)\"; "
+             "echo \"tty1=$(systemctl is-enabled getty@tty1.service)\"; "
+             "bootfile=/boot/firmware/cmdline.txt; test -r $bootfile || bootfile=/boot/cmdline.txt; "
+             "echo \"bootquiet=$(test -r $bootfile && ! grep -qw console=tty1 $bootfile "
+             "&& grep -qw quiet $bootfile && echo yes || echo no)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
                            capture_output=True, text=True, timeout=15)
@@ -471,7 +478,7 @@ def check_hmi(ctx):
     env = dict(l.split("=", 1) for l in lines[2:] if "=" in l)
     addr, client = env.get("KSPHMI_KRPC_ADDRESS"), env.get("client")
     if addr and client and addr != client and not os.environ.get("HMI_KRPC_ADDRESS"):
-        report("WARN", "hmi: kRPC address", "Pi uses %s but this PC is %s: ./ci deploy_hmi" % (addr, client))
+        report("WARN", "hmi: kRPC address", "seed %s differs from this PC %s; HMI discovers KSP via UDP 50002" % (addr, client))
     elif addr:
         report("PASS", "hmi: kRPC address", addr)
     # A blanked framebuffer (4 = powered down) hides every frame while the service and its log look healthy
@@ -489,6 +496,13 @@ def check_hmi(ctx):
                "HMI (now: blink=%s; docs/hmi.rst)" % env.get("cursorblink", "?"))
     elif env.get("cursorrule") == "yes":
         report("PASS", "hmi: console cursor", "blinking off at every boot (blink=%s)" % env.get("cursorblink", "?"))
+    autostart = env.get("linger") == "yes" and env.get("autostart") == "enabled"
+    report("PASS" if autostart else "WARN", "hmi: boot autostart",
+           "service enabled with lingering" if autostart else "enable service and loginctl lingering")
+    kiosk = env.get("tty1") == "masked" and env.get("bootquiet") == "yes"
+    report("PASS" if kiosk else "WARN", "hmi: kiosk boot",
+           "login console masked and boot text hidden" if kiosk else
+           "run sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh on the Pi")
 
 
 FIREWALL_RULE = "KSP kRPC (wk-rea)"

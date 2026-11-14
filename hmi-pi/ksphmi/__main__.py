@@ -28,7 +28,7 @@ def make_source(cfg: dict, args):
     k = cfg["krpc"]
     return KrpcSource(address=args.address or k["address"], rpc_port=int(k["rpc_port"]),
                       stream_port=int(k["stream_port"]), rate_hz=float(k["rate_hz"]),
-                      retry_seconds=float(k["retry_seconds"]))
+                      retry_seconds=float(k["retry_seconds"]), discovery=bool(k.get("discovery", True)) and not args.address)
 
 
 def main(argv=None) -> int:

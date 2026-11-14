@@ -11,7 +11,8 @@ APP_DIR = Path(__file__).resolve().parent.parent
 
 DEFAULTS = {
     "source": "krpc",  # krpc | demo
-    "krpc": {"address": "localhost", "rpc_port": 50000, "stream_port": 50001, "rate_hz": 10, "retry_seconds": 3},
+    "krpc": {"address": "localhost", "rpc_port": 50000, "stream_port": 50001, "rate_hz": 10,
+             "retry_seconds": 3, "discovery": True},
     "demo": {"speed": 20},
     "display": {"output": "sdl", "fbdev": "/dev/fb0", "fps": 10, "fullscreen": True, "width": 0, "height": 0},
     "format": {"day_hours": 6},

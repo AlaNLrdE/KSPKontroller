@@ -118,7 +118,7 @@ class ConnectTimeoutTest(unittest.TestCase):
                     pass
         th.Thread(target=accept_and_ignore, daemon=True).start()
         port = srv.getsockname()[1]
-        src = KrpcSource("127.0.0.1", port, port, retry_seconds=0.1)
+        src = KrpcSource("127.0.0.1", port, port, retry_seconds=0.1, discovery=False)
         src.CONNECT_TIMEOUT = 0.5
         src.TCP_TIMEOUT = 0.3
         src.start()

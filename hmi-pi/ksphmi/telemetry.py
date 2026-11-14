@@ -12,7 +12,7 @@ import logging
 import math
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class Snapshot:
     state: str = CONNECTING
     detail: str = ""             #: why we are not in FLIGHT, shown on the waiting screen
     scene: str = ""             #: KSPSerialIO scene context, empty if unavailable
+    server: str = ""            #: current endpoint, including a server found after DHCP changes
     vessel: str = ""
     situation: str = ""          #: kRPC VesselSituation name: pre_launch, flying, sub_orbital, orbiting...
     body: str = ""
@@ -89,7 +90,8 @@ class KrpcSource(Source):
     """Polls the kRPC server. Reconnects forever; re-opens its streams when the vessel or the body changes."""
 
     def __init__(self, address: str, rpc_port: int = 50000, stream_port: int = 50001,
-                 rate_hz: float = 10.0, retry_seconds: float = 3.0, client_name: str = "KSP HMI") -> None:
+                 rate_hz: float = 10.0, retry_seconds: float = 3.0, client_name: str = "KSP HMI",
+                 discovery: bool = True) -> None:
         super().__init__()
         self.address = address
         self.context_port = 50002
@@ -98,18 +100,30 @@ class KrpcSource(Source):
         self.period = 1.0 / max(rate_hz, 0.5)
         self.retry = retry_seconds
         self.client_name = client_name
+        self.discovery = discovery
+
+    def _publish(self, snap: Snapshot) -> None:
+        super()._publish(replace(snap, server="kRPC %s:%d" % (self.address, self.rpc_port)))
 
     def _run(self) -> None:
         import krpc  # imported here so the demo source and the tests do not need it
 
-        where = "%s:%d" % (self.address, self.rpc_port)
         while not self._stop.is_set():
+            where = "%s:%d" % (self.address, self.rpc_port)
             self._publish(Snapshot(state=CONNECTING, detail="connecting to kRPC at " + where))
             try:
                 conn = self._connect(krpc)
             except Exception as e:  # refused (KSP closed), timeout, handshake rejected by the server
                 log.warning("kRPC at %s: %s", where, _short(e))
                 self._publish(Snapshot(state=CONNECTING, detail="kRPC at %s: %s" % (where, _short(e))))
+                # DHCP may have reassigned the PC. The game already answers scene
+                # requests on UDP 50002, including broadcast requests from a new Pi IP.
+                from .discovery import discover
+                discovered = discover(self.context_port) if self.discovery else ""
+                if discovered and discovered != self.address:
+                    log.info("discovered KSP at %s (previously %s)", discovered, self.address)
+                    self.address = discovered
+                    continue
                 self._stop.wait(self.retry)
                 continue
             log.info("connected to kRPC at %s", where)
@@ -231,7 +245,8 @@ class KrpcSource(Source):
                     inclination=math.degrees(v["inclination"]), eccentricity=v["eccentricity"],
                     period=v["period"], semi_major_axis=v["semi_major_axis"], true_anomaly=v["true_anomaly"],
                     orbital_speed=v["orbital_speed"], surface_speed=v["surface_speed"],
-                    vertical_speed=v["vertical_speed"], received=time.monotonic()))
+                    vertical_speed=v["vertical_speed"],
+                    received=time.monotonic()))
                 self._stop.wait(self.period)
         finally:
             for s in streams.values():

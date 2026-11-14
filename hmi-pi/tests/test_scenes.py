@@ -9,8 +9,66 @@ from ksphmi.scenes import VIEWS, read_context
 
 
 class ContextTest(unittest.TestCase):
+    def test_discovery_uses_scene_protocol_and_ignores_unrelated_replies(self):
+        import socket
+        import threading
+        from ksphmi.discovery import discover
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+            server.bind(('127.0.0.1', 0))
+            server.settimeout(2)
+            port = server.getsockname()[1]
+            requests = []
 
+            def respond():
+                request, peer = server.recvfrom(256)
+                requests.append(request)
+                server.sendto(b'unrelated packet', peer)
+                server.sendto(b'KSPHMI/1 mainmenu', peer)
 
+            worker = threading.Thread(target=respond, daemon=True)
+            worker.start()
+            self.assertEqual(discover(port, targets=('127.0.0.1',)), '127.0.0.1')
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(requests, [b'KSPHMI/1'])
+            self.assertEqual(discover(port, timeout=0.02, targets=('127.0.0.1',)), '')
+
+    def test_reconnect_discovers_server_after_configured_address_fails(self):
+        from ksphmi.telemetry import KrpcSource
+        source = KrpcSource('old-server.invalid')
+        connection = MagicMock()
+        with patch.object(source, '_connect', side_effect=[OSError('address changed'), connection]), \
+                patch('ksphmi.discovery.discover', return_value='127.0.0.1') as discovery, \
+                patch.object(source, '_session', side_effect=lambda conn: source._stop.set()):
+            source._run()
+        self.assertEqual(source.address, '127.0.0.1')
+        self.assertEqual(source.latest().server, 'kRPC 127.0.0.1:50000')
+        discovery.assert_called_once_with(50002)
+        connection.close.assert_called_once()
+
+    def test_kiosk_boot_settings_preserve_root_and_are_idempotent(self):
+        from pathlib import Path
+        import subprocess
+        import tempfile
+        script = Path(__file__).resolve().parents[1] / 'systemd' / 'setup-kiosk.sh'
+        python = script.read_text().split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            cmdline = Path(folder) / 'cmdline.txt'
+            config = Path(folder) / 'config.txt'
+            original = 'console=ttyS0,115200 console=tty1 root=PARTUUID=test rootwait\n'
+            cmdline.write_text(original)
+            config.write_text('[all]\ndtoverlay=vc4-kms-v3d\n')
+            for _ in range(2):
+                subprocess.run([sys.executable, '-c', python, str(cmdline)], check=True)
+                args = cmdline.read_text().split()
+                self.assertIn('root=PARTUUID=test', args)
+                self.assertIn('rootwait', args)
+                self.assertIn('console=ttyS0,115200', args)
+                self.assertNotIn('console=tty1', args)
+                self.assertEqual(args.count('quiet'), 1)
+                self.assertEqual(cmdline.read_text().count('\n'), 1)
+                self.assertEqual(config.read_text().count('disable_splash=1'), 1)
+            self.assertEqual(cmdline.with_name('cmdline.txt.ksphmi-backup').read_text(), original)
 
 
     def test_accepts_only_versioned_known_scenes(self):

@@ -416,7 +416,7 @@ class KrpcTest(unittest.TestCase):
         server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
-        src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5)
+        src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5, discovery=False)
         src.context_port = server.context_port
         src.start()
 
