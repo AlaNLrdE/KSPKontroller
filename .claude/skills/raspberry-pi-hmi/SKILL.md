@@ -43,6 +43,9 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   white arc highlight top-left. Face shading: concentric circles from a grey rim to white at ~45% inwards.
   Car-gauge needles pivot on a hub below the dial centre: keep the needle tail shorter than the hub radius or
   it pokes into the window underneath.
+- hmi-cpp `Canvas::polygon` fills convex shapes only (pygame's `draw.polygon` takes concave ones): split
+  concave icons such as the lightning bolt into triangles. Its render tests and screenshots need the
+  `build/hmi-cpp-deps` libraries on `LD_LIBRARY_PATH` and `KSPHMI_FONT` (see `hmi_cpp_env` in `ci`).
 - Several captions in a row (dial labels): fit one common font size to the narrowest cell, computed when the
   layout changes; a per-frame fit makes the text size jitter.
 - Format numbers through `ksphmi/fmt.py` (no `-0 m`); a value that can be renamed in game (vessel name) must be a
