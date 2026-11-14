@@ -1,0 +1,67 @@
+Simulator (testing without KSP)
+===============================
+
+``tools/kspsim`` stands in for KSP and both mods, so the Arduino panel and the Raspberry Pi HMI can be tested
+without starting the game:
+
+.. code-block:: text
+
+   kspsim (PC) --- KSPSerialIO protocol, USB serial ------------ Arduino UNO R4 (unchanged firmware)
+               \-- kRPC protocol, TCP 50000/50001 on the LAN --- Raspberry Pi HMI (unchanged code)
+
+Both sides run the code they run with the game: the board gets the same handshake and 214-byte ``VesselData``
+every 200 ms (the plugin's default ``refresh``), and the Pi's ``KrpcSource`` talks to a server that answers
+the kRPC protocol (version 1, krpc 0.7 client). Nothing has to be reconfigured: the Pi already points at the
+PC on port 50000. KSP must be closed (it owns the serial port and the kRPC ports); the simulator checks.
+
+Running it
+----------
+
+.. code-block:: bash
+
+   ./ci sim                      # window; first Arduino USB port; kRPC on all interfaces
+   ./ci sim --port COM5          # a given serial port
+   ./ci sim --no-board           # only the Pi        (--no-krpc: only the board)
+   ./ci sim --headless           # no window, one status line every 2 s
+   ./ci test_sim                 # tests, also part of ./ci verify
+
+The first time Python listens on the LAN, Windows asks whether to allow it: allow it on **private** networks,
+or the Pi cannot connect.
+
+The window
+----------
+
+* **Game**: *Flight*; *Space center* (the board gets no telemetry and goes idle, the HMI shows
+  ``NOT IN FLIGHT``); *KSP closed* (kRPC ports closed: the HMI shows ``OFFLINE`` and reconnects when the
+  game "starts" again).
+* **Scenario** loads a new vessel, as switching vessels in KSP does (the HMI re-opens its streams):
+  on the pad, an 80 x 250 km orbit, a sub-orbital arc falling back through the atmosphere, an escape
+  trajectory (hyperbolic, the HMI shows ``Escape``).
+* **Time warp** 1x to 1000x.
+* **Controls**: while ControlPackets arrive the board drives the vessel and the window only mirrors what it
+  sends (throttle, SAS, RCS, lights, gear, brakes, action groups, pitch/roll/yaw). Without the board, or
+  3 s after it goes quiet, the window's own throttle, switches and STAGE button take over.
+* Link panels: board state, packets each way, bad frames, the board's uptime from its DebugPacket; the kRPC
+  clients connected with their calls and streams.
+
+The flight model
+----------------
+
+``physics.py`` is deliberately small: a planar orbit around Kerbin (real radius, gravitational parameter,
+rotation and 70 km atmosphere), RK4 integration, exponential air density with drag, a rotating surface to
+stand on and land on, and three identical stages of about 4.8 km/s each. Thrust follows a fixed ascent
+guidance (straight up, a gradual turn to the horizon by 45 km, then prograde), so a launch needs only the
+throttle: full throttle from the pad reaches orbit. The STAGE bit stages on its rising edge, like the plugin.
+SAS, RCS, lights, gear, brakes, abort and the custom action groups are echoed in ``ActionGroups`` exactly as
+received, which is what the board's LEDs show.
+
+Not modelled: other bodies and sphere of influence changes, attitude (pitch/roll/yaw are shown, not
+applied), maneuver nodes and targets (sent as 0), electric charge use beyond a slow drain.
+
+Extending it
+------------
+
+* A new HMI value read through kRPC: add the procedure to ``KrpcServer._space_center`` (names and types are
+  in the krpc client stubs, ``krpc/services/spacecenter.py``) and to ``test_hmi_client_end_to_end``.
+* A new ``VesselData`` field or packet change: ``VESSEL_DATA`` / ``VESSEL_FIELDS`` in ``arduino.py`` mirror the
+  firmware struct; ``test_sizes_match_the_firmware`` fails when they drift.

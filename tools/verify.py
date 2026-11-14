@@ -448,6 +448,16 @@ def check_hmi(ctx):
         report("PASS", "hmi: kRPC address", addr)
 
 
+def check_sim(ctx):
+    """kspsim tests: wire packing against the firmware sizes, the flight model, and the HMI kRPC client
+    against the simulated server (catches a krpc client upgrade that the stand-in no longer serves)."""
+    p = subprocess.run([sys.executable, "-m", "unittest", os.path.join("tools", "kspsim", "test_kspsim.py")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300,
+                       env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    tail = [l for l in p.stderr.strip().splitlines() if l.startswith(("Ran ", "OK", "FAILED"))]
+    report("PASS" if p.returncode == 0 else "FAIL", "sim: tests", " ".join(tail) if p.returncode == 0 else p.stderr.strip()[-300:])
+
+
 # --------------------------------------------------------------------------------------------- hardware
 def check_board(ctx):
     if ksp_running():
@@ -463,7 +473,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_sim, check_git]
 
 
 def main():

@@ -18,6 +18,7 @@ over a USB serial link. The plugin is based on `hugopeeters/KSPSerialIO
    plugin
    firmware
    hmi
+   simulator
    building
    debugging
 

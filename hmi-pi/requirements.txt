@@ -1,2 +1,3 @@
 # Python packages for the Pi (pygame comes from Debian: apt install python3-pygame, see docs/hmi.rst).
-krpc>=0.5.4,<0.8
+# Protocol version 1: needs the kRPC 0.7 server mod in KSP (and tools/kspsim serves the same version).
+krpc==0.7.0

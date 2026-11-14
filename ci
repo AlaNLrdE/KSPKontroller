@@ -22,6 +22,9 @@
 #   ./ci test_hmi            Unit tests of the HMI (no pygame, no kRPC needed)
 #   ./ci deploy_hmi          Test, copy hmi-pi/ to the Pi over SSH, install its service and restart it
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
+#   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
+#                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
+#   ./ci test_sim            Simulator tests, including the HMI kRPC client against the simulated server
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -540,6 +543,18 @@ run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-lin
   log "Done: HMI running on $HMI_HOST"
 }
 
+sim() {
+  local bin
+  bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
+  cd "$ROOT/tools"
+  "$bin/python" -m kspsim "$@"
+}
+
+test_sim() {
+  log "Simulator tests"
+  (cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest tools/kspsim/test_kspsim.py)
+}
+
 hmi_logs() {
   # Raspberry Pi OS keeps no per-user journal: read the unit's lines from the system journal (user is in adm)
   hmi_ssh "journalctl _SYSTEMD_USER_UNIT=ksphmi.service -n ${1:-60} --no-pager -o short"
@@ -550,7 +565,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,39p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,42p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -574,6 +589,8 @@ case "${1:-help}" in
   test_hmi)          test_hmi ;;
   deploy_hmi)        deploy_hmi ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
+  sim)               shift; sim "$@" ;;
+  test_sim)          test_sim ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;

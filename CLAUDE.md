@@ -12,6 +12,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 | Plugin behaviour, settings, perf/port logs | `docs/plugin.rst` |
 | Firmware, pins, LED matrix, recovery | `docs/firmware.rst`, `docs/overview.rst` |
 | Raspberry Pi HMI (`hmi-pi/`, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
+| Testing board/HMI without KSP (`./ci sim`) | `docs/simulator.rst` |
 | Build, deploy, flash | `docs/building.rst`, `./ci help` |
 | Past decisions | `KSPSerialIO/CHANGELOG.md` (top entries), `git log -10` |
 
@@ -24,7 +25,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 2. **The `wk-rea` KSP install is shared with another Claude session** (`ksp-workbench-*`, owns the other
    mods). Before `./ci deploy` or flashing: SendMessage it, wait for "OK deploy", tell it when done.
    We only write `GameData/KSPSerialIO`, never `--remove`, never touch other mods. `./ci verify` checks it.
-3. **The user runs the game; you read the logs.** KSP overwrites `KSP.log` at each launch: save it with
+3. **Test without the game first:** `./ci sim` (tools/kspsim) drives the board and serves the Pi HMI with the
+   real protocols; ask for a KSP session only for what the simulator cannot show.
+   **The user runs the game; you read the logs.** KSP overwrites `KSP.log` at each launch: save it with
    `KSPDIR="C:/Users/alanl/wk/wk-rea/Kerbal Space Program" ./ci save_log LABEL` before it is lost.
    Useful tags in the log: `KSPSerialIO[PORT]`, `[CTRL]`, `[BOARD]`, `[LINK]`, and the `perf` lines.
 4. **Run `./ci verify` before and after** deploys, flashes and game sessions. Every new kind of check goes into
