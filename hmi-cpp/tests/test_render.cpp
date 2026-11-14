@@ -96,6 +96,44 @@ TEST(compact_metrics_leave_space_for_resources_and_staging) {
     }
 }
 
+TEST(resource_dials_and_their_text_stay_inside_the_panel) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        Display& d = *s.display;
+        double u = s.canvas->u;
+        Rect panel = Rect::f(2.5 * u, 54 * u, w * .44 - 2.5 * u, 25 * u);
+        std::vector<std::pair<std::string, Rect>> texts;
+        int dials = 0;
+        d.on_gauge = [&](const std::string& label, const Rect& r) {
+            ++dials;
+            if (!panel.contains(r)) check::fail(__FILE__, __LINE__, "dial outside the panel: " + label);
+        };
+        s.canvas->on_text = [&](const std::string& t, const Rect& r) {
+            if (panel.collides(r)) texts.emplace_back(t, r);
+        };
+        Snapshot snap = demo();
+        Systems mixed;
+        mixed.current_stage = 0;
+        mixed.resources = {{"ElectricCharge", 4.0, 200.0}, {"LiquidFuel", 300.0, 1440.0}, {"Oxidizer", std::nullopt, std::nullopt},
+                           {"MonoPropellant", 0.0, 0.0}, {"SolidFuel", 12345.6, 12345.6}, {"XenonGas", 0.0, 5700.0}};
+        for (const Systems& systems : {*snap.systems, mixed}) {
+            texts.clear();
+            dials = 0;
+            snap.systems = systems;
+            d.draw(snap, monotonic());
+            CHECK(dials >= 4);
+            CHECK(texts.size() > 6);
+            for (const auto& [t, r] : texts)
+                if (!panel.contains(r)) check::fail(__FILE__, __LINE__, "text outside the resources panel: " + t);
+            for (const auto& [ta, ra] : texts)
+                for (const auto& [tb, rb] : texts)
+                    if (&ta != &tb && (ta == "ELECTRICITY" || ta == "MONOPROPELLANT" || ta == "XENON GAS") &&
+                        (tb == "ELECTRICITY" || tb == "MONOPROPELLANT" || tb == "XENON GAS") && ra.collides(rb))
+                        check::fail(__FILE__, __LINE__, "dial labels overlap: " + ta + " / " + tb);
+        }
+    }
+}
+
 TEST(escape_orbit_and_far_vessel_never_draw_outside_panel) {
     for (auto [w, h] : SIZES) {
         Screen s(w, h);

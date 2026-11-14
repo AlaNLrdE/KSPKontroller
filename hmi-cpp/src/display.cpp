@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "fmt.hpp"
+#include "gauges.hpp"
 #include "scenes.hpp"
 #include "theme.hpp"
 
@@ -15,6 +16,25 @@ long long py_round(double v) { return fmt::round_half_even(v); }
 float rnd(double v) { return static_cast<float>(py_round(v)); }
 
 // At most n bytes, never cutting a UTF-8 sequence in half (Python slices characters; close enough on screen).
+// Compact KSP units for the dial captions: whole units from 100 up, one decimal below.
+std::string amount_text(double v) { return fmt::str(std::fabs(v) >= 100 ? "%.0f" : "%.1f", v); }
+
+// Text sizes (units) below each dial: label, amount and the gap between them.
+constexpr float GAUGE_LABEL = 1.9f, GAUGE_AMOUNT = 1.8f, GAUGE_GAP = .3f;
+constexpr Color FACE{11, 16, 23};
+
+// Ring between two radii and two fractions of the dial, as convex quads (Canvas::polygon wants convex shapes).
+void dial_sector(Canvas& c, double cx, double cy, double r_out, double r_in, double f0, double f1, Color color,
+                 double step_degrees = 4.0) {
+    auto fs = gauges::steps(f0, f1, step_degrees);
+    for (size_t i = 0; i + 1 < fs.size(); ++i) {
+        auto a = gauges::point(cx, cy, r_out, fs[i]), b = gauges::point(cx, cy, r_out, fs[i + 1]);
+        auto d = gauges::point(cx, cy, r_in, fs[i + 1]), e = gauges::point(cx, cy, r_in, fs[i]);
+        c.polygon({{float(a.first), float(a.second)}, {float(b.first), float(b.second)},
+                   {float(d.first), float(d.second)}, {float(e.first), float(e.second)}}, color, false);
+    }
+}
+
 std::string clip_utf8(const std::string& s, size_t n) {
     if (s.size() <= n) return s;
     size_t end = n;
@@ -28,6 +48,10 @@ Display::Display(const Config& cfg, Canvas& canvas)
       day_hours_(cfg.format.day_hours),
       server_text_(fmt::str("kRPC server: %s:%d", cfg.krpc.address.c_str(), cfg.krpc.rpc_port)),
       net_(cfg.krpc.address) {}
+
+Display::~Display() {
+    for (auto& [key, texture] : gauge_faces_) SDL_DestroyTexture(texture);
+}
 
 void Display::draw(const Snapshot& snap, double now) {
     c_.clear(BG);
@@ -187,23 +211,125 @@ void Display::resources(const Rect& rect, const Snapshot& snap) {
             if (r.name == RESOURCE_NAMES[i]) found = &r;  // last one wins, as a dict built from the tuple
         if (found && (i < 4 || found->capacity.value_or(0) > 0)) visible.emplace_back(i, found);
     }
-    double row_h = std::min(4.5 * u, (rect.h - 5 * u) / std::max<size_t>(visible.size(), 1));
-    for (size_t index = 0; index < visible.size(); ++index) {
-        const Resource& resource = *visible[index].second;
-        double y = rect.y + 4.6 * u + index * row_h;
-        auto fraction = resource.fraction();
-        Color color = !fraction ? MUTED : *fraction <= .1 ? BAD : *fraction <= .25 ? WARN : GOOD;
-        c_.text(RESOURCE_LABELS[visible[index].first], 2.0, LABEL, rect.x + 1.3 * u, y);
-        std::string amount;
-        if (fraction)
-            amount = fmt::str("%.1f / %.1f   %lld%%", *resource.amount, *resource.capacity, py_round(100 * *fraction));
-        else
-            amount = resource.capacity && *resource.capacity == 0 ? "NOT INSTALLED" : "--";
-        c_.text(amount, 2.0, color, rect.right() - 1.3 * u, y, Anchor::TopRight);
-        Rect bar = Rect::f(rect.x + 1.3 * u, y + 2.1 * u, rect.w - 2.6 * u, .6 * u);
-        c_.rounded_rect(bar, std::max(1.0f, rnd(.2 * u)), GRID);
-        if (fraction && *fraction > 0) c_.rect(Rect(bar.x, bar.y, static_cast<int>(bar.w * *fraction), bar.h), color);
+    if (visible.empty()) return;
+    std::vector<int> names;
+    for (const auto& v : visible) names.push_back(v.first);
+    if (!gauge_layout_ || !(gauge_layout_->rect == rect) || gauge_layout_->names != names) {
+        GaugeLayout g;
+        g.rect = rect;
+        g.names = names;
+        double text_h = (GAUGE_LABEL + GAUGE_AMOUNT + GAUGE_GAP) * u;
+        auto l = gauges::layout(rect.x + .6 * u, rect.y + 4.2 * u, rect.w - 1.2 * u, rect.h - 4.6 * u,
+                                static_cast<int>(names.size()), text_h, .4 * u);
+        g.radius = l.radius;
+        double room = 1e300;
+        for (const auto& cell : l.cells) {
+            g.cells.push_back({cell.cx, cell.cy, cell.cell_x, cell.cell_w});
+            room = std::min(room, cell.cell_w - 2 * u);
+        }
+        int widest = 1;
+        for (int n : names) widest = std::max(widest, c_.text_width(c_.font(GAUGE_LABEL), RESOURCE_LABELS[n]));
+        g.label_units = static_cast<float>(std::floor(GAUGE_LABEL * std::min(1.0, room / widest) * 20) / 20);
+        gauge_layout_ = std::move(g);
     }
+    const GaugeLayout& g = *gauge_layout_;
+    for (size_t i = 0; i < visible.size(); ++i) {
+        const auto& cell = g.cells[i];
+        gauge(*visible[i].second, RESOURCE_LABELS[visible[i].first], cell[0], cell[1], g.radius, cell[3] - 2 * u,
+              g.label_units);
+    }
+}
+
+SDL_Texture* Display::gauge_face(int radius, bool live) {
+    auto key = std::make_pair(radius, live);
+    auto found = gauge_faces_.find(key);
+    if (found != gauge_faces_.end()) return found->second;
+    if (gauge_faces_.size() > 16) {
+        for (auto& [k, texture] : gauge_faces_) SDL_DestroyTexture(texture);
+        gauge_faces_.clear();
+    }
+    int side = 2 * radius + 4, big = 2 * side;
+    SDL_Surface* hi = SDL_CreateRGBSurfaceWithFormat(0, big, big, 32, SDL_PIXELFORMAT_ARGB8888);
+    SDL_Surface* lo = SDL_CreateRGBSurfaceWithFormat(0, side, side, 32, SDL_PIXELFORMAT_ARGB8888);
+    SDL_Renderer* renderer = hi ? SDL_CreateSoftwareRenderer(hi) : nullptr;
+    SDL_Texture* texture = nullptr;
+    if (hi && lo && renderer) {
+        {
+            Canvas f(renderer, big, big, false);
+            f.clear(PANEL);
+            double c = side, r = 2.0 * radius;
+            f.circle(c, c, r, live ? Color{30, 40, 54} : Color{25, 33, 45});
+            f.circle(c, c, std::round(.93 * r), FACE);
+            dial_sector(f, c, c, .86 * r, .70 * r, 0, 1, Color{27, 36, 50}, 2);
+            if (live) {
+                auto dim = [](Color k) {
+                    return Color{uint8_t(std::lround(.55 * k.r + .45 * FACE.r)), uint8_t(std::lround(.55 * k.g + .45 * FACE.g)),
+                                 uint8_t(std::lround(.55 * k.b + .45 * FACE.b))};
+                };
+                dial_sector(f, c, c, .91 * r, .87 * r, 0, gauges::BAD_BELOW, dim(BAD), 2);
+                dial_sector(f, c, c, .91 * r, .87 * r, gauges::BAD_BELOW, gauges::WARN_BELOW, dim(WARN), 2);
+            }
+            for (int step = 0; step <= 20; ++step) {
+                double fr = step / 20.0;
+                bool major = step % 10 == 0, ten = step % 2 == 0;
+                double inner = major ? .55 : ten ? .60 : .64;
+                Color color = live ? (major ? VALUE : ten ? LABEL : MUTED) : GRID;
+                auto p0 = gauges::point(c, c, inner * r, fr), p1 = gauges::point(c, c, .68 * r, fr);
+                f.line({float(p0.first), float(p0.second)}, {float(p1.first), float(p1.second)},
+                       std::max(2.0f, rnd((major ? .045 : .03) * r)), color);
+            }
+            f.flush();
+        }
+        SDL_RenderPresent(renderer);
+        if (SDL_SoftStretchLinear(hi, nullptr, lo, nullptr) == 0) {
+            texture = SDL_CreateTextureFromSurface(c_.renderer(), lo);
+            if (texture) SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_NONE);
+        }
+    }
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (lo) SDL_FreeSurface(lo);
+    if (hi) SDL_FreeSurface(hi);
+    gauge_faces_[key] = texture;
+    return texture;
+}
+
+void Display::gauge(const Resource& resource, const std::string& label, double cx, double cy, double radius,
+                    double room, float label_units) {
+    const double u = c_.u;
+    auto fraction = resource.fraction();
+    int r = std::max(4, static_cast<int>(radius));
+    if (on_gauge) on_gauge(label, Rect::f(cx - radius, cy - radius, 2 * radius, 2 * radius));
+    if (SDL_Texture* face = gauge_face(r, fraction.has_value())) {
+        float side = static_cast<float>(2 * r + 4);
+        // pygame centres the face with integer rects: get_rect(center=(int(cx), int(cy)))
+        int left = static_cast<int>(cx) - (2 * r + 4) / 2, top = static_cast<int>(cy) - (2 * r + 4) / 2;
+        c_.image(face, static_cast<float>(left), static_cast<float>(top), side, side);
+    }
+    Color color = MUTED;
+    std::string centre, amount, reference;
+    if (fraction) {
+        color = *fraction <= gauges::BAD_BELOW ? BAD : *fraction <= gauges::WARN_BELOW ? WARN : GOOD;
+        if (*fraction > 0) dial_sector(c_, cx, cy, .86 * r, .70 * r, 0, *fraction, color);
+        // pointer across the track at the current level
+        double a = gauges::angle(*fraction), dx = std::cos(a), dy = -std::sin(a);
+        double nx = -dy * .035 * r, ny = dx * .035 * r;
+        double x0 = cx + dx * .62 * r, y0 = cy + dy * .62 * r, x1 = cx + dx * .93 * r, y1 = cy + dy * .93 * r;
+        c_.polygon({{float(x0 + nx), float(y0 + ny)}, {float(x1 + nx), float(y1 + ny)},
+                    {float(x1 - nx), float(y1 - ny)}, {float(x0 - nx), float(y0 - ny)}}, VALUE);
+        centre = fmt::str("%lld%%", py_round(100 * *fraction));
+        amount = amount_text(*resource.amount) + " / " + amount_text(*resource.capacity);
+        reference = amount_text(*resource.capacity) + " / " + amount_text(*resource.capacity);
+    } else {
+        bool absent = resource.capacity && *resource.capacity == 0;
+        centre = absent ? "N/A" : "--";
+        amount = reference = absent ? "NOT INSTALLED" : "--";
+    }
+    c_.text(centre, static_cast<float>(.44 * r / u), color, cx, cy, Anchor::Center);
+    double top = cy + gauges::BELOW_CENTRE * r;
+    c_.text(label, label_units, fraction ? LABEL : MUTED, cx, top, Anchor::MidTop);
+    int width = c_.text_width(c_.font(GAUGE_AMOUNT), reference);
+    float amount_units = static_cast<float>(std::floor(GAUGE_AMOUNT * std::min(1.0, room / std::max(width, 1)) * 20) / 20);
+    c_.text(amount, amount_units, color, cx, top + (label_units + GAUGE_GAP) * u, Anchor::MidTop);
 }
 
 void Display::staging(const Rect& rect, const Snapshot& snap) {

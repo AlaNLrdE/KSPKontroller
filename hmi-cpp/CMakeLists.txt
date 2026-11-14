@@ -26,6 +26,7 @@ add_library(ksphmi_core STATIC
   src/config.cpp
   src/discovery.cpp
   src/fmt.cpp
+  src/gauges.cpp
   src/krpc.cpp
   src/log.cpp
   src/navmath.cpp

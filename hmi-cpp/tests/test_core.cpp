@@ -15,6 +15,7 @@
 #include "config.hpp"
 #include "fake_krpc.hpp"
 #include "fmt.hpp"
+#include "gauges.hpp"
 #include "krpc.hpp"
 #include "log.hpp"
 #include "model.hpp"
@@ -458,6 +459,41 @@ TEST(reconnect_discovers_server_after_configured_address_fails) {
     CHECK_EQ(probe.discoveries, 1);
     CHECK_EQ(probe.connects, 2);
     CHECK_EQ(probe.sessions, 1);
+}
+
+TEST(gauge_angle_sweeps_clockwise_through_the_top) {
+    const double deg = 180.0 / 3.14159265358979323846;
+    CHECK_NEAR(gauges::angle(0) * deg, 210, 1e-9);
+    CHECK_NEAR(gauges::angle(.5) * deg, 90, 1e-9);
+    CHECK_NEAR(gauges::angle(1) * deg, -30, 1e-9);
+    CHECK_NEAR(gauges::angle(-1), gauges::angle(0), 1e-12);
+    CHECK_NEAR(gauges::angle(7), gauges::angle(1), 1e-12);
+    auto top = gauges::point(100, 100, 10, .5);  // screen y grows downwards: the middle of the scale is on top
+    CHECK_NEAR(top.first, 100, 1e-9);
+    CHECK_NEAR(top.second, 90, 1e-9);
+    auto a = gauges::point(0, 0, 1, 0), b = gauges::point(0, 0, 1, 1);
+    CHECK(a.first < 0 && b.first > 0 && a.second > 0);
+    CHECK_NEAR(a.second, b.second, 1e-9);
+    auto s = gauges::steps(0, .5);
+    CHECK(s.front() == 0 && s.back() == .5 && s.size() == 31);
+}
+
+TEST(gauge_layout_fits_the_panel_at_every_resolution) {
+    for (auto [width, height] : {std::pair{1260, 840}, std::pair{1920, 1080}, std::pair{2520, 1680}}) {
+        double u = height / 100.0;
+        double x = 2.5 * u, y = 58 * u, w = width * .44 - 3.7 * u, h = 20.4 * u, text_h = 4.0 * u, pad = .4 * u;
+        for (int count = 1; count <= 6; ++count) {
+            auto l = gauges::layout(x, y, w, h, count, text_h, pad);
+            CHECK_EQ(l.cells.size(), size_t(count));
+            CHECK(l.radius > 3.5 * u);
+            for (const auto& c : l.cells) {
+                CHECK(c.cx - l.radius >= x - 1e-6 && c.cx + l.radius <= x + w + 1e-6);
+                CHECK(c.cy - l.radius >= y - 1e-6);
+                CHECK(c.cy + gauges::BELOW_CENTRE * l.radius + text_h <= y + h + 1e-6);
+            }
+            for (size_t i = 1; i < l.cells.size(); ++i) CHECK(l.cells[i].cx - l.cells[i - 1].cx >= 2 * l.radius - 1e-6);
+        }
+    }
 }
 
 int main(int argc, char** argv) {
