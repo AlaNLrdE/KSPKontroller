@@ -31,10 +31,12 @@ How it works
   layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
 
 The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
-leaving resource bars and a read-only staging queue below them. Resource bars show vessel-wide amount/capacity
-and percentage for ElectricCharge, LiquidFuel, Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when
-installed. Zero capacity means not installed, an empty installed tank shows 0%, and unavailable telemetry shows
-``--``. Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
+leaving resource gauges and a read-only staging queue below them. Each resource is a 240-degree dial (ticks
+every 10%, red zone below 10%, amber below 25%, a fill arc and pointer in the GOOD/WARN/BAD colour) with the
+percentage in the centre and the vessel-wide amount/capacity under its label, for ElectricCharge, LiquidFuel,
+Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when installed. Zero capacity means not installed
+(dimmed dial, ``N/A``), an empty installed tank shows 0%, and unavailable telemetry shows a dimmed dial with
+``--``. The static dial faces are drawn once per size (``ksphmi/gauges.py`` holds the pure geometry). Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
 activation stages with part counts and KSP's stage delta-v. Resource and stage streams refresh at 2 Hz, and
 their collections are rebuilt when the vessel's parts or staging queue changes (including docking/decoupling).
 These displays do not activate stages or transfer resources.
