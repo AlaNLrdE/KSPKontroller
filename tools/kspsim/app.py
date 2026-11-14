@@ -27,7 +27,7 @@ class App:
         self.sim, self.board, self.server = sim, board, server
         self.root = tk.Tk()
         self.root.title("KSP simulator: Arduino + Raspberry Pi HMI")
-        self.root.minsize(760, 560)
+        self.root.minsize(900, 760)
         pad = dict(padx=8, pady=4)
 
         top = ttk.Frame(self.root)
@@ -104,6 +104,38 @@ class App:
         self.edit_msg = tk.StringVar(value="Position 0 = at the periapsis, 180 = at the apoapsis.")
         ttk.Label(ef, textvariable=self.edit_msg).grid(row=2, column=0, columnspan=len(fields) + 3, sticky="w", padx=4)
 
+        # Manual values: physics frozen, every reported value typed by hand (formats, colours, edge cases)
+        mf = ttk.LabelFrame(self.root, text="Manual values (sent to the board and the HMI exactly as typed)")
+        mf.pack(fill="x", **pad)
+        self.manual_on = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mf, text="Manual mode: freeze the physics and send these values", variable=self.manual_on,
+                        command=self._manual_toggle).grid(row=0, column=0, columnspan=4, sticky="w", padx=4)
+        self.manual_vars = {}
+        self.manual_entries = []
+        per_row = 7
+        for i, (key, label, unit, _f) in enumerate(physics.REPORTED_FIELDS):
+            r, col = 1 + 2 * (i // per_row), i % per_row
+            ttk.Label(mf, text="%s%s" % (label, " (%s)" % unit if unit else "")).grid(row=r, column=col, sticky="w", padx=4)
+            var = tk.StringVar()
+            entry = ttk.Entry(mf, textvariable=var, width=12)
+            entry.grid(row=r + 1, column=col, sticky="w", padx=4)
+            entry.bind("<Return>", lambda _e: self._manual_apply())
+            self.manual_vars[key] = var
+            self.manual_entries.append(entry)
+        last = 1 + 2 * ((len(physics.REPORTED_FIELDS) - 1) // per_row) + 2
+        ttk.Label(mf, text="Situation").grid(row=last, column=0, sticky="w", padx=4)
+        self.manual_situation = tk.StringVar()
+        self.situation_box = ttk.Combobox(mf, textvariable=self.manual_situation, values=physics.SITUATIONS,
+                                          state="readonly", width=12)
+        self.situation_box.grid(row=last + 1, column=0, sticky="w", padx=4)
+        self.situation_box.bind("<<ComboboxSelected>>", lambda _e: self._manual_apply())
+        self.manual_apply_btn = ttk.Button(mf, text="Apply values", command=self._manual_apply)
+        self.manual_apply_btn.grid(row=last + 1, column=1, sticky="w", padx=4)
+        self.manual_msg = tk.StringVar(value="Tick the box to start from the current values. "
+                                             "'inf' and 'nan' are accepted, to test how the screens cope.")
+        ttk.Label(mf, textvariable=self.manual_msg).grid(row=last + 1, column=2, columnspan=5, sticky="w", padx=4)
+        self._manual_enable(False)
+
         vf = ttk.LabelFrame(self.root, text="Vessel")
         vf.pack(fill="both", expand=True, **pad)
         self.vessel_text = tk.StringVar()
@@ -146,6 +178,45 @@ class App:
             self.edit[key].set("%.1f" % value if math.isfinite(value) else "")
         self.edit["name"].set(name)
         self.edit_msg.set("Current values loaded; change any and Apply.")
+
+    def _manual_enable(self, on: bool) -> None:
+        for e in self.manual_entries:
+            e.state(["!disabled" if on else "disabled"])
+        self.situation_box.state(["!disabled", "readonly"] if on else ["disabled"])
+        self.manual_apply_btn.state(["!disabled" if on else "disabled"])
+
+    def _manual_toggle(self) -> None:
+        on = self.manual_on.get()
+        self.sim.set_manual_mode(on)
+        self._manual_enable(on)
+        if on:
+            r = self.sim.reported()
+            for key, _label, _unit, factor in physics.REPORTED_FIELDS:
+                v = r[key] / factor
+                self.manual_vars[key].set(("%.6g" % v) if math.isfinite(v) else str(v))
+            self.manual_situation.set(r["situation"])
+            self.manual_msg.set("Physics frozen. Change any value and press Enter or Apply.")
+        else:
+            self.manual_msg.set("Physics running again from where the vessel was.")
+
+    def _manual_apply(self) -> None:
+        values, bad = {}, []
+        for key, label, _unit, factor in physics.REPORTED_FIELDS:
+            text = self.manual_vars[key].get().strip().replace(",", ".")
+            try:
+                values[key] = float(text) * factor
+            except ValueError:
+                bad.append(label)
+        if bad:
+            self.manual_msg.set("Not applied, not a number: " + ", ".join(bad))
+            return
+        if self.manual_situation.get():
+            values["situation"] = self.manual_situation.get()
+        try:
+            self.sim.set_manual_values(**values)
+            self.manual_msg.set("Applied. The board and the HMI now receive these values.")
+        except ValueError as e:
+            self.manual_msg.set("Not applied: %s" % e)
 
     def _throttle_source(self) -> None:
         with self.sim.lock:
@@ -203,19 +274,21 @@ class App:
                 str(n) if c.groups >> n & 1 else "." for n in range(1, 11))
                 + "   engine %d%%  board throttle %d%%  pitch %+.2f roll %+.2f yaw %+.2f" % (
                     c.throttle * 100, sim.last_board.throttle * 100, c.pitch, c.roll, c.yaw))
-            el = v.elements()
+            r = sim.reported()  # what the board and the HMI receive (manual values included)
             lf = 100 * v.liquid_fuel / physics.LIQUID_FUEL
             self.vessel_text.set(
-                "%-14s %s   (%s)\n" % ("Vessel", v.name, physics.Vessel.situation(v))
-                + "%-14s %-14s %-14s %s\n" % ("Altitude", _dist(v.altitude), "Vertical", "%.1f m/s" % v.vertical_speed)
-                + "%-14s %-14s %-14s %s\n" % ("Apoapsis", _dist(el.apoapsis) if el.e < 1 else "escape",
-                                              "in", _time(el.time_to_apoapsis))
-                + "%-14s %-14s %-14s %s\n" % ("Periapsis", _dist(el.periapsis), "in", _time(el.time_to_periapsis))
-                + "%-14s %-14s %-14s %s\n" % ("Orbital speed", "%.1f m/s" % v.orbital_speed,
-                                              "Surface", "%.1f m/s" % v.surface_speed)
+                "%-14s %s   (%s)%s\n" % ("Vessel", r["name"], r["situation"],
+                                         "   MANUAL VALUES, physics frozen" if sim.manual_values is not None else "")
+                + "%-14s %-14s %-14s %s\n" % ("Altitude", _dist(r["altitude"]), "Vertical",
+                                              "%.1f m/s" % r["vertical_speed"])
+                + "%-14s %-14s %-14s %s\n" % ("Apoapsis", _dist(r["apoapsis"]) if r["eccentricity"] < 1 else "escape",
+                                              "in", _time(r["time_to_apoapsis"]))
+                + "%-14s %-14s %-14s %s\n" % ("Periapsis", _dist(r["periapsis"]), "in", _time(r["time_to_periapsis"]))
+                + "%-14s %-14s %-14s %s\n" % ("Orbital speed", "%.1f m/s" % r["orbital_speed"],
+                                              "Surface", "%.1f m/s" % r["surface_speed"])
                 + "%-14s %-14s %-14s %s\n" % ("Stage", "%d of %d" % (v.stage, physics.STAGES - 1),
                                               "Stage fuel", "%.0f %%" % lf)
-                + "%-14s %-14s %-14s %s\n" % ("G", "%.2f" % v.g_force(), "Heat", "%.0f %%" % (v.heat * 100))
+                + "%-14s %-14s %-14s %s\n" % ("G", "%.2f" % r["g_force"], "Heat", "%.0f %%" % (v.heat * 100))
                 + "%-14s %-14s %-14s %s" % ("Mission time", _time(v.mission_time), "UT", _time(sim.ut)))
         self.root.after(200, self._refresh)
 

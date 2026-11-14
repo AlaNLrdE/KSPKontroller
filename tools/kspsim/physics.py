@@ -29,6 +29,28 @@ BURN_TIME = 300.0        # seconds of full throttle per stage (about 4.8 km/s)
 STAGES = 3
 
 
+SITUATIONS = ("pre_launch", "orbiting", "sub_orbital", "escaping", "flying", "landed", "splashed", "docked")
+
+# What the simulator reports to the board and the HMI: (key, label, unit shown in the window, unit -> SI factor).
+# Values are SI internally: metres, m/s, seconds, radians for the true anomaly; the inclination is in degrees.
+REPORTED_FIELDS = (
+    ("altitude", "Altitude", "km", 1e3),
+    ("vertical_speed", "Vertical speed", "m/s", 1.0),
+    ("orbital_speed", "Orbital speed", "m/s", 1.0),
+    ("surface_speed", "Surface speed", "m/s", 1.0),
+    ("apoapsis", "Apoapsis", "km", 1e3),
+    ("periapsis", "Periapsis", "km", 1e3),
+    ("time_to_apoapsis", "Time to Ap", "s", 1.0),
+    ("time_to_periapsis", "Time to Pe", "s", 1.0),
+    ("inclination", "Inclination", "deg", 1.0),
+    ("eccentricity", "Eccentricity", "", 1.0),
+    ("period", "Period", "s", 1.0),
+    ("semi_major_axis", "Semi-major axis", "km", 1e3),
+    ("true_anomaly", "True anomaly", "deg", math.pi / 180),
+    ("g_force", "G force", "g", 1.0),
+)
+
+
 @dataclass
 class Controls:
     """What the board asks for, decoded from its ControlPacket."""
@@ -154,6 +176,16 @@ class Vessel:
         if self.altitude < ATMOSPHERE and el.periapsis < ATMOSPHERE:
             return "flying"
         return "orbiting" if el.periapsis > ATMOSPHERE else "sub_orbital"
+
+    def report(self) -> dict:
+        """Every value sent to the board and the HMI, computed from the flight model (see REPORTED_FIELDS)."""
+        el = self.elements()
+        return dict(
+            name=self.name, situation=self.situation(), altitude=self.altitude, vertical_speed=self.vertical_speed,
+            orbital_speed=self.orbital_speed, surface_speed=self.surface_speed, apoapsis=el.apoapsis,
+            periapsis=el.periapsis, time_to_apoapsis=el.time_to_apoapsis, time_to_periapsis=el.time_to_periapsis,
+            inclination=self.inclination, eccentricity=el.e, period=el.period, semi_major_axis=el.a,
+            true_anomaly=el.nu, g_force=self.g_force())
 
     def g_force(self) -> float:
         return 1.0 if self.landed and self.thrust_accel == 0 else (self.thrust_accel + self.drag_accel) / G0

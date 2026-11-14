@@ -26,6 +26,7 @@ class Simulator:
         self.manual = physics.Controls()
         self.board_throttle = True      # False: the engine follows the window's throttle even with the board linked
         self.last_board = physics.Controls()  # what the board sent last, shown in the window as received
+        self.manual_values: dict | None = None  # manual mode: physics frozen, these values reported as typed
         self._last_board = 0.0
         self._ksp_check = (0.0, False)
         self._stop = threading.Event()
@@ -57,6 +58,36 @@ class Simulator:
                 f = max(0.0, min(100.0, stage_fuel)) / 100
                 self.vessel.liquid_fuel = physics.LIQUID_FUEL * f
                 self.vessel.oxidizer = physics.OXIDIZER * f
+
+    # -- manual values --------------------------------------------------------------------------------
+    def reported(self) -> dict:
+        """The values the board and the HMI receive: typed ones in manual mode, else the flight model's."""
+        with self.lock:
+            values = self.vessel.report()
+            if self.manual_values is not None:
+                values.update(self.manual_values)
+            return values
+
+    def set_manual_mode(self, on: bool) -> None:
+        """Manual mode starts from the current values, so only what is changed differs."""
+        with self.lock:
+            if on and self.manual_values is None:
+                self.manual_values = {k: v for k, v in self.vessel.report().items() if k != "name"}
+            elif not on:
+                self.manual_values = None
+        log.info("manual values %s", "on (physics frozen)" if on else "off")
+
+    def set_manual_values(self, **values) -> None:
+        with self.lock:
+            if self.manual_values is None:
+                raise ValueError("manual mode is off")
+            situation = values.get("situation")
+            if situation is not None and situation not in physics.SITUATIONS:
+                raise ValueError("situation must be one of " + ", ".join(physics.SITUATIONS))
+            unknown = set(values) - {k for k, *_ in physics.REPORTED_FIELDS} - {"situation"}
+            if unknown:
+                raise ValueError("unknown value(s): " + ", ".join(sorted(unknown)))
+            self.manual_values.update(values)
 
     def set_scene(self, scene: str) -> None:
         assert scene in SCENES
@@ -124,5 +155,5 @@ class Simulator:
                 if self.scene == "closed":
                     continue
                 self.ut += dt
-                if self.vessel:  # on rails outside the flight scene too, as in KSP
+                if self.vessel and self.manual_values is None:  # on rails outside flight too, as in KSP
                     self.vessel.step(dt)

@@ -103,12 +103,15 @@ def _i32(v: float) -> int:
     return 0 if not math.isfinite(v) else int(max(-2**31, min(2**31 - 1, round(v))))
 
 
-def encode_vessel(v: physics.Vessel, delta_time: float) -> bytes:
-    el = v.elements()
+def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -> bytes:
+    """VesselData for ``v``; the orbit / altitude / speed values come from ``r`` (Simulator.reported(): the
+    flight model, or the values typed in manual mode), the rest (fuel, stages, action groups) from the vessel."""
+    r = r if r is not None else v.report()
     c = v.controls
-    alt = v.altitude
-    rho = physics.density(alt)
-    surf = v.surface_speed
+    alt = r["altitude"]
+    rho = physics.density(alt) if math.isfinite(alt) else 0.0
+    surf = r["surface_speed"] if math.isfinite(r["surface_speed"]) else 0.0
+    e, a = r["eccentricity"], r["semi_major_axis"]
     pitch, heading = v.attitude()
     ag = (c.sas << 0 | c.rcs << 1 | c.lights << 2 | c.gear << 3 | c.brakes << 4 | c.abort << 5
           | ((c.groups >> 1) & 0x3FF) << 6)
@@ -117,16 +120,17 @@ def encode_vessel(v: physics.Vessel, delta_time: float) -> bytes:
     ox_total_now = v.oxidizer + physics.OXIDIZER * v.stage
     lon = (math.degrees(math.atan2(v.y, v.x) - physics.OMEGA * v.mission_time) + 180) % 360 - 180
     values = dict(
-        id=ID_VESSEL_DATA, AP=_f(el.apoapsis), PE=_f(el.periapsis), SemiMajorAxis=_f(el.a),
-        SemiMinorAxis=_f(abs(el.a) * math.sqrt(abs(1 - el.e * el.e))), VVI=v.vertical_speed, e=el.e,
-        inc=v.inclination, G=v.g_force(), TAp=_i32(el.time_to_apoapsis), TPe=_i32(el.time_to_periapsis),
-        TrueAnomaly=el.nu, Density=rho, period=_i32(el.period), RAlt=max(alt, 0.0), Alt=alt, Vsurf=surf,
+        id=ID_VESSEL_DATA, AP=_f(r["apoapsis"]), PE=_f(r["periapsis"]), SemiMajorAxis=_f(a),
+        SemiMinorAxis=_f(abs(a) * math.sqrt(abs(1 - e * e))) if math.isfinite(a) and math.isfinite(e) else 0.0,
+        VVI=_f(r["vertical_speed"]), e=_f(e), inc=_f(r["inclination"]), G=_f(r["g_force"]),
+        TAp=_i32(r["time_to_apoapsis"]), TPe=_i32(r["time_to_periapsis"]), TrueAnomaly=_f(r["true_anomaly"]),
+        Density=rho, period=_i32(r["period"]), RAlt=_f(max(alt, 0.0)), Alt=_f(alt), Vsurf=_f(surf),
         Lat=0.0, Lon=lon,
         LiquidFuelTot=total_lf, LiquidFuel=lf_total_now, OxidizerTot=physics.OXIDIZER * (v.stage + 1),
         Oxidizer=ox_total_now, EChargeTot=150.0, ECharge=v.electric, MonoPropTot=30.0, MonoProp=v.monoprop,
         IntakeAirTot=0.0, IntakeAir=0.0, SolidFuelTot=0.0, SolidFuel=0.0, XenonGasTot=0.0, XenonGas=0.0,
         LiquidFuelTotS=physics.LIQUID_FUEL, LiquidFuelS=v.liquid_fuel, OxidizerTotS=physics.OXIDIZER,
-        OxidizerS=v.oxidizer, MissionTime=int(v.mission_time), deltaTime=delta_time, VOrbit=v.orbital_speed,
+        OxidizerS=v.oxidizer, MissionTime=int(v.mission_time), deltaTime=delta_time, VOrbit=_f(r["orbital_speed"]),
         MNTime=0, MNDeltaV=0.0, Pitch=pitch, Roll=0.0, Heading=heading, ActionGroups=ag, SOINumber=KERBIN_SOI,
         MaxOverHeat=int(v.heat * 100), MachNumber=surf / 340.0 if rho > 0 else 0.0,
         IAS=surf * math.sqrt(rho / physics.SEA_DENSITY), CurrentStage=v.stage, TotalStage=physics.STAGES,
@@ -228,7 +232,7 @@ class BoardLink:
                 if vessel is not None:
                     dt = 0.0 if last_mission is None else vessel.mission_time - last_mission
                     last_mission = vessel.mission_time
-                    ser.write(frame(encode_vessel(vessel, dt)))
+                    ser.write(frame(encode_vessel(vessel, dt, self.sim.reported())))
                     st.sent += 1
                 next_send = now + self.refresh
             for p in parser.feed(ser.read(256)):

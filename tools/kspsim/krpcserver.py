@@ -8,6 +8,7 @@ it, which shows up in the HMI log instead of failing silently.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import socket
 import struct
@@ -22,7 +23,7 @@ from . import physics
 log = logging.getLogger("kspsim.krpc")
 
 PROTOCOL_VERSION = 1
-SITUATIONS = ["pre_launch", "orbiting", "sub_orbital", "escaping", "flying", "landed", "splashed", "docked"]
+SITUATIONS = list(physics.SITUATIONS)
 BODY_KERBIN, FRAME_KERBIN = 1, 2
 
 
@@ -345,35 +346,35 @@ class KrpcServer:
             return enc_double(sim.ut)
 
         cls, _, member = proc.partition("_")
+        if cls in ("Vessel", "Orbit", "Flight"):
+            self._vessel(args)  # a stale object id fails as in kRPC
+            r = sim.reported()  # the flight model's values, or the ones typed in manual mode
         if cls == "Vessel":
-            v = self._vessel(args)
             if member == "get_Name":
-                return enc_string(v.name)
+                return enc_string(r["name"])
             if member == "get_Orbit":
                 return enc_object(sim.vessel_uid * 10 + 1)
             if member == "get_Situation":
-                return enc_enum(SITUATIONS.index(v.situation()))
+                return enc_enum(SITUATIONS.index(r["situation"]))
             if member == "Flight":
                 return enc_object(sim.vessel_uid * 10 + 2)
         elif cls == "Orbit":
-            v = self._vessel(args)
-            el = v.elements()
             values = {
-                "get_ApoapsisAltitude": el.apoapsis, "get_PeriapsisAltitude": el.periapsis,
-                "get_TimeToApoapsis": el.time_to_apoapsis, "get_TimeToPeriapsis": el.time_to_periapsis,
-                "get_Inclination": v.inclination * 3.141592653589793 / 180, "get_Eccentricity": el.e,
-                "get_Period": el.period, "get_SemiMajorAxis": el.a, "get_TrueAnomaly": el.nu,
-                "get_Speed": v.orbital_speed, "get_Radius": v.radius,
+                "get_ApoapsisAltitude": r["apoapsis"], "get_PeriapsisAltitude": r["periapsis"],
+                "get_TimeToApoapsis": r["time_to_apoapsis"], "get_TimeToPeriapsis": r["time_to_periapsis"],
+                "get_Inclination": math.radians(r["inclination"]), "get_Eccentricity": r["eccentricity"],
+                "get_Period": r["period"], "get_SemiMajorAxis": r["semi_major_axis"],
+                "get_TrueAnomaly": r["true_anomaly"], "get_Speed": r["orbital_speed"],
+                "get_Radius": r["altitude"] + physics.RADIUS,
             }
             if member in values:
                 return enc_double(values[member])
             if member == "get_Body":
                 return enc_object(BODY_KERBIN)
         elif cls == "Flight":
-            v = self._vessel(args)
-            values = {"get_MeanAltitude": v.altitude, "get_SurfaceAltitude": max(v.altitude, 0.0),
-                      "get_Speed": v.surface_speed, "get_VerticalSpeed": v.vertical_speed,
-                      "get_GForce": v.g_force()}
+            values = {"get_MeanAltitude": r["altitude"], "get_SurfaceAltitude": max(r["altitude"], 0.0),
+                      "get_Speed": r["surface_speed"], "get_VerticalSpeed": r["vertical_speed"],
+                      "get_GForce": r["g_force"]}
             if member in values:
                 return enc_double(values[member])
         elif cls == "CelestialBody":

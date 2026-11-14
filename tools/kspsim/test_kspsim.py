@@ -131,6 +131,35 @@ class SimulatorTest(unittest.TestCase):
         self.assertAlmostEqual(sim.last_board.throttle, 0.19)
 
 
+class ManualValuesTest(unittest.TestCase):
+    def test_manual_values_reach_the_board_packet_and_freeze_the_physics(self):
+        sim = Simulator("orbit")
+        sim.start()
+        try:
+            sim.set_manual_mode(True)
+            with sim.lock:
+                x0 = sim.vessel.x
+            sim.set_manual_values(vertical_speed=123.0, apoapsis=1_234_000.0, time_to_apoapsis=float("inf"),
+                                  situation="flying")
+            time.sleep(0.3)
+            with sim.lock:
+                self.assertEqual(sim.vessel.x, x0)  # frozen
+            r = sim.reported()
+            self.assertEqual((r["vertical_speed"], r["situation"]), (123.0, "flying"))
+            f = dict(zip(arduino.VESSEL_FIELDS, arduino.VESSEL_DATA.unpack(arduino.encode_vessel(sim.vessel, 0.2, r))))
+            self.assertAlmostEqual(f["VVI"], 123.0, places=3)
+            self.assertAlmostEqual(f["AP"], 1_234_000.0, delta=1)
+            self.assertEqual(f["TAp"], 0)  # inf is never put on the wire
+            with self.assertRaises(ValueError):
+                sim.set_manual_values(situation="hovering")
+            with self.assertRaises(ValueError):
+                sim.set_manual_values(warp_drive=1.0)
+            sim.set_manual_mode(False)
+            self.assertNotEqual(sim.reported()["vertical_speed"], 123.0)
+        finally:
+            sim.stop()
+
+
 class KrpcTest(unittest.TestCase):
     def test_hmi_client_end_to_end(self):
         from kspsim.krpcserver import KrpcServer
@@ -166,6 +195,12 @@ class KrpcTest(unittest.TestCase):
             self.assertAlmostEqual(s.apoapsis, 400_000, delta=5)
             self.assertAlmostEqual(s.altitude, 400_000, delta=50)  # at the apoapsis
             self.assertAlmostEqual(s.inclination, 5.0, places=6)
+
+            sim.set_manual_mode(True)  # typed values reach the HMI client exactly
+            sim.set_manual_values(vertical_speed=-42.5, periapsis=-12_000.0, situation="sub_orbital")
+            s = wait(lambda s: s.vertical_speed == -42.5)
+            self.assertEqual((s.periapsis, s.situation), (-12_000.0, "sub_orbital"))
+            sim.set_manual_mode(False)
 
             sim.set_scene("space_center")
             wait(lambda s: s.state == NO_VESSEL)

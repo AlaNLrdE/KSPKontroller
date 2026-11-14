@@ -43,6 +43,13 @@ The window
   (no vessel switch) and it keeps flying from there; impossible requests (Ap below Pe, a point under the
   surface, beyond the sphere of influence) are refused with the reason. *Read current* fills the fields
   from the vessel, to change one value and keep the rest.
+* **Manual values**: tick *Manual mode* and the physics freezes; every value the board and the HMI receive
+  (altitude, vertical / orbital / surface speed, Ap, Pe, times to Ap / Pe, inclination, eccentricity, period,
+  semi-major axis, true anomaly, G, situation) starts from its current value and is sent exactly as typed,
+  even when the set makes no physical sense. ``inf`` and ``nan`` are accepted, to test how the screens cope;
+  the board never receives them (VesselData carries 0, as the plugin would). Untick to resume the physics
+  from where the vessel was. Without manual mode every value comes from the flight model, so they change
+  as the vessel moves (on the 80 x 250 km orbit the vertical speed swings between about +250 and -250 m/s).
 * On the pad the apoapsis is about 0 m and the periapsis about -598 km: that is the "orbit" of a point
   turning with the surface, and KSP shows the same values.
 * **Controls**: while ControlPackets arrive the board drives the vessel and the window only mirrors what it
@@ -71,6 +78,9 @@ applied), maneuver nodes and targets (sent as 0), electric charge use beyond a s
 Extending it
 ------------
 
+* Every value sent comes from ``Simulator.reported()`` (the flight model's ``Vessel.report()``, overlaid with the
+  manual values). A new reported value goes into ``REPORTED_FIELDS`` and ``report()``; the window's manual
+  panel picks it up by itself.
 * A new HMI value read through kRPC: add the procedure to ``KrpcServer._space_center`` (names and types are
   in the krpc client stubs, ``krpc/services/spacecenter.py``) and to ``test_hmi_client_end_to_end``.
 * A new ``VesselData`` field or packet change: ``VESSEL_DATA`` / ``VESSEL_FIELDS`` in ``arduino.py`` mirror the
