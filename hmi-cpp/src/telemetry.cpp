@@ -129,6 +129,12 @@ public:
         for (auto& kv : ids_) c_.remove_stream(kv.second);
         ids_.clear();
     }
+    void remove(const std::string& name) {
+        auto it = ids_.find(name);
+        if (it == ids_.end()) return;
+        c_.remove_stream(it->second);
+        ids_.erase(it);
+    }
     bool has(const std::string& name) const { return ids_.count(name) != 0; }
     uint64_t id(const std::string& name) const { return ids_.at(name); }
     const std::map<std::string, uint64_t>& all() const { return ids_; }
@@ -137,6 +143,19 @@ private:
     Client& c_;
     std::map<std::string, uint64_t> ids_;
 };
+
+/// Runs an optional step; a server error (RpcError: InvalidOperationException, ArgumentException...) or an
+/// undecodable value calls `failed` instead. A broken link (ConnectionError) still ends the session.
+template <typename Step, typename Failed>
+void optional_step(Step step, Failed failed) {
+    try {
+        step();
+    } catch (const krpc::ConnectionError&) {
+        throw;
+    } catch (const std::exception&) {
+        failed();
+    }
+}
 
 // ------------------------------------------------------------------------------------------- navigation
 /// Optional navball streams, owned separately so a missing target never interrupts orbital telemetry.
@@ -191,34 +210,42 @@ public:
             key_ = key;
             key_valid_ = true;
             retry_frame_at_ = 0;
-            uint64_t frame = 0;
-            try {
-                // The speed frames follow the body/surface/target velocity. The orbital_reference_frame
-                // co-moves with the vessel and reads zero speed.
-                std::string m = mode;
-                m[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(m[0])));
-                frame = object(c_, sc("Vessel_get_" + m + "SpeedReferenceFrame", {obj(vessel_)}));
-            } catch (const RpcError&) {
-                frame = 0;  // no target, or zero relative velocity: markers are undefined
-                retry_frame_at_ = now + .5;
-            }
-            if (frame) {
-                uint64_t flight = object(c_, sc("Vessel_Flight", {obj(vessel_), obj(frame)}));
-                extra_.add("speed", sc("Flight_get_Speed", {obj(flight)}), rate_);
-                const std::pair<const char*, std::vector<double>> dirs[] = {
-                    {"prograde", {0, 1, 0}}, {"normal", {0, 0, 1}}, {"radial", {-1, 0, 0}}};
-                for (const auto& [name, v] : dirs)
-                    extra_.add(name, sc("TransformDirection", {pb::enc_tuple(v), obj(frame), obj(frame_)}), rate_);
-            }
+            // Each optional marker group is independent. kRPC answers InvalidOperationException, e.g. "surface
+            // speed reference frame is singular" on the launch pad: the attitude must still be shown.
+            optional_step(
+                [&] {
+                    // The speed frames follow the body/surface/target velocity. The orbital_reference_frame
+                    // co-moves with the vessel and reads zero speed.
+                    std::string m = mode;
+                    m[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(m[0])));
+                    uint64_t frame = object(c_, sc("Vessel_get_" + m + "SpeedReferenceFrame", {obj(vessel_)}));
+                    if (!frame) throw RpcError("no speed reference frame");
+                    uint64_t flight = object(c_, sc("Vessel_Flight", {obj(vessel_), obj(frame)}));
+                    extra_.add("speed", sc("Flight_get_Speed", {obj(flight)}), rate_);
+                    const std::pair<const char*, std::vector<double>> dirs[] = {
+                        {"prograde", {0, 1, 0}}, {"normal", {0, 0, 1}}, {"radial", {-1, 0, 0}}};
+                    for (const auto& [name, v] : dirs)
+                        extra_.add(name, sc("TransformDirection", {pb::enc_tuple(v), obj(frame), obj(frame_)}), rate_);
+                },
+                [&] { drop({"speed", "prograde", "normal", "radial"}); });  // no target or zero relative velocity
             if (target)
-                extra_.add("target", sc(std::string(target_class) + "_Position", {obj(target), obj(frame_)}), rate_);
-            if (node) {
-                extra_.add("maneuver", sc("Node_BurnVector", {obj(node), obj(frame_)}), rate_);
-                extra_.add("node_remaining", sc("Node_get_RemainingDeltaV", {obj(node)}), rate_);
-                extra_.add("node_dv", sc("Node_get_DeltaV", {obj(node)}), rate_);
-                extra_.add("node_time", sc("Node_get_TimeTo", {obj(node)}), rate_);
-            }
+                optional_step(
+                    [&] {
+                        extra_.add("target", sc(std::string(target_class) + "_Position", {obj(target), obj(frame_)}),
+                                   rate_);
+                    },
+                    [&] { drop({"target"}); });
+            if (node)
+                optional_step(
+                    [&] {
+                        extra_.add("maneuver", sc("Node_BurnVector", {obj(node), obj(frame_)}), rate_);
+                        extra_.add("node_remaining", sc("Node_get_RemainingDeltaV", {obj(node)}), rate_);
+                        extra_.add("node_dv", sc("Node_get_DeltaV", {obj(node)}), rate_);
+                        extra_.add("node_time", sc("Node_get_TimeTo", {obj(node)}), rate_);
+                    },
+                    [&] { drop({"maneuver", "node_remaining", "node_dv", "node_time"}); });
         }
+        std::vector<std::string> failed;
         for (const auto& [name, id] : extra_.all()) {
             try {
                 std::string data = c_.stream(id).data;
@@ -231,10 +258,13 @@ public:
                 else if (name == "node_remaining") n.node_remaining = pb::dec_double(data);
                 else if (name == "node_dv") n.node_dv = pb::dec_double(data);
                 else if (name == "node_time") n.node_time = pb::dec_double(data);
-            } catch (const RpcError&) {
-                key_valid_ = false;  // target/node removed or frame became singular: rebuild next sample
+            } catch (const krpc::ConnectionError&) {
+                throw;
+            } catch (const std::exception&) {
+                failed.push_back(name);  // target/node removed or frame became singular between updates
             }
         }
+        if (!failed.empty()) drop(failed);
         n.speed_mode = mode;
         n.sas_mode = enum_name(SAS_MODES, sas_mode);
         n.throttle = std::isfinite(throttle) ? std::max(0.0, std::min(1.0, throttle)) : 0;
@@ -244,6 +274,12 @@ public:
     }
 
 private:
+    /// Remove failing optional streams and rebuild them shortly, without a rebuild every sample.
+    void drop(const std::vector<std::string>& names) {
+        for (const auto& name : names) extra_.remove(name);
+        retry_frame_at_ = monotonic() + .5;
+    }
+
     Client& c_;
     uint64_t vessel_, frame_ = 0;
     double rate_;
@@ -295,10 +331,15 @@ public:
                     if (current && number > *current) continue;
                     if (count++ == 4) break;
                     stages_.add(std::to_string(number) + ".parts", sc("Stage_get_Parts", {obj(stage)}), 2);
-                    stages_.add(std::to_string(number) + ".delta_v", sc("Stage_get_DeltaV", {obj(stage)}), 2);
+                    // "Delta-v information is not available for activation stage N" (e.g. on the pad)
+                    optional_step([&] { stages_.add(std::to_string(number) + ".delta_v",
+                                                    sc("Stage_get_DeltaV", {obj(stage)}), 2); },
+                                  [] {});
                     stage_numbers_.push_back(number);
                 }
-            } catch (const RpcError&) {  // docking or staging invalidated an object during setup
+            } catch (const krpc::ConnectionError&) {
+                throw;
+            } catch (const std::exception&) {  // docking or staging invalidated an object during setup
                 key_valid_ = false;
             }
         }
@@ -311,7 +352,9 @@ public:
         for (int number : stage_numbers_) {
             auto p = read<std::vector<uint64_t>>(stages_, std::to_string(number) + ".parts", ids);
             auto dv = read<double>(stages_, std::to_string(number) + ".delta_v", fl);
-            if (!p || !dv) key_valid_ = false;
+            // Unknown delta-v is normal (KSP has not computed it, e.g. on the pad): show it as unknown without
+            // rebuilding every stream each sample. Missing parts means the stage object went stale: rebuild.
+            if (!p) key_valid_ = false;
             Stage st;
             st.number = number;
             if (p) st.parts = static_cast<int>(p->size());
@@ -334,7 +377,9 @@ private:
         if (!g.has(name)) return std::nullopt;
         try {
             return decode(c_.stream(g.id(name)).data);
-        } catch (const RpcError&) {
+        } catch (const krpc::ConnectionError&) {
+            throw;
+        } catch (const std::exception&) {  // server error (e.g. no delta-v for a stage) or undecodable value
             return std::nullopt;
         }
     }
@@ -536,14 +581,10 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         s.body = body_name;
         s.body_radius = radius;
         s.atmosphere_depth = atmosphere;
-        if (nav) {
-            try {
-                s.nav = nav->sample();
-            } catch (const RpcError&) {
-                nav->invalidate();  // transient target, node or speed frame change
-            }
-        }
-        if (systems) s.systems = systems->sample();
+        if (nav) optional_step([&] { s.nav = nav->sample(); }, [&] { nav->invalidate(); });  // transient change
+        // Optional resources/staging sample: a failure blanks that panel, never the session.
+        if (systems)
+            optional_step([&] { s.systems = systems->sample(); }, [&] { s.systems.reset(); });
         s.orbit_state = OrbitState{position, velocity, mu, *axes};
         s.received = monotonic();
         publish(std::move(s));

@@ -44,6 +44,8 @@ public:
 
     int rpc_port = 0, stream_port = 0;
     std::atomic<int> calls{0};
+    /// AddStream answers the call's error when it fails at once (real kRPC); off keeps older tests' streams.
+    std::atomic<bool> fail_add_stream{false};
 
 private:
     static int listen_any(int& port) {
@@ -123,6 +125,9 @@ private:
         FakeResult res;
         if (p.procedure == "AddStream") {
             Parsed inner = parse_call(p.args.at(0));
+            res = handler_(inner.procedure, inner.args);  // like kRPC: a call that fails cannot become a stream
+            if (!res.error.empty() && fail_add_stream) return encode(res);
+            res = FakeResult{};
             std::lock_guard<std::mutex> lock(mutex_);
             uint64_t id = next_++;
             streams_[id] = inner;
@@ -134,6 +139,10 @@ private:
         } else {
             res = handler_(p.procedure, p.args);
         }
+        return encode(res);
+    }
+
+    static std::string encode(const FakeResult& res) {
         ksphmi::pb::Writer w;
         if (!res.error.empty()) {
             ksphmi::pb::Writer e;

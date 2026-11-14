@@ -6,6 +6,8 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <map>
+#include <mutex>
 #include <cstring>
 #include <sstream>
 #include <fstream>
@@ -459,6 +461,107 @@ TEST(reconnect_discovers_server_after_configured_address_fails) {
     CHECK_EQ(probe.discoveries, 1);
     CHECK_EQ(probe.connects, 2);
     CHECK_EQ(probe.sessions, 1);
+}
+
+namespace {
+// A vessel stationary on the launch pad: kRPC answers InvalidOperationException for the surface speed frame
+// ("singular when surface velocity is near zero") and for stage delta-v ("not available").
+struct PadServer {
+    std::mutex mutex;
+    std::map<std::string, int> counts;
+    int count(const std::string& proc) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return counts[proc];
+    }
+    static std::string list(std::initializer_list<uint64_t> ids) {
+        pb::Writer w;
+        for (uint64_t id : ids) w.field_bytes(1, pb::enc_object(id));
+        return w.out;
+    }
+    FakeResult answer(const std::string& proc) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++counts[proc];
+        }
+        static const std::map<std::string, uint64_t> objects = {
+            {"get_ActiveVessel", 1}, {"Vessel_get_Orbit", 2}, {"Orbit_get_Body", 3},
+            {"CelestialBody_get_ReferenceFrame", 4}, {"Vessel_get_SurfaceReferenceFrame", 4}, {"Vessel_Flight", 5},
+            {"Vessel_get_Control", 6}, {"Vessel_get_Parts", 7}, {"Vessel_get_Resources", 8},
+            {"CelestialBody_get_NonRotatingReferenceFrame", 11}};
+        if (auto it = objects.find(proc); it != objects.end()) return {pb::enc_object(it->second)};
+        if (proc == "Vessel_get_SurfaceSpeedReferenceFrame")
+            return {"", false, "VesselSurfaceSpeed reference frame is singular when surface velocity is near zero"};
+        if (proc == "Stage_get_DeltaV") return {"", false, "Delta-v information is not available for activation stage 1."};
+        if (proc.rfind("get_Target", 0) == 0) return {"", true};
+        if (proc == "Vessel_get_Name") return {pb::enc_string("Pad")};
+        if (proc == "CelestialBody_get_Name") return {pb::enc_string("Kerbin")};
+        if (proc == "CelestialBody_get_HasAtmosphere") return {pb::enc_bool(true)};
+        if (proc == "CelestialBody_get_EquatorialRadius") return {pb::enc_double(KERBIN_RADIUS)};
+        if (proc == "CelestialBody_get_AtmosphereDepth") return {pb::enc_double(KERBIN_ATMOSPHERE)};
+        if (proc == "CelestialBody_get_GravitationalParameter") return {pb::enc_double(KERBIN_MU)};
+        if (proc == "Vessel_Position") return {pb::enc_tuple({KERBIN_RADIUS, 0, 0})};
+        if (proc == "Vessel_Velocity") return {pb::enc_tuple({0, KERBIN_ROTATION_SPEED, 0})};
+        if (proc == "Flight_get_Rotation") return {pb::enc_tuple({0, 0, 0, 1})};
+        if (proc == "Flight_get_Pitch" || proc == "Flight_get_Heading") return {pb::enc_float(90)};
+        if (proc == "Flight_get_Roll" || proc == "Control_get_Throttle") return {pb::enc_float(0)};
+        if (proc == "Flight_get_GForce") return {pb::enc_float(1)};
+        if (proc == "Vessel_get_Mass") return {pb::enc_float(10000)};
+        if (proc == "Vessel_get_AvailableThrust" || proc == "Vessel_get_SpecificImpulse") return {pb::enc_float(0)};
+        if (proc == "Vessel_get_Situation" || proc == "Control_get_SASMode") return {pb::enc_sint32(0)};
+        if (proc == "Control_get_SpeedMode" || proc == "Control_get_CurrentStage" || proc == "Stage_get_Number")
+            return {pb::enc_sint32(1)};
+        if (proc == "Control_get_SAS" || proc == "Control_get_RCS") return {pb::enc_bool(false)};
+        if (proc == "Control_get_Nodes") return {list({})};
+        if (proc == "Vessel_get_Stages") return {list({9})};
+        if (proc == "Parts_get_All") return {list({10, 12})};
+        if (proc == "Stage_get_Parts") return {list({10})};
+        if (proc == "Resources_Amount") return {pb::enc_float(50)};
+        if (proc == "Resources_Max") return {pb::enc_float(100)};
+        if (proc == "get_UT" || proc.rfind("Flight_get_", 0) == 0 || proc.rfind("Orbit_get_", 0) == 0)
+            return {pb::enc_double(proc == "Orbit_get_Eccentricity" ? .9 : 1000)};
+        return {"", false, "no such procedure " + proc};
+    }
+};
+}  // namespace
+
+TEST(launch_pad_errors_drop_only_the_failing_values) {
+    PadServer pad;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>&) { return pad.answer(proc); });
+    server.fail_add_stream = true;
+    KrpcSource::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    o.discovery = false;
+    o.retry_seconds = .1;
+    KrpcSource src(o);
+    src.start();
+    double start = monotonic(), end = start + 5;
+    auto ready = [&] {
+        auto s = src.latest();
+        return s->state == State::Flight && s->nav && s->systems && !s->systems->stages.empty();
+    };
+    while (monotonic() < end && !ready()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(ready());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // many samples at 10 Hz / 2 Hz
+    auto snap = src.latest();
+    double elapsed = monotonic() - start;
+    src.stop();
+    CHECK(snap->state == State::Flight);
+    CHECK(snap->nav.has_value());  // the attitude survives the singular surface speed frame
+    if (snap->nav) {
+        CHECK_NEAR(snap->nav->pitch, 90, 1e-6);
+        CHECK(!snap->nav->prograde && !snap->nav->speed);
+    }
+    CHECK(snap->systems.has_value());
+    if (snap->systems && !snap->systems->stages.empty()) {
+        CHECK(snap->systems->stages[0].parts == 1);
+        CHECK(!snap->systems->stages[0].delta_v);  // unknown, not a reason to drop the panel
+        CHECK_NEAR(snap->systems->resources[0].fraction().value_or(-1), .5, 1e-9);
+    }
+    CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // the vessel session never restarted
+    CHECK(pad.count("Stage_get_Number") <= 2);    // unknown delta-v does not force a stream rebuild
+    CHECK(pad.count("Vessel_get_SurfaceSpeedReferenceFrame") <= 2 + static_cast<int>(elapsed / .5));  // retry 0.5 s
 }
 
 TEST(gauge_angle_sweeps_clockwise_through_the_top) {
