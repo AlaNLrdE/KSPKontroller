@@ -26,6 +26,7 @@ class Snapshot:
     """One sample of the active vessel. Distances in metres, speeds in m/s, times in seconds."""
     state: str = CONNECTING
     detail: str = ""             #: why we are not in FLIGHT, shown on the waiting screen
+    scene: str = ""             #: KSPSerialIO scene context, empty if unavailable
     vessel: str = ""
     situation: str = ""          #: kRPC VesselSituation name: pre_launch, flying, sub_orbital, orbiting...
     body: str = ""
@@ -91,6 +92,7 @@ class KrpcSource(Source):
                  rate_hz: float = 10.0, retry_seconds: float = 3.0, client_name: str = "KSP HMI") -> None:
         super().__init__()
         self.address = address
+        self.context_port = 50002
         self.rpc_port = rpc_port
         self.stream_port = stream_port
         self.period = 1.0 / max(rate_hz, 0.5)
@@ -167,7 +169,9 @@ class KrpcSource(Source):
             else:
                 why = "no active vessel"
             if vessel is None:  # kRPC 0.7 at the Space Center / Tracking Station returns null instead of raising
-                self._publish(Snapshot(state=NO_VESSEL, detail=why, received=time.monotonic()))
+                from .scenes import read_context
+                scene = read_context(self.address, self.context_port)
+                self._publish(Snapshot(state=NO_VESSEL, scene=scene, detail=why, received=time.monotonic()))
                 self._stop.wait(1.0)
                 continue
             try:

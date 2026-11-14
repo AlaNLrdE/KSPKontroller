@@ -413,10 +413,11 @@ class KrpcTest(unittest.TestCase):
 
         sim = Simulator("orbit")
         sim.start()
-        server = KrpcServer(sim, "127.0.0.1", 0, 0)
+        server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
         src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5)
+        src.context_port = server.context_port
         src.start()
 
         def wait(pred, timeout=10.0):
@@ -449,7 +450,11 @@ class KrpcTest(unittest.TestCase):
             sim.set_manual_mode(False)
 
             sim.set_scene("space_center")
-            wait(lambda s: s.state == NO_VESSEL)
+            wait(lambda s: s.state == NO_VESSEL and s.scene == "space_center")
+            from ksphmi.scenes import VIEWS
+            for scene in VIEWS:
+                sim.set_scene(scene)
+                wait(lambda s: s.state == NO_VESSEL and s.scene == scene)
             sim.set_scene("flight")
             sim.load("escape")  # a new vessel: the client must re-open its streams on it
             s = wait(lambda s: s.state == FLIGHT and s.vessel == "Voyager")

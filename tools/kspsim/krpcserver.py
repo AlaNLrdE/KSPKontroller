@@ -137,7 +137,7 @@ class KrpcServer:
     """Listens on the kRPC ports while ``sim`` says the game is running; one thread per connection."""
 
     def __init__(self, sim, address: str = "0.0.0.0", rpc_port: int = 50000, stream_port: int = 50001,
-                 max_stream_rate: float = 20.0) -> None:
+                 max_stream_rate: float = 20.0, context_port: int = 50002) -> None:
         self.sim = sim
         self.address, self.rpc_port, self.stream_port = address, rpc_port, stream_port
         self.max_stream_rate = max_stream_rate
@@ -146,6 +146,8 @@ class KrpcServer:
         self._next_stream = 1
         self._listeners: list[socket.socket] = []
         self.error = ""
+        self._context = None
+        self.context_port = context_port
 
     # -- lifecycle ----------------------------------------------------------------------------------
     @property
@@ -170,6 +172,12 @@ class KrpcServer:
                     self.rpc_port = port
                 else:
                     self.stream_port = port
+            context = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._context = context
+            context.bind((self.address, self.context_port))
+            self.context_port = context.getsockname()[1]
+            context.settimeout(0.2)
+            threading.Thread(target=self._serve_context, args=(context,), daemon=True).start()
             self.error = ""
             log.info("kRPC stand-in listening on %s:%d/%d", self.address, self.rpc_port, self.stream_port)
         except OSError as e:
@@ -177,8 +185,23 @@ class KrpcServer:
             log.error(self.error)
             self.stop()
 
+    def _serve_context(self, sock):
+        while self._context is sock:
+            try:
+                data, peer = sock.recvfrom(256)
+                if data == b"KSPHMI/1":
+                    sock.sendto(("KSPHMI/1 " + self.sim.scene).encode("ascii"), peer)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+
+
     def stop(self) -> None:
         """Close the ports and drop every client, as when KSP quits."""
+        if self._context is not None:
+            self._context.close()
+            self._context = None
         for s in self._listeners:
             try:
                 s.close()

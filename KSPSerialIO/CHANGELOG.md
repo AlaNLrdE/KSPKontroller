@@ -1,5 +1,10 @@
 # Changelog
 
+* **0.19.3.15**: 20261114
+  Add read-only HMI scene discovery over UDP 50002, including space-center facility UI events.
+  The Pi shows dedicated preparation checklists for VAB, SPH, Mission Control, Astronaut Complex,
+  R&D, Administration, Tracking Station and Space Center. The simulator supports all views.
+
 * **0.19.3.14**: 20261114
   SAS and RCS are toggle buttons on the board (pins 2 and 9): every change of their ControlPacket bit is one press
   and now toggles the vessel's SAS / RCS (`ToggleGroup`) instead of copying the bit (`SetGroup`). Copying lost

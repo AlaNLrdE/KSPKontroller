@@ -1,6 +1,8 @@
 """The simulator window (tkinter, standard library): scene, scenario, time warp, the vessel, and both links."""
 from __future__ import annotations
 
+from .sim import SCENES
+
 import math
 import time
 import tkinter as tk
@@ -38,7 +40,7 @@ class App:
         self.scene = tk.StringVar(value=sim.scene)
         game = ttk.LabelFrame(top, text="Game (simulated KSP)")
         game.pack(side="left", fill="both", expand=True, padx=4)
-        for value, label in (("flight", "Flight"), ("space_center", "Space center"), ("closed", "KSP closed")):
+        for value, label in ((v, v.replace("_", " ").title()) for v in SCENES):
             ttk.Radiobutton(game, text=label, value=value, variable=self.scene,
                             command=lambda: sim.set_scene(self.scene.get())).pack(anchor="w")
         self.board_text = tk.StringVar()

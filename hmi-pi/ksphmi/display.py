@@ -15,6 +15,7 @@ import pygame
 
 from . import fmt
 from .netinfo import NetInfo
+from .scenes import VIEWS
 from .telemetry import CONNECTING, FLIGHT, NO_VESSEL, Snapshot, stale
 
 BG = (10, 14, 20)
@@ -145,6 +146,8 @@ class Display:
         self.header(snap, now)
         if snap.state == FLIGHT:
             self.flight(snap)
+        elif snap.state == NO_VESSEL and snap.scene in VIEWS:
+            self.facility(snap)
         else:
             self.waiting(snap, now)
         if self.fb:
@@ -159,6 +162,9 @@ class Display:
             self.text(snap.vessel or "Unnamed vessel", 5.2, VALUE, (2.5 * u, top))
             self.text("%s  ·  %s" % (snap.body, fmt.situation(snap.situation)), 3.0, LABEL, (2.5 * u, top + 5.4 * u))
             self.text(fmt.clock(snap.ut, self.day_hours), 3.4, LABEL, (self.w - 2.5 * u, top + 5.0 * u), "topright")
+        elif snap.state == NO_VESSEL and snap.scene in VIEWS:
+            self.text("KSP KONTROLLER", 5.2, VALUE, (2.5 * u, top))
+            self.text(VIEWS[snap.scene][1], 3.0, LABEL, (2.5 * u, top + 5.4 * u))
         if stale(snap, now):
             status, color = "NO DATA %ds" % (now - snap.received), WARN
         elif snap.state == FLIGHT:
@@ -189,6 +195,21 @@ class Display:
         # where to find this display (SSH, deploys) and where it looks for the game
         self.text(self.net.line(), 3.4, VALUE, (cx, self.h - 9.5 * u), "midtop")
         self.text(self.server_text, 3.0, LABEL, (cx, self.h - 5 * u), "midtop")
+
+    def facility(self, snap: Snapshot) -> None:
+        u = self.u
+        title, subtitle, cards = VIEWS[snap.scene]
+        self.text(title, 6.5, VALUE, (4 * u, 15 * u))
+        self.text("PREPARATION CHECKLIST", 2.8, ACCENT, (4 * u, 24 * u))
+        for index, (label, heading, hint) in enumerate(cards):
+            y = (31 + index * 17) * u
+            self.panel(pygame.Rect(4 * u, y, self.w - 8 * u, 14 * u))
+            self.text(label, 2.6, ACCENT, (6 * u, y + 1.5 * u))
+            self.text(heading, 4.2, VALUE, (6 * u, y + 4.7 * u))
+            self.text(hint, 2.8, LABEL, (6 * u, y + 10 * u))
+        self.text("Scene context live  |  Flight telemetry resumes when you launch", 2.6,
+                  MUTED, (4 * u, 87 * u))
+
 
     # ------------------------------------------------------------------------------------------ flight
     def flight(self, s: Snapshot) -> None:

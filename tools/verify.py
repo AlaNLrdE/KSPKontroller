@@ -413,6 +413,31 @@ def check_git(ctx):
 HMI_DIR = os.path.join(ROOT, "hmi-pi")
 
 
+def check_hmi_context(ctx):
+    """Keep the optional read-only scene channel consistent across game, HMI and simulator."""
+    source = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "HmiContext.cs"))
+    client = read(os.path.join(ROOT, "hmi-pi", "ksphmi", "scenes.py"))
+    server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
+    ok = all("KSPHMI/1" in s and "50002" in s for s in (source, client, server))
+    for facility in ("AstronautComplex", "MissionControl", "RnDComplex", "AdministrationFacility"):
+        for event in ("Spawn", "Despawn"):
+            name = "onGUI" + facility + event
+            ok = ok and name + ".Add(" in source and name + ".Remove(" in source
+    project = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "KSPSerialIO.csproj"))
+    ok = ok and 'Compile Include="HmiContext.cs"' in project
+    report("PASS" if ok else "FAIL", "hmi: scene context contract",
+           "UDP 50002 protocol and facility event subscriptions")
+    try:
+        out = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", "name=KSP HMI scene context"],
+            capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    report("PASS" if "50002" in out else "WARN", "hmi: scene context firewall",
+           "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
+
+
+
 def check_hmi(ctx):
     """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
     p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=HMI_DIR,
@@ -594,7 +619,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi, check_krpc, check_sim, check_git]
 
 
 def main():

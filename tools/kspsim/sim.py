@@ -10,7 +10,8 @@ from . import physics
 
 log = logging.getLogger("kspsim")
 
-SCENES = ("flight", "space_center", "closed")  # closed = KSP not running: kRPC ports closed, no telemetry
+SCENES = ("flight", "space_center", "vab", "sph", "mission_control", "astronaut_complex",
+          "research", "administration", "tracking_station", "closed")  # closed = KSP not running: kRPC ports closed, no telemetry
 
 # Game state KSP reports back in VesselData.ActionGroups, bit = position (AGSAS .. AGAbort in the firmware);
 # custom groups 1-10 follow at bits 6-15.
