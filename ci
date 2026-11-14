@@ -22,6 +22,8 @@
 #   ./ci test_hmi            Unit tests of the HMI (no pygame, no kRPC needed)
 #   ./ci deploy_hmi          Test, copy hmi-pi/ to the Pi over SSH, install its service and restart it
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
+#   ./ci build_hmi_cpp       Build the C++ HMI (hmi-cpp/, CMake) into build/hmi-cpp; on Windows inside WSL
+#   ./ci test_hmi_cpp [--sim] Build and run its tests; --sim also runs it against ./ci sim --no-board --headless
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
 #   ./ci test_sim            Simulator tests, including the HMI kRPC client against the simulated server
@@ -561,6 +563,91 @@ test_sim() {
   (cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest tools/kspsim/test_kspsim.py)
 }
 
+# ------------------------------------------------------------------ C++ HMI (hmi-cpp/)
+# On the Pi:  sudo apt install $HMI_CPP_APT_PACKAGES  (once), then ./ci build_hmi_cpp.
+HMI_CPP_DIR="$ROOT/hmi-cpp"
+HMI_CPP_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
+# Fallback for a Linux box without root (this PC's WSL): the same libraries unpacked into build/hmi-cpp-deps.
+# Names are Ubuntu 24.04's (t64); SDL2's runtime needs the audio/X11 libraries even if it never opens them.
+HMI_CPP_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 fonts-freefont-ttf libxss1
+  libasound2t64 libdecor-0-0 libpulse0 libsamplerate0 libsndfile1 libasyncns0 libflac12t64 libvorbisenc2
+  libvorbis0a libogg0 libopus0 libmpg123-0t64 libmp3lame0"
+
+# Windows has no C++ toolchain here: run the same ./ci target inside WSL when it is installed.
+hmi_cpp_in_wsl() {
+  local dir
+  command -v wsl.exe >/dev/null || die "no C++ toolchain on Windows and no WSL: build on the Pi (sudo apt install $HMI_CPP_APT_PACKAGES)"
+  dir="$(cygpath -m "$ROOT")"
+  dir="/mnt/$(printf '%s' "${dir:0:1}" | tr 'A-Z' 'a-z')${dir:2}"
+  log "No C++ toolchain on Windows: running ./ci $* in WSL"
+  MSYS_NO_PATHCONV=1 wsl.exe -- bash -lc "cd '$dir' && ./ci $*"
+}
+
+hmi_cpp_env() {
+  local deps="$BUILD/hmi-cpp-deps" lib arch dir
+  command -v cmake >/dev/null && command -v g++ >/dev/null && command -v pkg-config >/dev/null ||
+    die "C++ toolchain missing: sudo apt install $HMI_CPP_APT_PACKAGES"
+  pkg-config --exists sdl2 SDL2_ttf 2>/dev/null && return 0
+  command -v apt-get >/dev/null && command -v dpkg >/dev/null ||
+    die "SDL2 development files missing: sudo apt install $HMI_CPP_APT_PACKAGES"
+  if [ ! -f "$deps/.complete" ]; then
+    log "SDL2 / SDL2_ttf not installed: unpacking the packages into $deps (no root needed)"
+    rm -rf "$deps"; mkdir -p "$deps/debs"
+    # shellcheck disable=SC2086
+    (cd "$deps/debs" && apt-get download $HMI_CPP_LOCAL_DEBS) || die "apt-get download failed; or: sudo apt install $HMI_CPP_APT_PACKAGES"
+    for f in "$deps"/debs/*.deb; do dpkg -x "$f" "$deps/root"; done
+    touch "$deps/.complete"
+  fi
+  lib="$(ls -d "$deps"/root/usr/lib/*-linux-gnu | head -1)"
+  arch="$(basename "$lib")"
+  export PKG_CONFIG_PATH="$lib/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$deps/root"
+  # SDL2_ttf.pc names include dirs of -dev packages we do not need (harfbuzz, glib): CMake wants them to exist
+  for dir in $(pkg-config --cflags-only-I sdl2 SDL2_ttf); do mkdir -p "${dir#-I}"; done
+  export CXXFLAGS="${CXXFLAGS:-} -I$deps/root/usr/include/$arch"
+  export LDFLAGS="${LDFLAGS:-} -Wl,-rpath-link,$lib:$lib/pulseaudio"
+  export LD_LIBRARY_PATH="$lib:$lib/pulseaudio${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export KSPHMI_FONT="${KSPHMI_FONT:-$deps/root/usr/share/fonts/truetype/freefont/FreeSansBold.ttf}"
+}
+
+build_hmi_cpp() {
+  if is_windows; then hmi_cpp_in_wsl build_hmi_cpp; return; fi
+  hmi_cpp_env
+  log "Building the C++ HMI into build/hmi-cpp"
+  cmake -S "$HMI_CPP_DIR" -B "$BUILD/hmi-cpp" -DCMAKE_BUILD_TYPE=Release >/dev/null
+  cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || echo 2)"
+}
+
+# End to end: tools/kspsim serves the real kRPC protocol; the C++ HMI must follow its vessel and draw a frame.
+hmi_cpp_sim() {
+  local py out port=50300 sim_pid rc=0
+  py="${KSPSIM_PYTHON:-$(command -v python3)}" || die "python3 needed for tools/kspsim"
+  "$py" -c "import krpc, google.protobuf" 2>/dev/null ||
+    die "tools/kspsim needs the krpc and protobuf Python packages (pip install -r tools/requirements.txt)"
+  out="$BUILD/hmi-cpp-sim"; mkdir -p "$out"
+  log "kspsim on 127.0.0.1:$port/$((port + 1)), C++ HMI against it"
+  (cd "$ROOT/tools" && exec "$py" -m kspsim --no-board --headless --seconds 40 --address 127.0.0.1 \
+      --rpc-port "$port" --stream-port "$((port + 1))") >"$out/kspsim.log" 2>&1 &
+  sim_pid=$!
+  sleep 3
+  KSPHMI_LOCAL_CONFIG=/dev/null "$BUILD/hmi-cpp/ksphmi" --address 127.0.0.1 --size 2520x1680 --seconds 8 \
+      --screenshot "$out/flight.png" --config <(printf '[krpc]\nrpc_port = %d\nstream_port = %d\n' "$port" "$((port + 1))") \
+      >"$out/hmi.log" 2>&1 || rc=$?
+  kill "$sim_pid" 2>/dev/null || true
+  wait "$sim_pid" 2>/dev/null || true
+  cat "$out/hmi.log"
+  [ "$rc" = 0 ] || die "C++ HMI exited with $rc"
+  grep -q "following .* around Kerbin" "$out/hmi.log" || die "the C++ HMI never followed the simulated vessel"
+  log "OK: followed the simulated vessel; frame saved to $out/flight.png"
+}
+
+test_hmi_cpp() {
+  if is_windows; then hmi_cpp_in_wsl test_hmi_cpp "$@"; return; fi
+  build_hmi_cpp
+  log "C++ HMI unit and layout tests"
+  (cd "$BUILD/hmi-cpp" && ctest --output-on-failure)
+  if [ "${1:-}" = "--sim" ]; then hmi_cpp_sim; fi
+}
+
 hmi_logs() {
   # Raspberry Pi OS keeps no per-user journal: read the unit's lines from the system journal (user is in adm)
   hmi_ssh "journalctl _SYSTEMD_USER_UNIT=ksphmi.service -n ${1:-60} --no-pager -o short"
@@ -571,7 +658,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,42p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,44p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -595,6 +682,8 @@ case "${1:-help}" in
   test_hmi)          test_hmi ;;
   deploy_hmi)        deploy_hmi ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
+  build_hmi_cpp)     build_hmi_cpp ;;
+  test_hmi_cpp)      shift; test_hmi_cpp "$@" ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
   clean)             clean ;;
