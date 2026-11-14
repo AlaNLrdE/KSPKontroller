@@ -1,5 +1,14 @@
 # Changelog
 
+* **0.19.3.14**: 20261114
+  SAS and RCS are toggle buttons on the board (pins 2 and 9): every change of their ControlPacket bit is one press
+  and now toggles the vessel's SAS / RCS (`ToggleGroup`) instead of copying the bit (`SetGroup`). Copying lost
+  presses after SAS / RCS had been changed in the game (T / R), because the board's bit already matched. The first
+  packet of a link or flight only seeds the bits (as for the stage button), and SAS / RCS are no longer forced to
+  the board's bit when entering flight or switching vessels. Each toggle is logged as `KSPSerialIO[CTRL]`.
+  Firmware: the SAS / RCS buttons flip their own bit on each press (no longer the opposite of AGSAS / AGRCS), and
+  the action group 1 switch is disabled (`CG1PIN -1`; nothing is wired and an open input meant group 1 ON).
+
 * **0.19.3.13**: 20261108
   Fix a game crash (UnityPlayer.dll access violation in Mesh.Internal_Create <- TextMeshProUGUI.Awake <-
   DebugScreenConsole.OnMemoryLogUpdated <- Debug.Log <- KSPSerialPort.LogBoardDebug / SerialWorker, 10 of 10 Unity

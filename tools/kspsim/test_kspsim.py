@@ -165,10 +165,8 @@ def _fields(sim):
 
 
 def _press(sim, flag):
-    """The firmware's SAS / RCS button: the bit becomes the opposite of the reported state and stays there."""
-    ag = sim.action_groups()
-    bit = {"sas": 0, "rcs": 1}[flag]
-    sim.board_controls(physics.Controls(**{**vars(sim.last_board), flag: not (ag >> bit & 1)}))
+    """The firmware's SAS / RCS button: each press flips the bit the board sends, and it stays there."""
+    sim.board_controls(physics.Controls(**{**vars(sim.last_board), flag: not getattr(sim.last_board, flag)}))
 
 
 class GameStateTest(unittest.TestCase):
@@ -195,6 +193,7 @@ class GameStateTest(unittest.TestCase):
 
     def test_board_buttons_toggle_like_the_plugin(self):
         sim = Simulator("orbit")
+        sim.board_controls(physics.Controls())  # the first packet of a link only seeds
         _press(sim, "sas")
         self.assertTrue(sim.game["sas"])
         _press(sim, "sas")
@@ -205,13 +204,25 @@ class GameStateTest(unittest.TestCase):
         sim.set_game(rcs=False)
         sim.board_controls(sim.last_board)
         self.assertFalse(sim.game["rcs"])
-        # ... and the board's next press repeats the bit it already sent (1 = opposite of off), so the plugin
-        # sees no change and ignores it, exactly as KSPSerialIO does today (VControlsOld).
+        # ... and the board's next press still works (0.19.3.14: any bit change toggles), whatever the game did
+        _press(sim, "rcs")
+        self.assertTrue(sim.game["rcs"])
         _press(sim, "rcs")
         self.assertFalse(sim.game["rcs"])
 
+    def test_first_packet_of_a_link_only_seeds_the_toggle_bits(self):
+        sim = Simulator("orbit")
+        sim.board_controls(physics.Controls(sas=True, rcs=True))  # bits kept by the board from a past session
+        self.assertFalse(sim.game["sas"] or sim.game["rcs"])
+        sim.board_linked()
+        sim.board_controls(physics.Controls(sas=False))  # re-handshake: seeds again, no toggle
+        self.assertFalse(sim.game["sas"])
+        _press(sim, "sas")
+        self.assertTrue(sim.game["sas"])
+
     def test_action_group_switch_is_a_level(self):
         sim = Simulator("orbit")
+        sim.board_controls(physics.Controls())  # the first packet of a link only seeds
         sim.board_controls(physics.Controls(groups=1 << 1))
         self.assertEqual(sim.action_groups() >> 6 & 1, 1)
         sim.set_game_group(1, False)  # changed in the game: kept until the switch moves

@@ -45,18 +45,18 @@ exercises every item without KSP (see :doc:`simulator`, *Game state / LEDs* and 
      - Behaviour, and how to enable or change it
    * - SAS button, pin 2
      - enabled
-     - Each press sets the SAS bit to the opposite of the reported ``AGSAS`` (150 ms debounce, idle level learned
-       while disconnected). ``SASPIN``.
+     - Each press flips the SAS bit (150 ms debounce, idle level learned while disconnected); the plugin
+       (0.19.3.14+) toggles SAS on every change of the bit. ``SASPIN``.
    * - RCS button, pin 9
      - enabled
-     - Same as SAS with ``AGRCS``. ``RCSPIN``.
+     - Same as SAS, for RCS. ``RCSPIN``.
    * - Screen button, pin 3
      - enabled
      - Cycles the six matrix screens, then automatic. ``SCREENPIN``.
-   * - Action group 1 switch, pin 10
-     - enabled
-     - Sent as a level: pin HIGH sets group 1. With the internal pull-up an open (or unwired) switch means
-       group 1 ON and a switch closed to GND means OFF. ``CG1PIN``.
+   * - Action group 1 switch
+     - disabled
+     - ``CG1PIN -1`` (was pin 10; nothing is wired and an open pull-up input read as group 1 ON). Set a pin:
+       sent as a level, pin HIGH sets group 1, so an open switch means ON and a switch closed to GND means OFF.
    * - Stage button
      - disabled
      - ``STAGEPIN -1``. Set a pin number: the STAGE bit is held 150 ms per press (``STAGEHOLD``).
@@ -105,9 +105,10 @@ exercises every item without KSP (see :doc:`simulator`, *Game state / LEDs* and 
      - enabled
      - ``WATCHDOGMS`` 2000 ms: resets the board if ``loop()`` stops.
 
-The SAS and RCS buttons rely on the plugin applying a bit only when it changes (``VControlsOld``). If the state
-is changed in the game (key T or R) after a board press, the button's next press repeats the bit it already
-sent, so the plugin ignores it until the game state flips back; the simulator reproduces this.
+The SAS and RCS buttons and the plugin agree on *toggles*: the board flips its bit on every press, and the plugin
+(0.19.3.14+) toggles the vessel's SAS / RCS on every change of the bit, after seeding the bits from the first
+packet of a link or flight. A state changed in the game (T or R) no longer swallows the next board press, which it
+did while the board sent the opposite of ``AGSAS`` / ``AGRCS`` and the plugin copied the bit.
 
 Main loop
 ---------

@@ -62,7 +62,7 @@ Hardware used by the demo sketch
      - LED matrix screen button
    * - 10
      - input (pull-up)
-     - Action group 1 switch (pin HIGH = group on, so an open switch means on)
+     - (free) Action group 1 switch, disabled: ``CG1PIN -1``
    * - none
      - input
      - Stage push button: disabled (``STAGEPIN -1``)

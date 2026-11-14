@@ -61,10 +61,10 @@ The window
 * **Game state / LEDs** tab: what KSP reports as active in ``VesselData.ActionGroups`` (SAS, RCS, lights,
   gear, brakes, abort, action groups 1-10) and the SAS mode (the icon of the SAS matrix screen). Change it as
   keys in the game would, without touching the board: the SAS, RCS and group 1 LEDs follow. The board's
-  bits are applied the way KSPSerialIO does: a bit sets the game state to its level only when it differs from
-  the bit the board sent before, so the SAS / RCS buttons toggle (they send the opposite of the reported state)
-  and a state changed in this tab survives the keep-alives. Pressing a board button after such a change does
-  nothing, as with the real plugin (see :doc:`firmware`, *Feature status*).
+  bits are applied the way KSPSerialIO 0.19.3.14 does: a change of the SAS / RCS bit is one button press and
+  toggles the state (the board flips its bit on each press), the other bits set their level when they change,
+  and the first packet of a link only seeds them. So a state changed in this tab survives the keep-alives and
+  the next board press still toggles it (see :doc:`firmware`, *Feature status*).
   The *caution / warning triggers* pin G force, stage fuel and ``MaxOverHeat`` (overheat is sent, but the
   firmware does not use it) over the flight model and manual mode; the firmware thresholds are shown next
   to them, and a line below says which LEDs the board should light with the values it is receiving.

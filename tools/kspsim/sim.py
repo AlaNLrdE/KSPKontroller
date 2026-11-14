@@ -41,6 +41,7 @@ class Simulator:
         self.game_groups = 0            # custom action groups, bit n = group n (1-10)
         self.sas_mode = 1               # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
         self._board_prev = physics.Controls()  # the plugin's VControlsOld
+        self._board_seeded = False      # the plugin's StageSeeded: the first packet of a link only seeds the bits
         self.forced: dict = {}          # FORCEABLE key -> pinned value (window overrides)
         self._last_board = 0.0
         self._ksp_check = (0.0, False)
@@ -121,10 +122,11 @@ class Simulator:
                 self.forced[key] = value
 
     def _apply_levels(self, c: physics.Controls, prev: physics.Controls) -> None:
-        """KSPSerialIO: a control bit sets the game state to its level when it changed since the last packet."""
+        """KSPSerialIO 0.19.3.14: a change of the SAS / RCS bit is a button press and toggles the game state; the
+        other bits set the game state to their level when they changed since the last packet."""
         for f in GAME_FLAGS:
             if getattr(c, f) != getattr(prev, f):
-                self.game[f] = getattr(c, f)
+                self.game[f] = (not self.game[f]) if f in ("sas", "rcs") else getattr(c, f)
         for n in range(1, 11):
             if (c.groups ^ prev.groups) >> n & 1:
                 self.game_groups = self.game_groups | 1 << n if c.groups >> n & 1 else self.game_groups & ~(1 << n)
@@ -175,12 +177,19 @@ class Simulator:
             self._last_board = time.monotonic()
             self.board_driven = True
             self.last_board = c
-            self._apply_levels(c, self._board_prev)
+            if self._board_seeded:
+                self._apply_levels(c, self._board_prev)
+            self._board_seeded = True
             self._board_prev = c
             if not self.board_throttle:
                 c = physics.Controls(**{**vars(c), "throttle": self.manual.throttle})
             if self.vessel:
                 self.vessel.apply_controls(c)
+
+    def board_linked(self) -> None:
+        """A new link (handshake): like the plugin, the next packet only seeds the toggle bits."""
+        with self.lock:
+            self._board_seeded = False
 
     def vessel_for_board(self) -> physics.Vessel | None:
         with self.lock:

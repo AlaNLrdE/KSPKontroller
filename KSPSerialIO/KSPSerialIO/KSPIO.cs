@@ -1073,8 +1073,11 @@ namespace KSPSerialIO
             VControls.Stage = BitMathByte(CPacket.MainControls, 0);
             if (!StageSeeded)
             {
-                // The first packet after connecting only seeds the state: a button already down must not stage
+                // The first packet after connecting only seeds the state: a button already down must not stage,
+                // and the SAS / RCS toggle bits the board kept from an earlier session must not toggle anything
                 VControlsOld.Stage = VControls.Stage;
+                VControlsOld.SAS = VControls.SAS;
+                VControlsOld.RCS = VControls.RCS;
                 lastRxStage = VControls.Stage;
                 StageRequestTick = 0;
                 StageSeeded = true;
@@ -1760,9 +1763,7 @@ namespace KSPSerialIO
                 KSPSerialPort.StageSeeded = false;
                 KSPSerialPort.StageRequestTick = 0;
 
-                //sync inputs at start
-                SafeSetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
-                SafeSetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
+                //sync inputs at start (SAS and RCS are toggle buttons on the board: their bit is not a state to copy)
                 SafeSetGroup(KSPActionGroup.Light, KSPSerialPort.VControls.Lights);
                 SafeSetGroup(KSPActionGroup.Gear, KSPSerialPort.VControls.Gear);
                 SafeSetGroup(KSPActionGroup.Brakes, KSPSerialPort.VControls.Brakes);
@@ -1822,9 +1823,7 @@ namespace KSPSerialIO
                     ActiveVessel.OnPostAutopilotUpdate -= AxisInput;
                     ActiveVessel = FlightGlobals.ActiveVessel;
                     ActiveVessel.OnPostAutopilotUpdate += AxisInput;
-                    //sync some inputs on vessel switch
-                    ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
-                    ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
+                    //SAS and RCS are not synced on a vessel switch: the board's bits are toggle presses, not states
                     KSPLogQueue.Log("KSPSerialIO: ActiveVessel changed");
                 }
                 else
@@ -2099,20 +2098,22 @@ namespace KSPSerialIO
                      ", Stage: " + KSPSerialPort.VControls.Stage.ToString());
                      */
 
-                    //if (FlightInputHandler.RCSLock != KSPSerialPort.VControls.RCS)
+                    // SAS and RCS are push buttons on the board, and the firmware flips its bit on every press: any
+                    // change of the bit is one press and toggles the vessel's state. Copying the bit (SetGroup) lost
+                    // presses once SAS / RCS had been changed in the game (T / R keys), because the bit then already
+                    // matched what the board meant to send.
                     if (KSPSerialPort.VControls.RCS != KSPSerialPort.VControlsOld.RCS)
                     {
-                        ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.RCS, KSPSerialPort.VControls.RCS);
+                        ActiveVessel.ActionGroups.ToggleGroup(KSPActionGroup.RCS);
                         KSPSerialPort.VControlsOld.RCS = KSPSerialPort.VControls.RCS;
-                        //ScreenMessages.PostScreenMessage("RCS: " + KSPSerialPort.VControls.RCS.ToString(), 10f, KSPIOScreenStyle);
+                        KSPLogQueue.Log("KSPSerialIO[CTRL]: RCS button: RCS toggled to " + ActiveVessel.ActionGroups[KSPActionGroup.RCS]);
                     }
 
-                    //if (ActiveVessel.ctrlState.killRot != KSPSerialPort.VControls.SAS)
                     if (KSPSerialPort.VControls.SAS != KSPSerialPort.VControlsOld.SAS)
                     {
-                        ActiveVessel.ActionGroups.SetGroup(KSPActionGroup.SAS, KSPSerialPort.VControls.SAS);
+                        ActiveVessel.ActionGroups.ToggleGroup(KSPActionGroup.SAS);
                         KSPSerialPort.VControlsOld.SAS = KSPSerialPort.VControls.SAS;
-                        //ScreenMessages.PostScreenMessage("SAS: " + KSPSerialPort.VControls.SAS.ToString(), 10f, KSPIOScreenStyle);
+                        KSPLogQueue.Log("KSPSerialIO[CTRL]: SAS button: SAS toggled to " + ActiveVessel.ActionGroups[KSPActionGroup.SAS]);
                     }
 
                     if (KSPSerialPort.VControls.Lights != KSPSerialPort.VControlsOld.Lights)

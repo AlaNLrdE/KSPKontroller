@@ -345,6 +345,8 @@ class BoardLink:
             self.status = BoardStatus("error", name, "no handshake reply (3, 1, 4)")
             return
         log.info("board on %s answered the handshake", name)
+        if hasattr(self.sim, "board_linked"):
+            self.sim.board_linked()
         st = BoardStatus("linked", name, "handshake OK")
         self.status = st
         self._event("handshake OK on %s" % name)

@@ -35,7 +35,7 @@
 #define SASPIN 2        ///< SAS push button: each press toggles SAS on/off (internal pull-up, wire to GND). It used to be the stage button
 #define RCSPIN 9        ///< RCS push button: each press toggles RCS on/off (internal pull-up, wire to GND)
 #define SCREENPIN 3     ///< Screen button: cycles the LED matrix screens (internal pull-up, wire to GND)
-#define CG1PIN 10       ///< Custom action group 1 switch
+#define CG1PIN -1       ///< Custom action group 1 switch: none wired, disabled (was 10; set the pin to enable)
 #define THROTTLEPIN -1  ///< Throttle potentiometer: none wired, so the throttle is sent as 0 (set the analog pin, e.g. 0 for A0, to enable)
 
 #define LINKRESETMS 30000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)

@@ -35,15 +35,15 @@ void controls() {
   static unsigned long lastSendMs = 0;
   if (Connected) {
 
-    // SAS button: each press toggles SAS. The plugin applies the SAS bit as a level, so the bit is set to the
-    // opposite of the SAS state KSP reports (AGSAS) on the first sample that differs from the idle level, and
-    // left there. Contact bounce falls inside SASDEBOUNCE and is ignored. The idle level is learned while the
-    // link is down, so the button works wired to GND (idle high, pull-up) or to +V with a pull-down, and a
-    // pin that is stuck at one level never toggles SAS by itself.
+    // SAS button: each press toggles SAS. The bit is flipped on the first sample that differs from the idle
+    // level and left there; the plugin (0.19.3.14+) toggles the vessel's SAS on every change of the bit, so a
+    // press works whatever the game's SAS state is (changed with T in the game, or not). Contact bounce falls
+    // inside SASDEBOUNCE and is ignored. The idle level is learned while the link is down, so the button works
+    // wired to GND (idle high, pull-up) or to +V with a pull-down, and a stuck pin never toggles SAS by itself.
     boolean sasPressed = (digitalRead(SASPIN) != sasIdle);
     if (sasPressed && !sasPressedBefore && now > sasIgnoreUntil) {
       sasIgnoreUntil = now + SASDEBOUNCE;
-      MainControls(SAS, !ControlStatus(AGSAS));
+      MainControls(SAS, !bitRead(CPacket.MainControls, SAS));
     }
     sasPressedBefore = sasPressed;
 
@@ -62,21 +62,24 @@ void controls() {
     MainControls(STAGE, now < stageHoldUntil);
 #endif
 
-    // RCS button: each press toggles RCS, exactly like the SAS button above (the bit is set to the opposite of
-    // the RCS state KSP reports, AGRCS, and left there; bounce inside RCSDEBOUNCE is ignored; idle level learned
-    // while the link is down). It used to be read as a switch level, so a push button only held RCS on while
-    // pressed.
+    // RCS button: each press toggles RCS, exactly like the SAS button above (the bit flips; bounce inside
+    // RCSDEBOUNCE is ignored; idle level learned while the link is down). It used to be read as a switch level,
+    // so a push button only held RCS on while pressed.
     boolean rcsPressed = (digitalRead(RCSPIN) != rcsIdle);
     if (rcsPressed && !rcsPressedBefore && now > rcsIgnoreUntil) {
       rcsIgnoreUntil = now + RCSDEBOUNCE;
-      MainControls(RCS, !ControlStatus(AGRCS));
+      MainControls(RCS, !bitRead(CPacket.MainControls, RCS));
     }
     rcsPressedBefore = rcsPressed;
 
+#if CG1PIN >= 0
     if (digitalRead(CG1PIN))   //--------- This is how you do control groups
       ControlGroups(1, HIGH);
     else
       ControlGroups(1, LOW);
+#else
+    ControlGroups(1, LOW);     // no switch wired: an open pull-up input would read as group 1 ON
+#endif
 
     //This is an example of reading analog inputs to an axis, with deadband and limits
 #if THROTTLEPIN >= 0
@@ -123,7 +126,9 @@ void controlsInit() {
   pinMode(STAGEPIN, INPUT_PULLUP);
 #endif
   pinMode(RCSPIN, INPUT_PULLUP);
+#if CG1PIN >= 0
   pinMode(CG1PIN, INPUT_PULLUP);
+#endif
 }
 
 /**
