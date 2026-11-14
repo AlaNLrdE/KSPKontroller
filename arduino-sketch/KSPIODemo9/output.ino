@@ -21,14 +21,33 @@ void output() {
  * Use this function as the template for adding more switches, buttons and axes.
  */
 void controls() {
-  static boolean stagePressedBefore = false;  // button state at the previous sample (edge detection)
+  static boolean stagePressedBefore = false;  // STAGE button, only when STAGEPIN is assigned
   static unsigned long stageHoldUntil = 0;    // the STAGE bit stays set until this time (ms)
+  static int rcsRawBefore = LOW;              // RCS switch level at the previous sample
+  static int rcsStable = LOW;                 // RCS switch level once it has stopped bouncing
+  static unsigned long rcsChangedAt = 0;      // when the raw RCS level last changed (ms)
+  static boolean sasPressedBefore = false;    // button state at the previous sample (edge detection)
+  static unsigned long sasIgnoreUntil = 0;    // contact bounce is ignored until this time (ms)
   static int stageIdle = HIGH;                // idle level of the stage pin, learned while not connected
+  static int sasIdle = HIGH;                  // idle level of the SAS pin, learned while not connected
   static ControlPacket lastSent;
   static boolean haveLast = false;
   static unsigned long lastSendMs = 0;
   if (Connected) {
 
+    // SAS button: each press toggles SAS. The plugin applies the SAS bit as a level, so the bit is set to the
+    // opposite of the SAS state KSP reports (AGSAS) on the first sample that differs from the idle level, and
+    // left there. Contact bounce falls inside SASDEBOUNCE and is ignored. The idle level is learned while the
+    // link is down, so the button works wired to GND (idle high, pull-up) or to +V with a pull-down, and a
+    // pin that is stuck at one level never toggles SAS by itself.
+    boolean sasPressed = (digitalRead(SASPIN) != sasIdle);
+    if (sasPressed && !sasPressedBefore && now > sasIgnoreUntil) {
+      sasIgnoreUntil = now + SASDEBOUNCE;
+      MainControls(SAS, !ControlStatus(AGSAS));
+    }
+    sasPressedBefore = sasPressed;
+
+#if STAGEPIN >= 0
     // Stage button (same as the space bar). The plugin stages once on each rising edge of the STAGE bit and
     // only looks at the bit once per game frame, so a short tap must not be missed: the bit is raised on the
     // first sample that differs from the idle level and held for STAGEHOLD ms. Contact bounce falls inside
@@ -41,11 +60,14 @@ void controls() {
     }
     stagePressedBefore = stagePressed;
     MainControls(STAGE, now < stageHoldUntil);
+#endif
 
-    if (digitalRead(RCSPIN))
-      MainControls(RCS, HIGH);
-    else
-      MainControls(RCS, LOW);
+    // RCS switch with debounce: a new level is accepted only after it has stayed the same for RCSDEBOUNCE ms,
+    // so contact bounce never sends spurious RCS toggles to KSP.
+    int rcsRaw = digitalRead(RCSPIN);
+    if (rcsRaw != rcsRawBefore) { rcsRawBefore = rcsRaw; rcsChangedAt = now; }
+    if (now - rcsChangedAt >= RCSDEBOUNCE) rcsStable = rcsRaw;
+    MainControls(RCS, rcsStable ? HIGH : LOW);
 
     if (digitalRead(CG1PIN))   //--------- This is how you do control groups
       ControlGroups(1, HIGH);
@@ -72,15 +94,23 @@ void controls() {
     }
   } else {
     haveLast = false;
-    stageIdle = digitalRead(STAGEPIN);   // learn the idle level; keep the button released-looking until connected
+    sasIdle = digitalRead(SASPIN);   // learn the idle level; keep the button released-looking until connected
+    sasPressedBefore = false;
+    sasIgnoreUntil = 0;
+#if STAGEPIN >= 0
+    stageIdle = digitalRead(STAGEPIN);
     stagePressedBefore = false;
     stageHoldUntil = 0;
+#endif
   }
 }
 
 /// @brief Configures the input pins (all switches use the internal pull-up).
 void controlsInit() {
+  pinMode(SASPIN, INPUT_PULLUP);
+#if STAGEPIN >= 0
   pinMode(STAGEPIN, INPUT_PULLUP);
+#endif
   pinMode(RCSPIN, INPUT_PULLUP);
   pinMode(CG1PIN, INPUT_PULLUP);
 }

@@ -31,7 +31,8 @@
 #define CG1LED 11   ///< Mirrors custom action group 1
 
 //pins for input
-#define STAGEPIN 2      ///< Stage push button (internal pull-up: pressed = connected to GND)
+#define STAGEPIN -1     ///< Stage push button: no pin assigned (set a pin number to enable; internal pull-up, wire to GND)
+#define SASPIN 2        ///< SAS push button: each press toggles SAS on/off (internal pull-up, wire to GND). It used to be the stage button
 #define RCSPIN 9        ///< RCS switch
 #define SCREENPIN 3     ///< Screen button: cycles the LED matrix screens (internal pull-up, wire to GND)
 #define CG1PIN 10       ///< Custom action group 1 switch
@@ -40,6 +41,8 @@
 #define LINKRESETMS 30000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
+#define RCSDEBOUNCE 50 ///< Milliseconds the RCS switch must hold a new level before it is accepted (contact bounce)
+#define SASDEBOUNCE 150 ///< Milliseconds after a SAS button press during which further edges are ignored (contact bounce)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
 
 //Input enums
@@ -234,7 +237,7 @@ struct DebugPacket {
   uint32_t txMaxUs;        ///< Longest single packet send since the previous report, microseconds
   uint32_t sinceRxMs;      ///< Milliseconds since the last valid packet from KSP
   uint16_t resetCause;     ///< RA4M1 RSTSR0 (low byte) and RSTSR1 (high byte) read at boot: bit 0 power on, bit 8/9 watchdog, bit 10 software
-  byte flags;              ///< bit0 Connected, bit2 stage pin level now, bit3 watchdog started, bit4 ever connected
+  byte flags;              ///< bit0 Connected, bit2 SAS pin level now, bit3 watchdog started, bit4 ever connected
   int16_t rxAvail;         ///< Bytes waiting in the serial receive buffer
   uint16_t txSkipped;      ///< Frames not sent because the host had the port closed (cumulative since boot)
   uint16_t a0;             ///< Raw reading of the throttle analog pin
