@@ -6,7 +6,10 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from . import physics
+from . import arduino, physics
+
+SAS_MODES = ("Stability assist", "Prograde", "Retrograde", "Normal", "Anti-normal", "Radial in", "Radial out",
+             "Target", "Anti-target", "Maneuver")  # NavballSASMode low nibble 1-10
 
 
 def _dist(m: float) -> str:
@@ -40,10 +43,11 @@ class App:
                             command=lambda: sim.set_scene(self.scene.get())).pack(anchor="w")
         self.board_text = tk.StringVar()
         self.krpc_text = tk.StringVar()
-        for title, var in (("Arduino (KSPSerialIO protocol)", self.board_text), ("Raspberry Pi (kRPC)", self.krpc_text)):
+        for title, var, width in (("Arduino (KSPSerialIO protocol)", self.board_text, 64),
+                                  ("Raspberry Pi (kRPC)", self.krpc_text, 40)):
             f = ttk.LabelFrame(top, text=title)
             f.pack(side="left", fill="both", expand=True, padx=4)
-            ttk.Label(f, textvariable=var, justify="left", width=40).pack(anchor="w", padx=4, pady=2)
+            ttk.Label(f, textvariable=var, justify="left", width=width).pack(anchor="w", padx=4, pady=2)
 
         mid = ttk.Frame(self.root)
         mid.pack(fill="x", **pad)
@@ -84,9 +88,13 @@ class App:
         self.groups_text = tk.StringVar()
         ttk.Label(ctl, textvariable=self.groups_text).pack(anchor="w", padx=4)
 
+        nb = ttk.Notebook(self.root)
+        nb.pack(fill="x", **pad)
+        self.notebook = nb
+
         # Edit the current vessel: the same vessel keeps flying from the new state (no vessel switch)
-        ef = ttk.LabelFrame(self.root, text="Set the current vessel (Enter or Apply)")
-        ef.pack(fill="x", **pad)
+        ef = ttk.Frame(nb)
+        nb.add(ef, text="Set the current vessel")
         self.edit = {}
         fields = (("apoapsis", "Apoapsis km", "250"), ("periapsis", "Periapsis km", "80"),
                   ("inclination", "Inclination °", "0.4"), ("anomaly", "Position ° from Pe", "0"),
@@ -105,8 +113,8 @@ class App:
         ttk.Label(ef, textvariable=self.edit_msg).grid(row=2, column=0, columnspan=len(fields) + 3, sticky="w", padx=4)
 
         # Manual values: physics frozen, every reported value typed by hand (formats, colours, edge cases)
-        mf = ttk.LabelFrame(self.root, text="Manual values (sent to the board and the HMI exactly as typed)")
-        mf.pack(fill="x", **pad)
+        mf = ttk.Frame(nb)
+        nb.add(mf, text="Manual values (sent exactly as typed)")
         self.manual_on = tk.BooleanVar(value=False)
         ttk.Checkbutton(mf, text="Manual mode: freeze the physics and send these values", variable=self.manual_on,
                         command=self._manual_toggle).grid(row=0, column=0, columnspan=4, sticky="w", padx=4)
@@ -135,13 +143,163 @@ class App:
                                              "'inf' and 'nan' are accepted, to test how the screens cope.")
         ttk.Label(mf, textvariable=self.manual_msg).grid(row=last + 1, column=2, columnspan=5, sticky="w", padx=4)
         self._manual_enable(False)
+        self._build_game_tab(nb)
+        self._build_board_tab(nb)
 
-        vf = ttk.LabelFrame(self.root, text="Vessel")
+        vf =ttk.LabelFrame(self.root, text="Vessel")
         vf.pack(fill="both", expand=True, **pad)
         self.vessel_text = tk.StringVar()
         ttk.Label(vf, textvariable=self.vessel_text, justify="left", font=("Consolas", 11)).pack(anchor="w", padx=6, pady=4)
 
         self.root.after(200, self._refresh)
+
+    # -- game state and caution / warning triggers --------------------------------------------------
+    def _build_game_tab(self, nb) -> None:
+        sim = self.sim
+        gf = ttk.Frame(nb)
+        nb.add(gf, text="Game state / LEDs")
+        ttk.Label(gf, text="What KSP reports as active (VesselData.ActionGroups). Change it here as keys in the game "
+                           "would; the board's SAS / RCS buttons send the opposite of it and the plugin applies a bit "
+                           "only when it changes.", wraplength=880, justify="left").grid(
+            row=0, column=0, columnspan=12, sticky="w", padx=4)
+        self.game_vars = {}
+        for col, name in enumerate(("sas", "rcs", "lights", "gear", "brakes", "abort")):
+            var = tk.BooleanVar(value=sim.game[name])
+            ttk.Checkbutton(gf, text=name.upper(), variable=var,
+                            command=lambda n=name, v=var: sim.set_game(**{n: v.get()})).grid(row=1, column=col, sticky="w", padx=4)
+            self.game_vars[name] = var
+        ttk.Label(gf, text="SAS mode").grid(row=1, column=6, sticky="e", padx=4)
+        self.sas_mode = tk.StringVar(value=SAS_MODES[sim.sas_mode - 1])
+        box = ttk.Combobox(gf, textvariable=self.sas_mode, values=SAS_MODES, state="readonly", width=16)
+        box.grid(row=1, column=7, columnspan=3, sticky="w", padx=4)
+        box.bind("<<ComboboxSelected>>", lambda _e: setattr(sim, "sas_mode", SAS_MODES.index(self.sas_mode.get()) + 1))
+        self.group_vars = {}
+        ag = ttk.Frame(gf)
+        ag.grid(row=2, column=0, columnspan=12, sticky="w", padx=4)
+        ttk.Label(ag, text="Action groups").pack(side="left")
+        for n in range(1, 11):
+            var = tk.BooleanVar(value=bool(sim.game_groups >> n & 1))
+            ttk.Checkbutton(ag, text=str(n), variable=var,
+                            command=lambda n=n, v=var: sim.set_game_group(n, v.get())).pack(side="left")
+            self.group_vars[n] = var
+        self.board_bits = tk.StringVar()
+        ttk.Label(gf, textvariable=self.board_bits).grid(row=3, column=0, columnspan=12, sticky="w", padx=4)
+
+        # Forced values: pinned on top of the flight model and manual mode, to light the caution / warning LEDs
+        tf = ttk.LabelFrame(gf, text="Caution / warning triggers (tick Force to pin the value)")
+        tf.grid(row=4, column=0, columnspan=12, sticky="we", padx=4, pady=4)
+        self.force_on, self.force_val = {}, {}
+        rows = (("g_force", "G force (g)", 0, 12, "yellow above %d g, red above %d g" % (arduino.GCAUTION, arduino.GWARN)),
+                ("stage_fuel", "Stage fuel (%)", 0, 100, "yellow below %.0f %%, red below %.0f %% (LiquidFuelS / LiquidFuelTotS)"
+                 % (arduino.FUELCAUTION, arduino.FUELWARN)),
+                ("max_overheat", "Max overheat (%)", 0, 100, "MaxOverHeat: sent, but no LED or screen of the firmware uses it"))
+        for r, (key, label, lo, hi, note) in enumerate(rows):
+            on = tk.BooleanVar(value=False)
+            val = tk.DoubleVar(value=lo)
+            ttk.Checkbutton(tf, text="Force " + label, variable=on,
+                            command=lambda k=key: self._force(k)).grid(row=r, column=0, sticky="w", padx=4)
+            ttk.Scale(tf, from_=lo, to=hi, variable=val, orient="horizontal", length=220,
+                      command=lambda _v, k=key: self._force(k)).grid(row=r, column=1, padx=4)
+            ttk.Label(tf, textvariable=val, width=6).grid(row=r, column=2, sticky="w")
+            ttk.Label(tf, text=note).grid(row=r, column=3, sticky="w", padx=4)
+            self.force_on[key], self.force_val[key] = on, val
+        self.leds_text = tk.StringVar()
+        ttk.Label(gf, textvariable=self.leds_text, font=("Consolas", 10)).grid(row=5, column=0, columnspan=12, sticky="w", padx=4)
+
+    def _force(self, key: str) -> None:
+        val = self.force_val[key]
+        val.set(round(val.get(), 1))
+        self.sim.set_forced(key, val.get() if self.force_on[key].get() else None)
+
+    def _refresh_game(self) -> None:
+        sim = self.sim
+        with sim.lock:
+            for name, var in self.game_vars.items():
+                if var.get() != sim.game[name]:
+                    var.set(sim.game[name])
+            for n, var in self.group_vars.items():
+                if var.get() != bool(sim.game_groups >> n & 1):
+                    var.set(bool(sim.game_groups >> n & 1))
+            b = sim.last_board
+            self.board_bits.set("Last ControlPacket bits from the board: SAS %d  RCS %d  lights %d  gear %d  "
+                                "brakes %d  AG1 %d%s" % (b.sas, b.rcs, b.lights, b.gear, b.brakes, b.groups >> 1 & 1,
+                                                         "" if sim.board_driven else "   (board not driving)"))
+            f = arduino.unpack_vessel(arduino.encode_vessel(sim.vessel, 0.0, sim.reported()))
+        e = arduino.expected_leds(f)
+        on = lambda x: "ON " if x else "off"  # noqa: E731
+        self.leds_text.set("The board should show: green ON while linked, yellow %s%s, red %s%s\n"
+                           "SAS LED %s  RCS LED %s  CG1 LED %s   (stage fuel %.0f %%, G %.2f, MaxOverHeat %d)" % (
+                               on(e["yellow"]), " (" + ", ".join(e["yellow"]) + ")" if e["yellow"] else "",
+                               on(e["red"]), " (" + ", ".join(e["red"]) + "; the matrix flashes inverted)" if e["red"] else "",
+                               on(e["sas"]), on(e["rcs"]), on(e["cg1"]),
+                               100 * f["LiquidFuelS"] / f["LiquidFuelTotS"], f["G"], f["MaxOverHeat"]))
+
+    # -- board tests: LED matrix screens, link tests, DebugPacket --------------------------------------
+    def _build_board_tab(self, nb) -> None:
+        bf = ttk.Frame(nb)
+        nb.add(bf, text="Board tests")
+        mx = ttk.LabelFrame(bf, text="LED matrix: DisplayCommand (id 2) forces a screen for %.0f s" % arduino.DISPLAY_FORCE_S)
+        mx.grid(row=0, column=0, sticky="nw", padx=4, pady=2)
+        self.hold = tk.BooleanVar(value=False)
+        for i, (label, screen) in enumerate(arduino.DISPLAY_SCREENS):
+            ttk.Button(mx, text="%s (%d)" % (label, screen), width=19,
+                       command=lambda s=screen: self._display(s)).grid(row=i // 4, column=i % 4, padx=1, pady=1)
+        last = (len(arduino.DISPLAY_SCREENS) - 1) // 4 + 1
+        ttk.Checkbutton(mx, text="Keep it: repeat the command every 3 s", variable=self.hold,
+                        command=self._hold_toggle).grid(row=last, column=0, columnspan=4, sticky="w", padx=4)
+
+        lk = ttk.LabelFrame(bf, text="Link tests")
+        lk.grid(row=0, column=1, sticky="nw", padx=4, pady=2)
+        self.pause = tk.BooleanVar(value=False)
+        ttk.Checkbutton(lk, text="Pause telemetry (idle after %.0f s, board reset after %.0f s)" % (
+            arduino.IDLETIMER_S, arduino.LINKRESET_S), variable=self.pause, command=self._pause_toggle).pack(anchor="w", padx=4)
+        for text, cmd in (("Send a frame with a bad checksum", lambda b: b.send_bad_checksum()),
+                          ("Send a frame with a wrong size", lambda b: b.send_bad_size()),
+                          ("Re-handshake now", lambda b: (b.rehandshake(), "re-handshake requested")[1])):
+            ttk.Button(lk, text=text, command=lambda c=cmd: self._board_cmd(c)).pack(fill="x", padx=4, pady=1)
+        self.board_msg = tk.StringVar(value="")
+        ttk.Label(lk, textvariable=self.board_msg, wraplength=330, justify="left").pack(anchor="w", padx=4)
+
+        self.matrix_text = tk.StringVar()
+        ttk.Label(bf, textvariable=self.matrix_text, font=("Consolas", 10), justify="left").grid(
+            row=0, column=2, sticky="nw", padx=6)
+        self.events_text = tk.StringVar()
+        ttk.Label(bf, textvariable=self.events_text, font=("Consolas", 9), justify="left").grid(
+            row=1, column=0, columnspan=3, sticky="w", padx=4)
+
+    def _board_cmd(self, cmd) -> None:
+        self.board_msg.set("disabled (--no-board)" if self.board is None else cmd(self.board))
+
+    def _display(self, screen: int) -> None:
+        if self.board is not None and self.hold.get():
+            self.board.hold_screen = None if screen == 255 else screen
+        self._board_cmd(lambda b: b.send_display(screen))
+
+    def _hold_toggle(self) -> None:
+        if self.board is not None and not self.hold.get():
+            self.board.hold_screen = None
+
+    def _pause_toggle(self) -> None:
+        if self.board is None:
+            self.board_msg.set("disabled (--no-board)")
+            self.pause.set(False)
+            return
+        self.board.pause_telemetry(self.pause.get())
+
+    def _refresh_board_tab(self) -> None:
+        b = self.board
+        if b is None:
+            self.matrix_text.set("no board (--no-board)")
+            return
+        if self.pause.get() != (b.paused_since is not None):
+            self.pause.set(b.paused_since is not None)  # the link ends the pause when the board reconnects
+        d = b.status.debug
+        if d is None:
+            self.matrix_text.set("LED matrix (from the DebugPacket):\nno DebugPacket yet")
+        else:
+            age = time.monotonic() - b.status.debug_at
+            self.matrix_text.set("LED matrix, %.1f s ago:\n" % age + "\n".join(arduino.matrix_rows(d["matrix"])))
+        self.events_text.set("\n".join(b.events) if b.events else "No link test yet.")
 
     def _number(self, key: str) -> float:
         text = self.edit[key].get().strip().replace(",", ".")
@@ -240,7 +398,8 @@ class App:
                                 "board uptime %s" % (
                                     b.state.upper(), b.port, b.detail, b.sent, b.received,
                                     "%.1f s ago" % age if math.isfinite(age) else "never", b.bad,
-                                    _time(b.uptime_ms / 1000) if b.uptime_ms else "--"))
+                                    _time(b.uptime_ms / 1000) if b.uptime_ms else "--")
+                                + ("\n" + arduino.debug_summary(b.debug) if b.debug else "\nno DebugPacket yet"))
         if self.server is None:
             self.krpc_text.set("disabled (--no-krpc)")
         elif self.server.error:
@@ -290,6 +449,8 @@ class App:
                                               "Stage fuel", "%.0f %%" % lf)
                 + "%-14s %-14s %-14s %s\n" % ("G", "%.2f" % r["g_force"], "Heat", "%.0f %%" % (v.heat * 100))
                 + "%-14s %-14s %-14s %s" % ("Mission time", _time(v.mission_time), "UT", _time(sim.ut)))
+        self._refresh_game()
+        self._refresh_board_tab()
         self.root.after(200, self._refresh)
 
     def run(self) -> None:

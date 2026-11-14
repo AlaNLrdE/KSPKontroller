@@ -58,8 +58,27 @@ The window
   *Use the board's throttle* (on by default; ``--no-board-throttle``) can be unticked: the engine then
   follows the window's slider while everything else still comes from the board. A throttle axis that
   does not rest at 0 % (the panel's reads about 19 %) otherwise keeps the engine burning, as it would in KSP.
-* Link panels: board state, packets each way, bad frames, the board's uptime from its DebugPacket; the kRPC
-  clients connected with their calls and streams.
+* **Game state / LEDs** tab: what KSP reports as active in ``VesselData.ActionGroups`` (SAS, RCS, lights,
+  gear, brakes, abort, action groups 1-10) and the SAS mode (the icon of the SAS matrix screen). Change it as
+  keys in the game would, without touching the board: the SAS, RCS and group 1 LEDs follow. The board's
+  bits are applied the way KSPSerialIO does: a bit sets the game state to its level only when it differs from
+  the bit the board sent before, so the SAS / RCS buttons toggle (they send the opposite of the reported state)
+  and a state changed in this tab survives the keep-alives. Pressing a board button after such a change does
+  nothing, as with the real plugin (see :doc:`firmware`, *Feature status*).
+  The *caution / warning triggers* pin G force, stage fuel and ``MaxOverHeat`` (overheat is sent, but the
+  firmware does not use it) over the flight model and manual mode; the firmware thresholds are shown next
+  to them, and a line below says which LEDs the board should light with the values it is receiving.
+* **Board tests** tab: one button per LED matrix screen sends a ``DisplayCommand`` (id 2), which forces that
+  screen for 4 s (*Keep it* repeats it every 3 s; *Automatic* hands back). *Pause telemetry* stops every frame
+  to the board: it should go idle after 2 s (its last packet arrives about 2 s into the pause) and reset
+  itself after 30 s; the link then reconnects and ends the pause. Untick earlier and the next ``VesselData``
+  reconnects it. *Bad checksum* and *wrong size* frames should raise ``rx_bad_cs`` and ``rx_bad_size`` in the
+  next DebugPacket; *Re-handshake* repeats the handshake on the open port. The event list shows what was sent
+  and what the board reported (counters that grew, a reboot and its cause), and the matrix picture is the one
+  in the last DebugPacket.
+* Link panels: board state, packets each way, bad frames, the board's DebugPacket decoded (uptime, loops,
+  loop and send maxima, receive counters, reset cause, flags); the kRPC clients connected with their calls
+  and streams.
 
 The flight model
 ----------------
@@ -69,8 +88,8 @@ rotation and 70 km atmosphere), RK4 integration, exponential air density with dr
 stand on and land on, and three identical stages of about 4.8 km/s each. Thrust follows a fixed ascent
 guidance (straight up, a gradual turn to the horizon by 45 km, then prograde), so a launch needs only the
 throttle: full throttle from the pad reaches orbit. The STAGE bit stages on its rising edge, like the plugin.
-SAS, RCS, lights, gear, brakes, abort and the custom action groups are echoed in ``ActionGroups`` exactly as
-received, which is what the board's LEDs show.
+SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``ActionGroups`` from the game state
+(above), which is what the board's LEDs show.
 
 Not modelled: other bodies and sphere of influence changes, attitude (pitch/roll/yaw are shown, not
 applied), maneuver nodes and targets (sent as 0), electric charge use beyond a slow drain.
@@ -79,8 +98,12 @@ Extending it
 ------------
 
 * Every value sent comes from ``Simulator.reported()`` (the flight model's ``Vessel.report()``, overlaid with the
-  manual values). A new reported value goes into ``REPORTED_FIELDS`` and ``report()``; the window's manual
-  panel picks it up by itself.
+  manual values, then the game state (``action_groups``, ``sas_mode``) and the forced values). A new reported
+  value goes into ``REPORTED_FIELDS`` and ``report()``; the window's manual panel picks it up by itself.
+* Board-side test packets (``display_frame``, ``bad_checksum_frame``, ``decode_debug``) and the firmware
+  thresholds (``GCAUTION`` ... ``LINKRESET_S``) are in ``arduino.py``; keep them in step with ``KSPIODemo9.ino``.
+  ``BoardLink._session`` takes any object with ``read``/``write``, so ``test_kspsim.py`` runs it against a
+  fake board.
 * A new HMI value read through kRPC: add the procedure to ``KrpcServer._space_center`` (names and types are
   in the krpc client stubs, ``krpc/services/spacecenter.py``) and to ``test_hmi_client_end_to_end``.
 * A new ``VesselData`` field or packet change: ``VESSEL_DATA`` / ``VESSEL_FIELDS`` in ``arduino.py`` mirror the

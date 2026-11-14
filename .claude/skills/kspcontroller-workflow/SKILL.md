@@ -38,6 +38,13 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.
 - `Serial.availableForWrite()` always reads 0 on this core: do not trust it.
+- The plugin applies SAS/RCS/lights/... bits only when they differ from the previous packet (`VControlsOld`), and the
+  firmware's SAS/RCS button sends `!AGSAS`/`!AGRCS`. So after a toggle in the game (T/R) the next board press repeats the
+  same bit and is ignored. `tools/kspsim` models this (test `test_board_buttons_toggle_like_the_plugin`).
+- The CG1 switch (pin 10, pull-up) is sent as the raw level: open or unwired means action group 1 ON.
+- `sed -i` in Git Bash rewrites a CRLF file with LF endings: use the Edit tool or a Python helper instead.
+- `BoardLink._session(ser, name)` accepts any object with `read`/`write`/`reset_input_buffer`: link behaviour can be
+  unit tested with a fake board (see `FakeBoard` in `tools/kspsim/test_kspsim.py`).
 
 ## Never call Debug.Log from a worker thread
 
