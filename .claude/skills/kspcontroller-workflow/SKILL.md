@@ -16,6 +16,23 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 3. Tell the peer it is done. Flash: `./ci build_sketch && ./ci upload_sketch COM5`, then `./ci verify --board --port COM5`.
 4. If the upload says "No device found": the board is frozen. Double-tap RESET (orange LED pulses), or unplug USB 10 s.
 
+## Before the user opens KSP (the test must be able to work)
+
+The user's time in the game is the expensive part. When they say they will open KSP, first check, then answer:
+1. `./ci verify` with KSP closed: 0 FAIL, and read every WARN that concerns the test (`kRPC:`, `hmi:`, install).
+2. Say plainly what this session can and cannot test. Missing mod, firewall rule or Pi setup: stop them and fix
+   it (or hand them the admin / sudo command) before they launch. On 2026-11-14 a whole session was wasted
+   because kRPC was not installed and that was said only after the game was open.
+3. Remind them: the board and the HMI get data only **in flight** (not main menu / space center), and the
+   simulator (`./ci sim`) cannot run at the same time (COM5 and port 50000).
+4. Only then start a log monitor agent (waits for KSP_x64, streams KSP.log, `save_log` at exit).
+
+## Flashing while other sessions exist
+
+Other Claude sessions of this repo may be using the board. Before and after `./ci upload_sketch`, SendMessage each
+peer from `ListAgents` ("flashing COM5 now" / "flash done"). The firmware changes need the user's explicit OK
+for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is that OK.
+
 ## Reading a game session
 
 - `./ci save_log LABEL` first (KSP overwrites the log). Then `./ci verify --log build/perf/LABEL/KSP.log`.
@@ -38,6 +55,10 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.
 - `Serial.availableForWrite()` always reads 0 on this core: do not trust it.
+- SAS (pin 2) and RCS (pin 9) are push buttons: each press sets the bit to the opposite of the reported AGSAS /
+  AGRCS. A switch-level read (old RCS code) only held RCS on while pressed (fixed 2026-11-14).
+- Disabled inputs use `-1` pin defines with `#if PIN >= 0` around every use (STAGEPIN, THROTTLEPIN), and the
+  docs pin table says so; `check_pins` only parses non-negative pins.
 - The plugin applies SAS/RCS/lights/... bits only when they differ from the previous packet (`VControlsOld`), and the
   firmware's SAS/RCS button sends `!AGSAS`/`!AGRCS`. So after a toggle in the game (T/R) the next board press repeats the
   same bit and is ignored. `tools/kspsim` models this (test `test_board_buttons_toggle_like_the_plugin`).
