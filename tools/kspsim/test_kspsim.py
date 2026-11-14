@@ -439,16 +439,25 @@ class KrpcTest(unittest.TestCase):
             wait(lambda s: s.nav is not None)
             self.assertEqual(src.latest().nav.speed_mode, 'orbit')
             self.assertAlmostEqual(src.latest().nav.speed, src.latest().orbital_speed, delta=1)
+            initial_axes = src.latest().orbit_state.axes
             sim.set_manual_mode(True)
+            circular_speed = math.sqrt(physics.MU / 700000)
             sim.set_manual_values(pitch=35, heading=135, roll=-45, speed_mode=2,
                                   target_enabled=1, relative_up=3, relative_north=0, relative_east=4,
-                                  node_enabled=1, node_dv=200, node_remaining=125, node_time=240)
+                                  node_enabled=1, node_dv=200, node_remaining=125, node_time=240,
+                                  position_x=700000, position_y=0, position_z=0,
+                                  velocity_x=0, velocity_y=0, velocity_z=circular_speed + .05)
             s = wait(lambda s: s.nav is not None and s.nav.node_remaining == 125 and s.nav.speed_mode == 'target')
             self.assertEqual((s.nav.pitch, s.nav.heading, s.nav.roll), (35, 135, -45))
             self.assertAlmostEqual(s.nav.speed, 5)
             self.assertIsNotNone(s.nav.target)
             self.assertIsNotNone(s.nav.maneuver)
             self.assertGreater(s.nav.burn_seconds, 0)
+            before = s.orbit_state
+            sim.set_manual_values(velocity_z=circular_speed - .05, true_anomaly=math.pi)
+            s = wait(lambda s: s.orbit_state is not None and abs(s.orbit_state.velocity[2] - (circular_speed - .05)) < 1e-6)
+            self.assertEqual(s.orbit_state.axes, initial_axes)
+            self.assertEqual(s.orbit_state.vessel_point, before.vessel_point)
             sim.set_manual_values(electric_charge=0, electric_capacity=200, liquid_fuel=10, liquid_capacity=100,
                                   monoprop_capacity=0, stage_number=1, stage_delta_v=450, stage_parts=3)
             s = wait(lambda s: s.systems is not None and s.systems.current_stage == 1

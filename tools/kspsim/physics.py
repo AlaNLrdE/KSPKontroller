@@ -63,6 +63,9 @@ RESOURCE_KEYS = ('electric_charge', 'electric_capacity', 'liquid_fuel', 'liquid_
                  'solid_fuel', 'solid_capacity', 'xenon_gas', 'xenon_capacity',
                  'stage_number', 'stage_delta_v', 'stage_parts')
 REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0) for key in RESOURCE_KEYS)
+REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), unit, 1.0)
+                        for prefix, unit in (('position', 'm'), ('velocity', 'm/s'))
+                        for key in (prefix + '_x', prefix + '_y', prefix + '_z'))
 
 
 def attitude_rotation(pitch, heading, roll):
@@ -215,6 +218,8 @@ class Vessel:
             solid_fuel=0, solid_capacity=0, xenon_gas=0, xenon_capacity=0,
             stage_number=self.stage, stage_delta_v=MAX_ACCEL * BURN_TIME * self.liquid_fuel / LIQUID_FUEL,
             stage_parts=8,
+            position_x=self.x, position_y=0, position_z=self.y,
+            velocity_x=self.vx, velocity_y=0, velocity_z=self.vy,
             name=self.name, situation=self.situation(), altitude=self.altitude, vertical_speed=self.vertical_speed,
             orbital_speed=self.orbital_speed, surface_speed=self.surface_speed, apoapsis=el.apoapsis,
             periapsis=el.periapsis, time_to_apoapsis=el.time_to_apoapsis, time_to_periapsis=el.time_to_periapsis,

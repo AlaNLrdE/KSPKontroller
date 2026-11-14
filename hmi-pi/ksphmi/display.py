@@ -324,7 +324,29 @@ class Display:
         u = self.u
         self.panel(rect)
         self.text("ORBIT", 2.6, LABEL, (rect.x + 1.8 * u, rect.y + 1.8 * u))
-        area = rect.inflate(-6 * u, -10 * u).move(0, 2 * u)
+        if s.orbit_state is not None:
+            self.text("INERTIAL", 1.8, MUTED, (rect.right - 1.8 * u, rect.y + 1.8 * u), 'topright')
+        # Escape trajectories are unbounded. Contain every drawing primitive,
+        # including offscreen vessel markers, without covering the panel title.
+        previous_clip = self.screen.get_clip()
+        plot_bounds = pygame.Rect(rect.x + 1.2 * u, rect.y + 5 * u,
+                                  rect.w - 2.4 * u, rect.h - 6.2 * u)
+        self.screen.set_clip(previous_clip.clip(plot_bounds))
+        try:
+            self._orbit_contents(rect, s)
+        finally:
+            self.screen.set_clip(previous_clip)
+
+    def _orbit_contents(self, rect: pygame.Rect, s: Snapshot) -> None:
+        if s.orbit_state is not None:
+            self._inertial_orbit(rect, s)
+            return
+        u = self.u
+        # Reserve room for the labels outside both apsis markers. When width limits
+        # the orbit scale, a fixed margin can leave Ap or Pe outside the panel.
+        label_width = max(self.font(2.8).size(label)[0] for label in ("Ap", "Pe"))
+        side_margin = label_width + 2.6 * u  # marker-to-label gap + panel padding
+        area = rect.inflate(-2 * side_margin, -10 * u).move(0, 2 * u)
 
         radius = max(s.body_radius, 1.0)
         atmo = radius + s.atmosphere_depth
@@ -377,3 +399,57 @@ class Display:
             vx, vy = to_screen(r_now, s.true_anomaly)
             pygame.draw.circle(self.screen, VALUE, (vx, vy), 1.3 * u)
             pygame.draw.circle(self.screen, BG, (vx, vy), 0.6 * u)
+
+    def _inertial_orbit(self, rect: pygame.Rect, s: Snapshot) -> None:
+        """Keep the body and inertial view axes fixed; plot the measured position directly."""
+        u, state = self.u, s.orbit_state
+        if not all(math.isfinite(v) for v in (*state.position, *state.velocity)):
+            return
+        conic = state.conic()
+        radius = max(s.body_radius, 1)
+        atmo = radius + s.atmosphere_depth
+        if conic is None:
+            reach = max(4 * atmo, math.sqrt(sum(v*v for v in state.position)))
+        elif conic.apoapsis is not None:
+            reach = max(atmo, conic.apoapsis)
+        else:
+            reach = max(4 * atmo, 2.5 * conic.periapsis)
+        margin = max(self.font(2.8).size(label)[0] for label in ('Ap', 'Pe')) + 2.6 * u
+        area = rect.inflate(-2 * margin, -10 * u).move(0, 2 * u)
+        scale = min(area.w, area.h) / (2 * reach)
+        cx, cy = area.center
+
+        def point(vector):
+            x, y = state.project(vector)
+            return cx + x * scale, cy - y * scale
+
+        if s.atmosphere_depth > 0:
+            pygame.draw.circle(self.screen, ATMOSPHERE, (cx, cy), max(3, atmo * scale))
+        if conic is not None:
+            segment = []
+            for index in range(241):
+                vector = conic.position(-math.pi + 2 * math.pi * index / 240)
+                if vector is not None and sum(v*v for v in vector) <= (12 * reach)**2:
+                    segment.append(point(vector))
+                else:
+                    if len(segment) > 1:
+                        pygame.draw.aalines(self.screen, ACCENT, False, segment)
+                    segment = []
+            if len(segment) > 1:
+                pygame.draw.aalines(self.screen, ACCENT, False, segment)
+        pygame.draw.circle(self.screen, BODY, (cx, cy), max(2, radius * scale))
+        self.text(s.body, 2.8, VALUE, (cx, cy), 'center')
+        # At zero eccentricity the apsides have no unique direction; do not invent one.
+        if conic is not None and conic.eccentricity > 1e-5:
+            if conic.apoapsis is not None:
+                ap = point(conic.position(math.pi))
+                pygame.draw.circle(self.screen, GOOD, ap, .8 * u)
+                self.text('Ap', 2.8, GOOD, (ap[0] - 1.4 * u, ap[1]), 'midright')
+            pe = point(conic.position(0))
+            pygame.draw.circle(self.screen, WARN if s.periapsis < s.atmosphere_depth else ACCENT, pe, .8 * u)
+            self.text('Pe', 2.8, VALUE, (pe[0] + 1.4 * u, pe[1]), 'midleft')
+        # This is the white ring the user follows during docking: it does not use
+        # true anomaly, attitude, target velocity, or the changing periapsis direction.
+        position = point(state.position)
+        pygame.draw.circle(self.screen, VALUE, position, 1.3 * u)
+        pygame.draw.circle(self.screen, BG, position, .6 * u)

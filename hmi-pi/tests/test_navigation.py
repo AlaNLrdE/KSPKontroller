@@ -68,6 +68,45 @@ class FlightLayoutTest(unittest.TestCase):
         self.assertGreater(sum(0 < a < 255 for a in alphas), 20)
         self.assertTrue(all(0 <= a - b <= 9 for a, b in zip(alphas, alphas[1:])))
 
+    def test_escape_orbit_and_far_vessel_never_draw_outside_panel(self):
+        os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+        try:
+            import pygame
+        except ImportError:
+            self.skipTest('pygame in build/hmi-venv required')
+        from ksphmi import config
+        from ksphmi.display import Display
+        from ksphmi.telemetry import DemoSource
+        try:
+            for size in ((1260, 840), (1920, 1080), (2520, 1680)):
+                d = Display(config.load(), windowed=True, size=size)
+                u = d.u
+                panel = pygame.Rect(d.w * .44 + 1.6 * u, 13 * u,
+                                    d.w * .56 - 4.1 * u, 22 * u)
+                for eccentricity in (1.001, 1.5, 8):
+                    # Mun escape with the vessel near an asymptote, far beyond the diagram's view.
+                    anomaly = math.acos(-1 / eccentricity) - .00001
+                    snap = replace(DemoSource().sample(0), body='Mun', body_radius=200000,
+                                   atmosphere_depth=0, eccentricity=eccentricity, semi_major_axis=-1e6,
+                                   true_anomaly=anomaly, orbit_state=None)
+                    d.screen.fill((1, 2, 3))
+                    previous_clip = d.screen.get_clip()
+                    d.orbit(panel, snap)
+                    self.assertEqual(d.screen.get_clip(), previous_clip)
+                    # Erase the allowed panel, then compare every remaining pixel with the untouched canvas.
+                    outside = d.screen.copy()
+                    outside.fill((1, 2, 3), panel)
+                    expected = pygame.Surface(size)
+                    expected.fill((1, 2, 3))
+                    self.assertEqual(pygame.image.tobytes(outside, 'RGB'), pygame.image.tobytes(expected, 'RGB'))
+                # Verify that callers' tighter clips survive too.
+                custom_clip = panel.inflate(-4, -4)
+                d.screen.set_clip(custom_clip)
+                d.orbit(panel, snap)
+                self.assertEqual(d.screen.get_clip(), custom_clip)
+                d.screen.set_clip(None)
+        finally:
+            pygame.quit()
 
     def test_navball_labels_fit_and_globe_never_leaks_into_other_panels(self):
         os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')

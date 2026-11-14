@@ -70,6 +70,43 @@ class ContextTest(unittest.TestCase):
                 self.assertEqual(config.read_text().count('disable_splash=1'), 1)
             self.assertEqual(cmdline.with_name('cmdline.txt.ksphmi-backup').read_text(), original)
 
+    def test_apsis_labels_stay_inside_orbit_panel_as_orbit_grows(self):
+        os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+        try:
+            import pygame
+        except ImportError:
+            self.skipTest('pygame available in build/hmi-venv for render checks')
+        from dataclasses import replace
+        from ksphmi import config
+        from ksphmi.display import Display
+        from ksphmi.telemetry import DemoSource
+        try:
+            for size in ((1260, 840), (1920, 1080), (2520, 1680)):
+                display = Display(config.load(), windowed=True, size=size)
+                u = display.u
+                panel = pygame.Rect(display.w * 0.44 + 1.6 * u, 13 * u,
+                                    display.w * 0.56 - 4.1 * u, 22 * u)
+                original = display.text
+                labels = []
+
+                def text(label, *args, **kwargs):
+                    rect = original(label, *args, **kwargs)
+                    if label in ('Ap', 'Pe'):
+                        self.assertTrue(panel.inflate(-2 * u, -2 * u).contains(rect),
+                                        (size, label, rect, panel))
+                        labels.append(label)
+                    return rect
+
+                display.text = text
+                for apoapsis in (90_000, 250_000, 2_000_000, 50_000_000, 1e12):
+                    display.orbit(panel, DemoSource(apoapsis=apoapsis).sample(0))
+                self.assertEqual(labels, ['Ap', 'Pe'] * 5)
+                # Escape trajectories still draw Pe but have no apoapsis.
+                hyperbolic = replace(DemoSource().sample(0), eccentricity=1.5, semi_major_axis=-1e6, orbit_state=None)
+                display.orbit(panel, hyperbolic)
+                self.assertEqual(labels[-1], 'Pe')
+        finally:
+            pygame.quit()
 
     def test_accepts_only_versioned_known_scenes(self):
         sock = MagicMock()

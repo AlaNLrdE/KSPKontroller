@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, replace
 from .navigation import Navigation, NavigationStreams, attitude, unit
 from .systems import Resource, Stage, Systems, SystemsStreams
+from .orbitview import OrbitState, view_axes
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class Snapshot:
     vertical_speed: float = 0.0
     nav: Navigation | None = None  #: optional navball telemetry; None means unavailable
     systems: Systems | None = None  #: vessel totals and read-only staging queue
+    orbit_state: OrbitState | None = None  #: measured position/velocity in the body's non-rotating frame
     received: float = 0.0        #: time.monotonic() when the sample was taken
 
 
@@ -205,6 +207,9 @@ class KrpcSource(Source):
         name, radius = vessel.name, body.equatorial_radius
         atmosphere = body.atmosphere_depth if body.has_atmosphere else 0.0
         body_name = body.name
+        inertial_frame = body.non_rotating_reference_frame
+        mu = body.gravitational_parameter
+        axes = None
 
         fields = {
             "ut": (sc, "ut"),
@@ -236,6 +241,10 @@ class KrpcSource(Source):
                 except Exception:  # very old servers have no per-stream rate
                     pass
                 streams[key] = s
+            for key, method in (('position', vessel.position), ('velocity', vessel.velocity)):
+                stream = conn.add_stream(method, inertial_frame)
+                streams[key] = stream
+                stream.rate = 1.0 / self.period
             try:
                 navstreams = NavigationStreams(conn, sc, vessel, 1.0 / self.period)
             except RPCError as e:
@@ -251,6 +260,8 @@ class KrpcSource(Source):
                 v = {k: s() for k, s in streams.items()}
                 if v["body_obj"] != body:  # sphere of influence change: new reference frame needed
                     return
+                if axes is None:
+                    axes = view_axes(v['position'], v['velocity'])
                 nav = None
                 if navstreams is not None:
                     try:
@@ -267,6 +278,7 @@ class KrpcSource(Source):
                     orbital_speed=v["orbital_speed"], surface_speed=v["surface_speed"],
                     vertical_speed=v["vertical_speed"], nav=nav,
                     systems=systemstreams.sample() if systemstreams is not None else None,
+                    orbit_state=OrbitState(v['position'], v['velocity'], mu, axes),
                     received=time.monotonic()))
                 self._stop.wait(self.period)
         finally:
@@ -327,6 +339,10 @@ class DemoSource(Source):
         n = math.sqrt(mu / a ** 3)
         m = (n * ut) % (2 * math.pi)
         r, nu, speed, radial = kepler_state(a, e, mu, m)
+        tangent = math.sqrt(max(0, speed * speed - radial * radial))
+        position = (r * math.cos(nu), 0, r * math.sin(nu))
+        velocity = (radial * math.cos(nu) - tangent * math.sin(nu), 0,
+                    radial * math.sin(nu) + tangent * math.cos(nu))
         return Snapshot(
             state=FLIGHT, vessel="Demo Orbiter", situation="orbiting", body="Kerbin",
             body_radius=KERBIN_RADIUS, atmosphere_depth=KERBIN_ATMOSPHERE, ut=ut,
@@ -345,6 +361,7 @@ class DemoSource(Source):
             systems=Systems(2, (Resource('ElectricCharge', 148, 200), Resource('LiquidFuel', 820, 1440),
                                 Resource('Oxidizer', 1002, 1760), Resource('MonoPropellant', 24, 30)),
                             (Stage(2, 7, 1430), Stage(1, 4, 820), Stage(0, 2, 0))),
+            orbit_state=OrbitState(position, velocity, mu, ((1, 0, 0), (0, 0, 1))),
             received=time.monotonic())
 
     def _run(self) -> None:

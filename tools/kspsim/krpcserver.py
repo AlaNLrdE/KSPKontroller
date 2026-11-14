@@ -451,6 +451,9 @@ class KrpcServer:
                 return enc_object(sim.vessel_uid * 10 + offset)
             if member == 'get_Control':
                 return enc_object(sim.vessel_uid * 10 + 4)
+            if member in ('Position', 'Velocity'):
+                prefix = member.lower()
+                return enc_tuple(tuple(r[prefix + '_' + axis] for axis in ('x', 'y', 'z')))
             if member == 'get_Resources':
                 return enc_object(sim.vessel_uid * 10000 + 1000)
             if member == 'get_Parts':
@@ -523,6 +526,7 @@ class KrpcServer:
                       "get_HasAtmosphere": enc_bool(True), "get_AtmosphereDepth": enc_double(physics.ATMOSPHERE),
                       "get_GravitationalParameter": enc_double(physics.MU),
                       "get_ReferenceFrame": enc_object(FRAME_KERBIN)}
+            values['get_NonRotatingReferenceFrame'] = enc_object(3)
             if member in values:
                 return values[member]
         raise RpcFailure("kspsim does not implement SpaceCenter.%s" % proc)
