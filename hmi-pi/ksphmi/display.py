@@ -164,7 +164,7 @@ class Display:
         elif snap.state == FLIGHT:
             status, color = "LIVE", GOOD
         elif snap.state == NO_VESSEL:
-            status, color = "NOT IN FLIGHT", WARN
+            status, color = "CONNECTED", GOOD  # the link is up; the centre of the screen says not in flight
         else:
             status, color = "OFFLINE", BAD
         r = self.text(status, 3.4, color, (self.w - 2.5 * u, top + 0.6 * u), "topright")
