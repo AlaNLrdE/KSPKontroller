@@ -58,3 +58,102 @@ class ResourceTest(unittest.TestCase):
                     self.assertLess(max(r.bottom for r in tiles), d.h * .54)
         finally:
             pygame.quit()
+
+
+class GaugeGeometryTest(unittest.TestCase):
+    def test_angle_mapping_sweeps_clockwise_through_the_top(self):
+        import math
+        from ksphmi.gauges import gauge_angle, point
+        self.assertAlmostEqual(math.degrees(gauge_angle(0)), 210)
+        self.assertAlmostEqual(math.degrees(gauge_angle(.5)), 90)
+        self.assertAlmostEqual(math.degrees(gauge_angle(1)), -30)
+        self.assertEqual(gauge_angle(-1), gauge_angle(0))
+        self.assertEqual(gauge_angle(7), gauge_angle(1))
+        x, y = point(100, 100, 10, .5)  # screen y grows downwards: the middle of the scale is on top
+        self.assertAlmostEqual(x, 100)
+        self.assertAlmostEqual(y, 90)
+        x0, y0 = point(0, 0, 1, 0)
+        x1, y1 = point(0, 0, 1, 1)
+        self.assertLess(x0, 0)
+        self.assertGreater(x1, 0)
+        self.assertAlmostEqual(y0, y1)
+        self.assertGreater(y0, 0)  # both ends below the centre: the gap is at the bottom
+
+    def test_sector_closes_between_the_two_radii(self):
+        import math
+        from ksphmi.gauges import sector
+        pts = sector(0, 0, 10, 8, 0, .5)
+        radii = [math.hypot(x, y) for x, y in pts]
+        half = len(pts) // 2
+        self.assertTrue(all(abs(r - 10) < 1e-9 for r in radii[:half]))
+        self.assertTrue(all(abs(r - 8) < 1e-9 for r in radii[half:]))
+
+    def test_layout_fits_the_panel_at_every_resolution(self):
+        from ksphmi.gauges import BELOW_CENTRE, gauge_layout
+        for width, height in ((1260, 840), (1920, 1080), (2520, 1680)):
+            u = height / 100
+            x, y, w, h = 2.5 * u, 58 * u, width * .44 - 3.7 * u, 20.4 * u  # the resources panel interior
+            text_h, pad = 4.0 * u, .4 * u
+            for count in range(1, 7):
+                radius, cells = gauge_layout(x, y, w, h, count, text_h, pad)
+                self.assertEqual(len(cells), count)
+                self.assertGreater(radius, 3.5 * u, (width, count))
+                for cx, cy, cell_x, cell_w in cells:
+                    self.assertGreaterEqual(cx - radius, x - 1e-6)
+                    self.assertLessEqual(cx + radius, x + w + 1e-6)
+                    self.assertGreaterEqual(cy - radius, y - 1e-6)
+                    self.assertLessEqual(cy + BELOW_CENTRE * radius + text_h, y + h + 1e-6)
+                    self.assertLessEqual(cell_w, w + 1e-6)
+                for (a, _, _, _), (b, _, _, _) in zip(cells, cells[1:]):
+                    self.assertGreaterEqual(b - a, 2 * radius - 1e-6)  # neighbours never overlap
+
+    def test_dials_and_their_text_stay_inside_the_resources_panel(self):
+        os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+        try:
+            import pygame
+        except ImportError:
+            self.skipTest('pygame in build/hmi-venv required')
+        from ksphmi import config
+        from ksphmi.display import Display
+        from ksphmi.telemetry import DemoSource
+        resources = (Resource('ElectricCharge', 4, 200), Resource('LiquidFuel', 300, 1440),
+                     Resource('Oxidizer', None, None), Resource('MonoPropellant', 0, 0),
+                     Resource('SolidFuel', 12345.6, 12345.6), Resource('XenonGas', 0, 5700))
+        try:
+            for size in ((1260, 840), (1920, 1080), (2520, 1680)):
+                d = Display(config.load(), windowed=True, size=size)
+                panel, drawn = [], []
+                original_resources, original_text, original_gauge = d.resources, d.text, d.gauge
+
+                def resources_spy(rect, snap):
+                    panel.append(rect)
+                    original_resources(rect, snap)
+
+                def text(*args, **kwargs):
+                    rect = original_text(*args, **kwargs)
+                    if panel and len(drawn) < 99:
+                        drawn.append((args[0], rect))
+                    return rect
+
+                def gauge(resource, label, cx, cy, radius, *rest):
+                    self.assertTrue(panel[-1].contains(pygame.Rect(cx - radius, cy - radius, 2 * radius,
+                                                                   2 * radius)), (size, label))
+                    original_gauge(resource, label, cx, cy, radius, *rest)
+
+                d.resources, d.text, d.gauge = resources_spy, text, gauge
+                sample = DemoSource().sample(0)
+                for systems in (sample.systems, Systems(0, resources)):
+                    panel.clear()
+                    drawn.clear()
+                    d.draw(replace(sample, systems=systems))
+                    self.assertEqual(len(panel), 1)
+                    texts = [(s, r) for s, r in drawn if panel[0].colliderect(r)]
+                    self.assertGreater(len(texts), 6)
+                    for s, r in texts:
+                        self.assertTrue(panel[0].contains(r), (size, s, r, panel[0]))
+                    labels = [r for s, r in texts if s in ('ELECTRICITY', 'XENON GAS', 'MONOPROPELLANT')]
+                    for a in labels:
+                        for b in labels:
+                            self.assertTrue(a is b or not a.colliderect(b), (size, a, b))
+        finally:
+            pygame.quit()

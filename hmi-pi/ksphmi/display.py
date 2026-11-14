@@ -12,8 +12,9 @@ import os
 import time
 
 import pygame
+import pygame.gfxdraw
 
-from . import fmt
+from . import fmt, gauges
 from .netinfo import NetInfo
 from .scenes import VIEWS
 from .navball import Navball
@@ -118,6 +119,8 @@ class Display:
         self.u = self.h / 100.0  # layout unit: 1 % of the screen height
         self._fonts: dict[int, pygame.font.Font] = {}
         self._text_cache: dict[tuple, pygame.Surface] = {}
+        self._gauge_faces: dict[tuple, pygame.Surface] = {}
+        self._gauge_layout: tuple | None = None
         self.navball = Navball()
 
     # ----------------------------------------------------------------------------------------- helpers
@@ -268,6 +271,9 @@ class Display:
         if note:
             self.text(note, 1.6, LABEL, (rect.right - pad, rect.y + .7 * u), "topright")
 
+    # Text sizes (units) below each dial: label, amount and the gap between them.
+    GAUGE_LABEL, GAUGE_AMOUNT, GAUGE_GAP = 1.9, 1.8, .3
+
     def resources(self, rect: pygame.Rect, snap: Snapshot) -> None:
         u = self.u
         self.panel(rect)
@@ -279,23 +285,93 @@ class Display:
         by_name = {r.name: r for r in snap.systems.resources}
         visible = [name for name in RESOURCE_NAMES if name in by_name and
                    (name in RESOURCE_NAMES[:4] or (by_name[name].capacity or 0) > 0)]
-        row_h = min(4.5 * u, (rect.h - 5 * u) / max(len(visible), 1))
-        for index, name in enumerate(visible):
-            resource = by_name[name]
-            y = rect.y + 4.6 * u + index * row_h
-            fraction = resource.fraction
-            color = MUTED if fraction is None else BAD if fraction <= .1 else WARN if fraction <= .25 else GOOD
-            label = RESOURCE_LABELS[RESOURCE_NAMES.index(name)]
-            self.text(label, 2.0, LABEL, (rect.x + 1.3 * u, y))
-            if fraction is not None:
-                amount = "%.1f / %.1f   %d%%" % (resource.amount, resource.capacity, round(100 * fraction))
-            else:
-                amount = 'NOT INSTALLED' if resource.capacity == 0 else '--'
-            self.text(amount, 2.0, color, (rect.right - 1.3 * u, y), 'topright')
-            bar = pygame.Rect(rect.x + 1.3 * u, y + 2.1 * u, rect.w - 2.6 * u, .6 * u)
-            pygame.draw.rect(self.screen, GRID, bar, border_radius=max(1, round(.2 * u)))
-            if fraction is not None and fraction > 0:
-                pygame.draw.rect(self.screen, color, (bar.x, bar.y, bar.w * fraction, bar.h))
+        if not visible:
+            return
+        radius, cells, label_units = self.gauge_layout(rect, tuple(visible))
+        for name, (cx, cy, cell_x, cell_w) in zip(visible, cells):
+            self.gauge(by_name[name], RESOURCE_LABELS[RESOURCE_NAMES.index(name)], cx, cy, radius,
+                       cell_w - 2 * u, label_units)
+
+    def gauge_layout(self, rect: pygame.Rect, names: tuple) -> tuple:
+        """Dial radius, centres and a common label size, recomputed only when the panel or the set changes."""
+        key = (tuple(rect), names)
+        if self._gauge_layout is None or self._gauge_layout[0] != key:
+            u = self.u
+            text_h = (self.GAUGE_LABEL + self.GAUGE_AMOUNT + self.GAUGE_GAP) * u
+            radius, cells = gauges.gauge_layout(rect.x + .6 * u, rect.y + 4.2 * u, rect.w - 1.2 * u,
+                                                rect.h - 4.6 * u, len(names), text_h, .4 * u)
+            room = min(cell_w for _, _, _, cell_w in cells) - 2 * u
+            widest = max(self.font(self.GAUGE_LABEL).size(RESOURCE_LABELS[RESOURCE_NAMES.index(n)])[0]
+                         for n in names)
+            label_units = self.GAUGE_LABEL * min(1.0, room / max(widest, 1))
+            self._gauge_layout = (key, (radius, cells, math.floor(label_units * 20) / 20))
+        return self._gauge_layout[1]
+
+    def gauge_face(self, radius: int, live: bool) -> pygame.Surface:
+        """The static part of a dial (bezel, track, warning zones, ticks), drawn once per size at twice the
+        resolution and smoothed down, so the edges are antialiased without per-frame cost."""
+        key = (radius, live)
+        face = self._gauge_faces.get(key)
+        if face is not None:
+            return face
+        if len(self._gauge_faces) > 16:
+            self._gauge_faces.clear()
+        side = 2 * radius + 4
+        big = pygame.Surface((2 * side, 2 * side))
+        big.fill(PANEL)
+        c, r = side, 2 * radius
+        pygame.draw.circle(big, (30, 40, 54) if live else (25, 33, 45), (c, c), r)
+        pygame.draw.circle(big, (11, 16, 23), (c, c), round(.93 * r))
+        pygame.draw.polygon(big, (27, 36, 50), gauges.sector(c, c, .86 * r, .70 * r, 0, 1, 2))
+        if live:
+            for f0, f1, color in ((0, gauges.BAD_BELOW, BAD), (gauges.BAD_BELOW, gauges.WARN_BELOW, WARN)):
+                dim = tuple(round(.55 * a + .45 * b) for a, b in zip(color, (11, 16, 23)))
+                pygame.draw.polygon(big, dim, gauges.sector(c, c, .91 * r, .87 * r, f0, f1, 2))
+        for step in range(21):
+            f = step / 20
+            major, ten = step % 10 == 0, step % 2 == 0
+            inner = .55 if major else .60 if ten else .64
+            color = (VALUE if major else LABEL if ten else MUTED) if live else GRID
+            pygame.draw.line(big, color, gauges.point(c, c, inner * r, f), gauges.point(c, c, .68 * r, f),
+                             max(2, round((.045 if major else .03) * r)))
+        face = self._gauge_faces[key] = pygame.transform.smoothscale(big, (side, side))
+        return face
+
+    def gauge(self, resource, label: str, cx: float, cy: float, radius: float, room: float,
+              label_units: float) -> None:
+        u = self.u
+        fraction = resource.fraction
+        r = max(4, int(radius))
+        face = self.gauge_face(r, fraction is not None)
+        self.screen.blit(face, face.get_rect(center=(int(cx), int(cy))))
+        if fraction is not None:
+            color = BAD if fraction <= gauges.BAD_BELOW else WARN if fraction <= gauges.WARN_BELOW else GOOD
+            if fraction > 0:
+                pts = gauges.sector(cx, cy, .86 * r, .70 * r, 0, fraction)
+                pygame.draw.polygon(self.screen, color, pts)
+                pygame.gfxdraw.aapolygon(self.screen, [(round(x), round(y)) for x, y in pts], color)
+            # pointer across the track at the current level
+            a = gauges.gauge_angle(fraction)
+            dx, dy = math.cos(a), -math.sin(a)
+            nx, ny = -dy * .035 * r, dx * .035 * r
+            p0, p1 = (cx + dx * .62 * r, cy + dy * .62 * r), (cx + dx * .93 * r, cy + dy * .93 * r)
+            needle = [(p0[0] + nx, p0[1] + ny), (p1[0] + nx, p1[1] + ny), (p1[0] - nx, p1[1] - ny),
+                      (p0[0] - nx, p0[1] - ny)]
+            pygame.draw.polygon(self.screen, VALUE, needle)
+            pygame.gfxdraw.aapolygon(self.screen, [(round(x), round(y)) for x, y in needle], VALUE)
+            centre = "%d%%" % round(100 * fraction)
+            amount = "%s / %s" % (_amount(resource.amount), _amount(resource.capacity))
+            reference = "%s / %s" % (_amount(resource.capacity), _amount(resource.capacity))
+        else:
+            color = MUTED
+            centre = 'N/A' if resource.capacity == 0 else '--'
+            amount = reference = 'NOT INSTALLED' if resource.capacity == 0 else '--'
+        self.text(centre, .44 * r / u, color if fraction is not None else MUTED, (cx, cy), 'center')
+        top = cy + gauges.BELOW_CENTRE * r
+        self.text(label, label_units, LABEL if fraction is not None else MUTED, (cx, top), 'midtop')
+        width = self.font(self.GAUGE_AMOUNT).size(reference)[0]
+        amount_units = math.floor(self.GAUGE_AMOUNT * min(1.0, room / max(width, 1)) * 20) / 20
+        self.text(amount, amount_units, color, (cx, top + (label_units + self.GAUGE_GAP) * u), 'midtop')
 
     def staging(self, rect: pygame.Rect, snap: Snapshot) -> None:
         u = self.u
@@ -453,3 +529,8 @@ class Display:
         position = point(state.position)
         pygame.draw.circle(self.screen, VALUE, position, 1.3 * u)
         pygame.draw.circle(self.screen, BG, position, .6 * u)
+
+
+def _amount(value: float) -> str:
+    """Compact KSP units for the dial captions: whole units from 100 up, one decimal below."""
+    return "%.0f" % value if abs(value) >= 100 else "%.1f" % value

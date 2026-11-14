@@ -34,6 +34,11 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
 - Render screens on the PC to review them: `SDL_VIDEODRIVER=dummy python -m ksphmi --demo --size 2520x1680
   --screenshot out.png` (from hmi-pi/, with build/hmi-venv), then look at the PNG.
+- Static instrument art (dial faces: bezel, track, zones, ticks) is drawn once per size at 2x and
+  `smoothscale`d down into a cached opaque Surface: antialiased edges for free. Per frame draw only the dynamic
+  polygon (`draw.polygon` + `gfxdraw.aapolygon`) and text; the resource dials cost ~0.5 ms/frame on the PC.
+- Several captions in a row (dial labels): fit one common font size to the narrowest cell, computed when the
+  layout changes; a per-frame fit makes the text size jitter.
 - Format numbers through `ksphmi/fmt.py` (no `-0 m`); a value that can be renamed in game (vessel name) must be a
   stream, not read once.
 
