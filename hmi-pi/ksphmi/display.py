@@ -1,8 +1,13 @@
 """Drawing. Everything is laid out in units of the screen height, so the same code fits the Pi monitor
-(2520x1680, 3:2), a 1920x1080 TV or a development window on the PC."""
+(2520x1680, 3:2), a 1920x1080 TV or a development window on the PC.
+
+Two outputs: ``sdl`` (a window, or SDL full screen) and ``fbdev``, used on the Pi: frames are drawn in memory and
+copied to the Linux framebuffer (``/dev/fb0``). fbdev needs no EGL, no DRM master and no desktop, and when the
+HMI stops the text console shows again. (SDL's kmsdrm driver set the mode but left the Pi 4 screen black.)"""
 from __future__ import annotations
 
 import math
+import os
 import time
 
 import pygame
@@ -24,22 +29,61 @@ BODY = (46, 96, 150)
 ATMOSPHERE = (24, 48, 78)
 
 
+class Framebuffer:
+    """A Linux fbdev device: geometry from sysfs, 16 bpp (RGB565) or 32 bpp (XRGB8888)."""
+
+    def __init__(self, device: str) -> None:
+        sysfs = "/sys/class/graphics/" + os.path.basename(device)
+
+        def attr(name: str) -> str:
+            with open(os.path.join(sysfs, name)) as f:
+                return f.read().strip()
+
+        self.size = tuple(int(v) for v in attr("virtual_size").split(","))
+        bpp, self.stride = int(attr("bits_per_pixel")), int(attr("stride"))
+        masks = {16: (0xF800, 0x07E0, 0x001F, 0), 32: (0xFF0000, 0x00FF00, 0x0000FF, 0)}.get(bpp)
+        if masks is None:
+            raise RuntimeError("%s: unsupported %d bits per pixel" % (device, bpp))
+        self.converted = pygame.Surface(self.size, 0, bpp, masks)
+        self.fb = open(device, "r+b", buffering=0)
+
+    def write(self, frame: pygame.Surface) -> None:
+        self.converted.blit(frame, (0, 0))
+        data = self.converted.get_buffer().raw
+        pitch = self.converted.get_pitch()
+        self.fb.seek(0)
+        if pitch == self.stride:
+            self.fb.write(data)
+        else:  # padded lines in the device
+            row = self.size[0] * self.converted.get_bytesize()
+            for y in range(self.size[1]):
+                self.fb.seek(y * self.stride)
+                self.fb.write(data[y * pitch:y * pitch + row])
+
+
 class Display:
     def __init__(self, cfg: dict, windowed: bool = False, size: tuple[int, int] | None = None) -> None:
+        dcfg = cfg["display"]
+        output = os.environ.get("KSPHMI_OUTPUT") or dcfg.get("output", "sdl")
+        self.fb = None
+        if output == "fbdev" and not windowed:
+            os.environ["SDL_VIDEODRIVER"] = "dummy"  # pygame events and fonts still need an initialised display
         pygame.display.init()
         pygame.font.init()
-        dcfg = cfg["display"]
         self.day_hours = int(cfg["format"]["day_hours"])
-        fullscreen = dcfg["fullscreen"] and not windowed
-        if size is None:
-            size = (int(dcfg["width"]), int(dcfg["height"]))
-            if not fullscreen and size == (0, 0):
-                size = (1280, 800)
-        flags = pygame.FULLSCREEN if fullscreen else 0
-        self.screen = pygame.display.set_mode(size, flags)
-        pygame.display.set_caption("KSP HMI")
-        if fullscreen:
-            pygame.mouse.set_visible(False)
+        if output == "fbdev" and not windowed:
+            self.fb = Framebuffer(dcfg.get("fbdev", "/dev/fb0"))
+            self.screen = pygame.Surface(self.fb.size)
+        else:
+            fullscreen = dcfg["fullscreen"] and not windowed
+            if size is None:
+                size = (int(dcfg["width"]), int(dcfg["height"]))
+                if not fullscreen and size == (0, 0):
+                    size = (1280, 800)
+            self.screen = pygame.display.set_mode(size, pygame.FULLSCREEN if fullscreen else 0)
+            pygame.display.set_caption("KSP HMI")
+            if fullscreen:
+                pygame.mouse.set_visible(False)
         self.w, self.h = self.screen.get_size()
         self.u = self.h / 100.0  # layout unit: 1 % of the screen height
         self._fonts: dict[int, pygame.font.Font] = {}
@@ -76,7 +120,10 @@ class Display:
             self.flight(snap)
         else:
             self.waiting(snap, now)
-        pygame.display.flip()
+        if self.fb:
+            self.fb.write(self.screen)
+        else:
+            pygame.display.flip()
 
     def header(self, snap: Snapshot, now: float) -> None:
         u = self.u

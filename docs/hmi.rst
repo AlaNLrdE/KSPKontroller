@@ -34,7 +34,10 @@ The header shows ``LIVE``, ``NOT IN FLIGHT`` (space center, editors), ``OFFLINE`
 (connected, but no new sample for 3 s: the game froze or the link stalled). A periapsis inside the atmosphere is
 orange and one below the surface red.
 
-On the Pi there is no desktop: SDL draws straight on the HDMI output with its ``kmsdrm`` driver.
+On the Pi there is no desktop: frames are drawn in memory and copied to the Linux framebuffer ``/dev/fb0``
+(``output = fbdev``, set by the service through ``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode
+but left the screen black on the Pi 4; fbdev needs no EGL and no DRM master, costs about 21 ms per
+2520x1680 frame, and when the HMI stops the text console shows again.
 
 .. important::
 

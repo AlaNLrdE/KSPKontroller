@@ -13,7 +13,7 @@ DEFAULTS = {
     "source": "krpc",  # krpc | demo
     "krpc": {"address": "localhost", "rpc_port": 50000, "stream_port": 50001, "rate_hz": 10, "retry_seconds": 3},
     "demo": {"speed": 20},
-    "display": {"fps": 10, "fullscreen": True, "width": 0, "height": 0},
+    "display": {"output": "sdl", "fbdev": "/dev/fb0", "fps": 10, "fullscreen": True, "width": 0, "height": 0},
     "format": {"day_hours": 6},
 }
 
