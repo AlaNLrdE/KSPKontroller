@@ -422,7 +422,8 @@ def check_hmi(ctx):
 
     host = os.environ.get("HMI_HOST", "ksphmi")
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
-             "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"")
+             "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
+             "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
                            capture_output=True, text=True, timeout=15)
@@ -446,6 +447,13 @@ def check_hmi(ctx):
         report("WARN", "hmi: kRPC address", "Pi uses %s but this PC is %s: ./ci deploy_hmi" % (addr, client))
     elif addr:
         report("PASS", "hmi: kRPC address", addr)
+    # A blanked framebuffer (4 = powered down) hides every frame while the service and its log look healthy
+    blank = env.get("fbblank", "")
+    if blank and blank != "0":
+        report("FAIL" if state == "active" else "WARN", "hmi: screen",
+               "framebuffer blanked (fb0/blank=%s): nothing shows; the HMI unblanks it, redeploy or restart it" % blank)
+    elif blank == "0":
+        report("PASS", "hmi: screen", "framebuffer on")
 
 
 def check_sim(ctx):

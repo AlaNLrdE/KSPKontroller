@@ -6,6 +6,7 @@ copied to the Linux framebuffer (``/dev/fb0``). fbdev needs no EGL, no DRM maste
 HMI stops the text console shows again. (SDL's kmsdrm driver set the mode but left the Pi 4 screen black.)"""
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
@@ -29,8 +30,18 @@ BODY = (46, 96, 150)
 ATMOSPHERE = (24, 48, 78)
 
 
+FBIOBLANK = 0x4611        # linux/fb.h
+FB_BLANK_UNBLANK = 0
+
+
 class Framebuffer:
-    """A Linux fbdev device: geometry from sysfs, 16 bpp (RGB565) or 32 bpp (XRGB8888)."""
+    """A Linux fbdev device: geometry from sysfs, 16 bpp (RGB565) or 32 bpp (XRGB8888).
+
+    The device can be left *blanked* (powered down, ``/sys/class/graphics/fb0/blank`` = 4: it happened after
+    an SDL kmsdrm run), and then every frame written is invisible. So it is unblanked at start and every
+    ``UNBLANK_EVERY`` seconds; the FBIOBLANK ioctl needs only write access to the device, not root."""
+
+    UNBLANK_EVERY = 30.0
 
     def __init__(self, device: str) -> None:
         sysfs = "/sys/class/graphics/" + os.path.basename(device)
@@ -46,8 +57,20 @@ class Framebuffer:
             raise RuntimeError("%s: unsupported %d bits per pixel" % (device, bpp))
         self.converted = pygame.Surface(self.size, 0, bpp, masks)
         self.fb = open(device, "r+b", buffering=0)
+        self._unblanked_at = -1e9
+        self.unblank()
+
+    def unblank(self) -> None:
+        import fcntl
+        try:
+            fcntl.ioctl(self.fb.fileno(), FBIOBLANK, FB_BLANK_UNBLANK)
+        except OSError as e:  # keep drawing; the log says why the screen may stay dark
+            logging.getLogger(__name__).warning("cannot unblank the framebuffer: %s", e)
+        self._unblanked_at = time.monotonic()
 
     def write(self, frame: pygame.Surface) -> None:
+        if time.monotonic() - self._unblanked_at > self.UNBLANK_EVERY:
+            self.unblank()
         self.converted.blit(frame, (0, 0))
         data = self.converted.get_buffer().raw
         pitch = self.converted.get_pitch()

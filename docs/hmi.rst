@@ -38,6 +38,9 @@ On the Pi there is no desktop: frames are drawn in memory and copied to the Linu
 (``output = fbdev``, set by the service through ``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode
 but left the screen black on the Pi 4; fbdev needs no EGL and no DRM master, costs about 21 ms per
 2520x1680 frame, and when the HMI stops the text console shows again.
+The framebuffer can be left *blanked* (``/sys/class/graphics/fb0/blank`` = 4, powered down; it happened after
+the kmsdrm attempts): frames are then written but nothing shows, while the HMI log looks healthy. The HMI
+unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./ci verify`` checks the value.
 
 .. important::
 
