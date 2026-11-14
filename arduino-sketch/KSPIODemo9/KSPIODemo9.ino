@@ -33,7 +33,7 @@
 //pins for input
 #define STAGEPIN -1     ///< Stage push button: no pin assigned (set a pin number to enable; internal pull-up, wire to GND)
 #define SASPIN 2        ///< SAS push button: each press toggles SAS on/off (internal pull-up, wire to GND). It used to be the stage button
-#define RCSPIN 9        ///< RCS switch
+#define RCSPIN 9        ///< RCS push button: each press toggles RCS on/off (internal pull-up, wire to GND)
 #define SCREENPIN 3     ///< Screen button: cycles the LED matrix screens (internal pull-up, wire to GND)
 #define CG1PIN 10       ///< Custom action group 1 switch
 #define THROTTLEPIN 0   ///< Throttle potentiometer (analog input)
@@ -41,7 +41,7 @@
 #define LINKRESETMS 30000UL ///< After being connected, this long without any valid packet resets the board (a wedged USB stack)
 #define WATCHDOGMS 2000 ///< The board resets itself if loop() does not run for this many milliseconds
 #define STAGEHOLD 150 ///< Milliseconds the STAGE bit stays set after a press (long enough for the plugin to see it at low FPS)
-#define RCSDEBOUNCE 50 ///< Milliseconds the RCS switch must hold a new level before it is accepted (contact bounce)
+#define RCSDEBOUNCE 150 ///< Milliseconds after an RCS button press during which further edges are ignored (contact bounce)
 #define SASDEBOUNCE 150 ///< Milliseconds after a SAS button press during which further edges are ignored (contact bounce)
 #define THROTTLEDB 4 ///< Throttle axis deadband, in ADC counts at each end of the range
 

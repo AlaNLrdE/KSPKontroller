@@ -53,10 +53,10 @@ Hardware used by the demo sketch
      - Function
    * - 2
      - input (pull-up)
-     - Stage push button (space bar)
+     - SAS push button: each press toggles SAS
    * - 9
      - input (pull-up)
-     - RCS switch
+     - RCS push button: each press toggles RCS
    * - 3
      - input (pull-up)
      - LED matrix screen button

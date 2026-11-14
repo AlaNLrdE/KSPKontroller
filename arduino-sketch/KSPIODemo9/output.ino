@@ -23,9 +23,9 @@ void output() {
 void controls() {
   static boolean stagePressedBefore = false;  // STAGE button, only when STAGEPIN is assigned
   static unsigned long stageHoldUntil = 0;    // the STAGE bit stays set until this time (ms)
-  static int rcsRawBefore = LOW;              // RCS switch level at the previous sample
-  static int rcsStable = LOW;                 // RCS switch level once it has stopped bouncing
-  static unsigned long rcsChangedAt = 0;      // when the raw RCS level last changed (ms)
+  static boolean rcsPressedBefore = false;    // RCS button state at the previous sample (edge detection)
+  static unsigned long rcsIgnoreUntil = 0;    // RCS contact bounce is ignored until this time (ms)
+  static int rcsIdle = HIGH;                  // idle level of the RCS pin, learned while not connected
   static boolean sasPressedBefore = false;    // button state at the previous sample (edge detection)
   static unsigned long sasIgnoreUntil = 0;    // contact bounce is ignored until this time (ms)
   static int stageIdle = HIGH;                // idle level of the stage pin, learned while not connected
@@ -62,12 +62,16 @@ void controls() {
     MainControls(STAGE, now < stageHoldUntil);
 #endif
 
-    // RCS switch with debounce: a new level is accepted only after it has stayed the same for RCSDEBOUNCE ms,
-    // so contact bounce never sends spurious RCS toggles to KSP.
-    int rcsRaw = digitalRead(RCSPIN);
-    if (rcsRaw != rcsRawBefore) { rcsRawBefore = rcsRaw; rcsChangedAt = now; }
-    if (now - rcsChangedAt >= RCSDEBOUNCE) rcsStable = rcsRaw;
-    MainControls(RCS, rcsStable ? HIGH : LOW);
+    // RCS button: each press toggles RCS, exactly like the SAS button above (the bit is set to the opposite of
+    // the RCS state KSP reports, AGRCS, and left there; bounce inside RCSDEBOUNCE is ignored; idle level learned
+    // while the link is down). It used to be read as a switch level, so a push button only held RCS on while
+    // pressed.
+    boolean rcsPressed = (digitalRead(RCSPIN) != rcsIdle);
+    if (rcsPressed && !rcsPressedBefore && now > rcsIgnoreUntil) {
+      rcsIgnoreUntil = now + RCSDEBOUNCE;
+      MainControls(RCS, !ControlStatus(AGRCS));
+    }
+    rcsPressedBefore = rcsPressed;
 
     if (digitalRead(CG1PIN))   //--------- This is how you do control groups
       ControlGroups(1, HIGH);
@@ -97,6 +101,9 @@ void controls() {
     sasIdle = digitalRead(SASPIN);   // learn the idle level; keep the button released-looking until connected
     sasPressedBefore = false;
     sasIgnoreUntil = 0;
+    rcsIdle = digitalRead(RCSPIN);
+    rcsPressedBefore = false;
+    rcsIgnoreUntil = 0;
 #if STAGEPIN >= 0
     stageIdle = digitalRead(STAGEPIN);
     stagePressedBefore = false;
