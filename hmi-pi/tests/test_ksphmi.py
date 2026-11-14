@@ -120,13 +120,14 @@ class ConnectTimeoutTest(unittest.TestCase):
         port = srv.getsockname()[1]
         src = KrpcSource("127.0.0.1", port, port, retry_seconds=0.1)
         src.CONNECT_TIMEOUT = 0.5
+        src.TCP_TIMEOUT = 0.3
         src.start()
         try:
             end = time.monotonic() + 5
-            while time.monotonic() < end and "did not answer" not in src.latest().detail:
+            while time.monotonic() < end and "no answer to the handshake" not in src.latest().detail:
                 time.sleep(0.05)
             self.assertEqual(src.latest().state, CONNECTING)
-            self.assertIn("did not answer", src.latest().detail)
+            self.assertIn("no answer to the handshake", src.latest().detail)
         finally:
             src.stop()
             stop.set()

@@ -123,7 +123,8 @@ class KrpcSource(Source):
                     pass
             self._stop.wait(self.retry)
 
-    CONNECT_TIMEOUT = 15.0
+    TCP_TIMEOUT = 5.0       # reaching the port (a firewall on a Public network drops, rather than refuses)
+    CONNECT_TIMEOUT = 20.0  # the whole handshake, longer than TCP_TIMEOUT so the two causes stay apart
 
     def _connect(self, krpc):
         """krpc.connect() with a deadline on the whole handshake. Its own ``timeout`` only covers the TCP connect:
@@ -134,7 +135,7 @@ class KrpcSource(Source):
         def attempt() -> None:
             try:
                 box["conn"] = krpc.connect(name=self.client_name, address=self.address, rpc_port=self.rpc_port,
-                                           stream_port=self.stream_port, timeout=self.CONNECT_TIMEOUT)
+                                           stream_port=self.stream_port, timeout=self.TCP_TIMEOUT)
             except Exception as e:
                 box["error"] = e
             if box.get("abandoned") and "conn" in box:
@@ -148,7 +149,7 @@ class KrpcSource(Source):
         t.join(self.CONNECT_TIMEOUT)
         if t.is_alive():
             box["abandoned"] = True
-            raise TimeoutError("the server accepted but did not answer within %.0f s (kRPC busy, paused, or "
+            raise TimeoutError("connected but no answer to the handshake within %.0f s (kRPC busy, paused or "
                                "misconfigured)" % self.CONNECT_TIMEOUT)
         if "error" in box:
             raise box["error"]
