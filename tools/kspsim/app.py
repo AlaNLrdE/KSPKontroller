@@ -114,6 +114,27 @@ class App:
         self.edit_msg = tk.StringVar(value="Position 0 = at the periapsis, 180 = at the apoapsis.")
         ttk.Label(ef, textvariable=self.edit_msg).grid(row=2, column=0, columnspan=len(fields) + 3, sticky="w", padx=4)
 
+        # Maneuver node: what the HMI reads through kRPC Node / Node.orbit (dashed orbit, NavBall node marker)
+        node_tab = ttk.Frame(nb)
+        nb.add(node_tab, text="Maneuver node")
+        self.node_fields = {}
+        current = dict(sim.node) if sim.node else {}
+        for col, (key, label, default) in enumerate((
+                ("prograde", "Prograde m/s", current.get("prograde", 100.0)),
+                ("normal", "Normal m/s", current.get("normal", 0.0)),
+                ("radial", "Radial out m/s", current.get("radial", 0.0)),
+                ("time", "Time to node s", current["ut"] - sim.ut if current else 300.0))):
+            ttk.Label(node_tab, text=label).grid(row=0, column=col, sticky="w", padx=4)
+            var = tk.StringVar(value="%g" % default)
+            entry = ttk.Entry(node_tab, textvariable=var, width=10)
+            entry.grid(row=1, column=col, sticky="w", padx=4)
+            entry.bind("<Return>", lambda _e: self._node_apply())
+            self.node_fields[key] = var
+        ttk.Button(node_tab, text="Create / update node", command=self._node_apply).grid(row=1, column=4, padx=6)
+        ttk.Button(node_tab, text="Delete node", command=self._node_delete).grid(row=1, column=5, padx=2)
+        self.node_text = tk.StringVar()
+        ttk.Label(node_tab, textvariable=self.node_text).grid(row=2, column=0, columnspan=6, sticky="w", padx=4)
+
         # Manual values: physics frozen, every reported value typed by hand (formats, colours, edge cases)
         mf = ttk.Frame(nb)
         nb.add(mf, text="Manual values (sent exactly as typed)")
@@ -318,6 +339,28 @@ class App:
         except ValueError as e:
             self.edit_msg.set("Not applied: %s" % e)
 
+    def _node_apply(self) -> None:
+        try:
+            f = {k: float(v.get()) for k, v in self.node_fields.items()}
+            if not all(math.isfinite(x) for x in f.values()):
+                raise ValueError("numbers only")
+            self.sim.set_node(f["prograde"], f["time"], f["normal"], f["radial"])
+        except ValueError as e:
+            self.node_text.set("Not applied: %s" % e)
+
+    def _node_delete(self) -> None:
+        self.sim.set_node(None)
+
+    def _refresh_node(self) -> None:
+        n = self.sim.node_preview()
+        if n is None:
+            self.node_text.set("No maneuver node. The HMI hides its dashed orbit within about 2 s.")
+            return
+        when = "T- %s" % _time(n["time"]) if n["time"] >= 0 else "T+ %s" % _time(-n["time"])
+        after = ("Ap %s, Pe %s" % (_dist(n["apoapsis"]), _dist(n["periapsis"])) if n["eccentricity"] < 1
+                 else "escape (e %.2f), Pe %s" % (n["eccentricity"], _dist(n["periapsis"])))
+        self.node_text.set("Node: dV %.1f m/s, %s  ->  after the burn: %s" % (n["dv"], when, after))
+
     def _apply_vessel(self) -> None:
         try:
             name = self.edit["name"].get().strip() or None
@@ -453,6 +496,7 @@ class App:
                 + "%-14s %-14s %-14s %s" % ("Mission time", _time(v.mission_time), "UT", _time(sim.ut)))
         self._refresh_game()
         self._refresh_board_tab()
+        self._refresh_node()
         self.root.after(200, self._refresh)
 
     def run(self) -> None:

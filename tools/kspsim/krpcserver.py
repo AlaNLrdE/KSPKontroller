@@ -379,16 +379,16 @@ class KrpcServer:
         r = sim.reported()
         if not r['node_enabled']:
             raise RpcFailure('The maneuver node was removed', 'KRPC', 'InvalidOperationException')
-        x, y, vx, vy = physics.maneuver_state(r)
+        pos, vel = physics.maneuver_state(r)
         member = proc.partition('_')[2]
         if member in ('PositionAt', 'VelocityAt'):
             node_ut = sim.ut + r['node_time']
-            x, y, vx, vy = physics.propagate(x, y, vx, vy, struct.unpack('<d', args[1])[0] - node_ut)
-            return enc_tuple((x, 0.0, y) if member == 'PositionAt' else (vx, 0.0, vy))
-        el = physics.elements(x, y, vx, vy)
-        values = {'get_Periapsis': el.periapsis + physics.RADIUS, 'get_Apoapsis': el.apoapsis + physics.RADIUS,
-                  'get_PeriapsisAltitude': el.periapsis, 'get_ApoapsisAltitude': el.apoapsis,
-                  'get_Eccentricity': el.e, 'get_SemiMajorAxis': el.a}
+            pos, vel = physics.propagate3(pos, vel, struct.unpack('<d', args[1])[0] - node_ut)
+            return enc_tuple(pos if member == 'PositionAt' else vel)
+        ap, pe, e, a = physics.extremes(pos, vel)
+        values = {'get_Periapsis': pe + physics.RADIUS, 'get_Apoapsis': ap + physics.RADIUS,
+                  'get_PeriapsisAltitude': pe, 'get_ApoapsisAltitude': ap, 'get_Eccentricity': e,
+                  'get_SemiMajorAxis': a}
         if member in values:
             return enc_double(values[member])
         if member == 'get_Body':
@@ -516,7 +516,7 @@ class KrpcServer:
             if member == 'get_UT':
                 return enc_double(sim.ut + r['node_time'])
             if member in ('get_Prograde', 'get_Normal', 'get_Radial'):
-                return enc_double(r['node_dv'] if member == 'get_Prograde' else 0.0)
+                return enc_double(r['node_' + member[4:].lower()])
             if member == 'get_Orbit':
                 if not r['node_enabled']:
                     raise RpcFailure('No such node', 'KRPC', 'InvalidOperationException')

@@ -81,7 +81,8 @@ def main(argv=None) -> int:
     ap.add_argument("--scenario", default="orbit", choices=physics.SCENARIOS)
     ap.add_argument("--warp", type=float, default=1.0)
     ap.add_argument("--node", metavar="DV[,SECONDS]",
-                    help="a prograde maneuver node of DV m/s, SECONDS (default 300) ahead: the HMI's dashed orbit")
+                    help="start with a prograde maneuver node of DV m/s, SECONDS (default 300) ahead: the HMI's "
+                         "dashed orbit (the window's Maneuver node tab changes or deletes it)")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")

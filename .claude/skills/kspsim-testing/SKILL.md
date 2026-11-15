@@ -53,7 +53,8 @@ want COM5 and port 50000 (it checks).
   `tools/merge_agent.py NAME`.
 - A log-monitor agent waits for KSP with a background shell loop and streams KSP.log with the Monitor tool;
   it must not be started for a session whose prerequisites are missing (see the raspberry-pi-hmi skill).
-- Maneuver nodes: `./ci sim --node DV,SECONDS` (or `Simulator.set_node`). `Node.orbit` is served as a separate
+- Maneuver nodes: window tab "Maneuver node", `./ci sim --node DV,SECONDS`, or `Simulator.set_node(prograde,
+  seconds, normal, radial)` (fixed UT, counts down; None deletes); `node_preview()` gives the window's Ap/Pe line. `Node.orbit` is served as a separate
   object (id uid*10000+6000, outside the uid*10 slots, all taken); `physics.propagate` is universal-variable
   Kepler, so hyperbolic post-burn orbits work. For an HMI frame against the sim from WSL, run kspsim with
   the Windows venv on PYTHONPATH (see raspberry-pi-hmi) and `ksphmi --address 127.0.0.1 --screenshot`.

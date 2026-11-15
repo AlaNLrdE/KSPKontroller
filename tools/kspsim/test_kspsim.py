@@ -27,6 +27,9 @@ class KeplerTest(unittest.TestCase):
         for dt in (100.0, -100.0, 5000.0):
             x, y, vx, vy = physics.propagate(v.x, v.y, v.vx, v.vy, dt)
             self.assertAlmostEqual(physics.elements(x, y, vx, vy).a, el.a, delta=1)
+        r0, v0 = (v.x, 0.0, v.y), (v.vx, 30.0, v.vy)  # 3D: energy and extremes kept
+        r, w = physics.propagate3(r0, v0, 777)
+        self.assertAlmostEqual(physics.extremes(r, w)[3], physics.extremes(r0, v0)[3], delta=1)
         e = physics.scenario("escape")  # hyperbolic: still propagates, energy kept
         x, y, vx, vy = physics.propagate(e.x, e.y, e.vx, e.vy, 3000)
         self.assertAlmostEqual(physics.elements(x, y, vx, vy).a, e.elements().a, delta=abs(e.elements().a) * 1e-6)
@@ -472,7 +475,7 @@ class KrpcTest(unittest.TestCase):
             sim.set_manual_mode(True)
             sim.set_manual_values(pitch=35, heading=135, roll=-45, speed_mode=2, target_enabled=1, relative_up=3,
                                   relative_north=0, relative_east=4, node_enabled=1, node_dv=200, node_remaining=125,
-                                  node_time=240)
+                                  node_time=240, node_prograde=200, node_normal=0, node_radial=0)
             surface = vessel.flight(vessel.surface_reference_frame)
             self.assertEqual((surface.pitch, surface.heading, surface.roll), (35, 135, -45))
             self.assertEqual(vessel.control.speed_mode.name, "target")
@@ -510,11 +513,28 @@ class KrpcTest(unittest.TestCase):
             self.assertEqual(len(vessel.control.nodes), 0)
             sim.set_manual_mode(False)
 
-            sim.set_node(150, 600)  # --node: a node on the running flight model, not only in manual mode
+            # The window's Maneuver node tab (Simulator.set_node, also --node): a node on the running flight model
+            sim.set_node(150, 600)
             self.assertEqual(vessel.control.nodes[0].orbit.body.name, "Kerbin")
-            self.assertAlmostEqual(vessel.control.nodes[0].ut - sc.ut, 600, delta=1)
-            sim.set_node(None)
+            ut = vessel.control.nodes[0].ut
+            self.assertAlmostEqual(ut - sc.ut, 600, delta=1)
+            time.sleep(0.3)
+            self.assertEqual(vessel.control.nodes[0].ut, ut)  # a fixed UT: the node counts down
+            sim.set_node(100, 400, normal=50, radial=-20)  # update: all three axes reach Node and Node.orbit
+            node = vessel.control.nodes[0]
+            self.assertEqual((node.prograde, node.normal, node.radial), (100, 50, -20))
+            self.assertAlmostEqual(node.delta_v, math.sqrt(100 ** 2 + 50 ** 2 + 20 ** 2), places=6)
+            before = sim.reported()
+            r0, v0 = physics.propagate3(tuple(before["position_" + a] for a in "xyz"),
+                                        tuple(before["velocity_" + a] for a in "xyz"), node.ut - sc.ut)
+            velocity = node.orbit.velocity_at(node.ut, frame)
+            self.assertAlmostEqual(abs(velocity[1]), 50, delta=1)  # the normal part leaves the planar orbit
+            self.assertAlmostEqual(math.dist(velocity, v0), node.delta_v, delta=2)
+            preview = sim.node_preview()
+            self.assertAlmostEqual(preview["periapsis"], node.orbit.periapsis_altitude, delta=1)
+            sim.set_node(None)  # delete: Node and Node.orbit disappear
             self.assertEqual(len(vessel.control.nodes), 0)
+            self.assertIsNone(sim.node_preview())
 
             sim.set_vessel(name="Renamed")  # streamed: the HMI shows a rename at once
             wait(lambda: name() == "Renamed")
