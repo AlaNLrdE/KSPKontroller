@@ -77,6 +77,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Heredocs containing quotes break in the Bash tool: write scripts with the Write tool, run them with
   `build/venv/Scripts/python.exe` (system `python` is not installed). `Write` needs a prior Read on existing files.
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
+- Core 1.6.0 WDT metadata says `renesas` instead of `renesas_uno`: `compile_sketch` copies the installed
+  library into `build/wdt-compat/` and fixes metadata only for normal/debug builds. Do not edit Arduino15
+  or suppress compiler diagnostics; corrected upstream metadata bypasses the workaround.
 - Helpers captured with command substitution must keep stdout machine-readable: `ensure_refassemblies`
   returns only the absolute reference-assembly path; download/status messages go to stderr, even on a cold cache.
 - `./ci deploy_all` includes the Pi: preflight SSH/packages/linger, build plugin/sketch, then `deploy_hmi`

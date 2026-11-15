@@ -35,7 +35,7 @@ Verification matrix
      - Running the actual mod inside KSP.
    * - ``python -m unittest discover -s tools -p test_ci_deploy.py``
      - Python and Bash; no hardware or network
-     - Three-project deployment ordering, Pi preflight failures, HMI build failure and ``NO_TEST`` behavior.
+     - Three-project deployment ordering, Pi preflight failures, HMI build failure, ``NO_TEST``, clean reference paths and WDT metadata overrides that preserve source bytes and compiler arguments.
      - Actual compilation, SSH availability, service restart or flashing. All such operations are stubbed.
    * - ``./ci test_hmi``
      - Native/WSL C++ toolchain, SDL, fonts

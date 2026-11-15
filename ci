@@ -94,6 +94,31 @@ find_arduino_cli() {
   echo "$exe"
 }
 
+compile_sketch() {
+  local cli="$1"
+  shift
+  local -a libraries=()
+  if [ "${FQBN%:*}" = arduino:renesas_uno ]; then
+    # Core 1.6.0 ships WDT with the old architecture name. Copy the installed
+    # library into build/ and correct only metadata; never edit Arduino15.
+    local properties platform source target
+    properties="$("$cli" compile --show-properties=unexpanded --fqbn "$FQBN" "$SKETCH")"
+    platform="$(printf '%s\n' "$properties" | sed -n 's/^runtime.platform.path=//p' | tr -d '\r')"
+    [ -n "$platform" ] || die "Arduino platform path missing from build properties"
+    if is_windows; then platform="$(cygpath -u "$platform")"; fi
+    source="$platform/libraries/WDT"
+    if tr -d '\r' < "$source/library.properties" | grep -qx 'architectures=renesas'; then
+      target="$BUILD/wdt-compat/${platform##*/}/WDT"
+      mkdir -p "$target"
+      cp -R "$source/." "$target/"
+      tr -d '\r' < "$source/library.properties" |
+        sed 's/^architectures=renesas$/architectures=renesas,renesas_uno/' > "$target/library.properties"
+      libraries=(--library "$target")
+    fi
+  fi
+  "$cli" compile --fqbn "$FQBN" "${libraries[@]}" "$@" "$SKETCH"
+}
+
 build_sketch() {
   local cli core
   cli="$(find_arduino_cli)"
@@ -107,7 +132,7 @@ build_sketch() {
   fi
 
   log "Compiling sketch for $FQBN"
-  "$cli" compile --fqbn "$FQBN" --build-path "$BUILD/sketch" "$SKETCH"
+  compile_sketch "$cli" --build-path "$BUILD/sketch"
 }
 
 # Debug build: same sketch, symbols and -Og, in its own build dir so build/sketch (what upload_sketch flashes)
@@ -116,7 +141,7 @@ build_sketch_debug() {
   local cli
   cli="$(find_arduino_cli)"
   log "Compiling sketch for $FQBN (debug, -Og) into $BUILD/sketch-debug"
-  "$cli" compile --fqbn "$FQBN" --optimize-for-debug --build-path "$BUILD/sketch-debug" "$SKETCH"
+  compile_sketch "$cli" --optimize-for-debug --build-path "$BUILD/sketch-debug"
 }
 
 # ------------------------------------------------------------------- plugin

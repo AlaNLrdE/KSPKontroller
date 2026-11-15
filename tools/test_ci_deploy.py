@@ -21,6 +21,43 @@ def find_bash():
 
 
 class DeployAllTest(unittest.TestCase):
+    def test_wdt_metadata_override_preserves_sources_and_compile_options(self):
+        ci = (ROOT / 'ci').read_text(encoding='utf-8')
+        helper = re.search(r'^compile_sketch\(\) \{\n.*?^\}', ci, re.M | re.S)
+        self.assertIsNotNone(helper)
+        for architectures in ('renesas', 'renesas_uno', 'renesas,renesas_uno'):
+            with self.subTest(architectures=architectures), tempfile.TemporaryDirectory(prefix='wdt test ') as directory:
+                root = Path(directory)
+                library = root / 'platform/1.6.0/libraries/WDT'
+                (library / 'src').mkdir(parents=True)
+                metadata = 'name=WDT\r\narchitectures=' + architectures + '\r\n'
+                (library / 'library.properties').write_bytes(metadata.encode())
+                (library / 'src/WDT.cpp').write_bytes(b'original watchdog implementation\n')
+                script = '''set -euo pipefail
+is_windows() { return 1; }
+die() { printf '%s\\n' "$*" >&2; exit 1; }
+fake_cli() {
+  if [ "${2:-}" = --show-properties=unexpanded ]; then
+    printf 'runtime.platform.path=%s\\n' "$PLATFORM"
+  else printf '%s\\n' "$@" > "$TRACE"; fi
+}
+'''
+                script += helper.group() + '\ncompile_sketch fake_cli --optimize-for-debug --build-path "build path"\n'
+                env = dict(os.environ, FQBN='arduino:renesas_uno:unor4wifi', SKETCH='sketch path',
+                           BUILD=(root / 'build').as_posix(), PLATFORM=(root / 'platform/1.6.0').as_posix(),
+                           TRACE=(root / 'trace').as_posix())
+                result = subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = (root / 'trace').read_text().splitlines()
+                self.assertEqual(args[-4:], ['--optimize-for-debug', '--build-path', 'build path', 'sketch path'])
+                self.assertEqual('--library' in args, architectures == 'renesas')
+                self.assertEqual((library / 'library.properties').read_bytes(), metadata.encode())
+                if architectures == 'renesas':
+                    override = root / 'build/wdt-compat/1.6.0/WDT'
+                    self.assertIn('architectures=renesas,renesas_uno', (override / 'library.properties').read_text())
+                    self.assertEqual((override / 'src/WDT.cpp').read_bytes(), (library / 'src/WDT.cpp').read_bytes())
+
     def test_reference_assembly_path_is_clean_with_empty_and_warm_cache(self):
         ci = (ROOT / 'ci').read_text(encoding='utf-8')
         helper = re.search(r'^ensure_refassemblies\(\) \{\n.*?^\}', ci, re.M | re.S)

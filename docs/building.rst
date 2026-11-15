@@ -43,6 +43,12 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
    * - ``./ci clean``
      - Remove build output.
 
+For ``arduino:renesas_uno`` builds, core 1.6.0's bundled WDT library incorrectly declares
+only ``architectures=renesas``. The normal and debug build commands copy that installed
+library into ``build/wdt-compat/<core-version>/WDT``, add ``renesas_uno`` to its metadata
+and pass the copy explicitly to arduino-cli. The watchdog implementation and Arduino15
+installation remain unchanged. Cores with corrected metadata use their library directly.
+
 Testing the board
 -----------------
 

@@ -162,7 +162,7 @@ def check_ci_deploy(ctx):
     result = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tools', '-p', 'test_ci_deploy.py'],
                             cwd=ROOT, capture_output=True, text=True, timeout=30)
     report('PASS' if result.returncode == 0 else 'FAIL', 'ci: deploy all projects',
-           'plugin, firmware and Pi orchestration; preflight/failure guards and NO_TEST' if result.returncode == 0
+           'deployment guards, cold-cache reference paths and WDT metadata/source preservation' if result.returncode == 0
            else (result.stdout + result.stderr)[-1000:])
 
 
