@@ -16,10 +16,10 @@ import sys
 import threading
 import time
 
-from . import physics
+from . import physics, ships
 from .arduino import BoardLink
 from .krpcserver import KrpcServer
-from .sim import Simulator
+from .sim import SCENES, Simulator
 
 
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -88,6 +88,10 @@ def main(argv=None) -> int:
     ap.add_argument("--sas", choices=sas_names, help="start with SAS on in this mode")
     ap.add_argument("--skin", choices=("classic", "apollo"),
                     help="ask the Pi HMI for this look on the UDP 50002 context reply (default: its own config)")
+    ap.add_argument("--scene", choices=SCENES, help="start in this game scene (default flight)")
+    ap.add_argument("--ship", choices=[n for n in ships.NAMES if n] + ["none"],
+                    help="editor ship the KSPHMI service reports in the VAB (default kerbal_x; none = no service, "
+                         "as without KSPSerialIO.Hmi.dll)")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
@@ -100,6 +104,8 @@ def main(argv=None) -> int:
     sim.board_throttle = not args.no_board_throttle
     if args.skin:
         sim.set_skin(args.skin)
+    if args.ship:
+        sim.set_ship("" if args.ship == "none" else args.ship)
     if args.node:
         dv, _, seconds = args.node.partition(",")
         sim.set_node(float(dv), float(seconds or 300))
@@ -111,6 +117,8 @@ def main(argv=None) -> int:
     if server:
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
+    if args.scene:
+        sim.set_scene(args.scene)
     sim.start()
     if board:
         board.start()
