@@ -22,10 +22,11 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 ## Non-negotiable rules
 
 1. **KSP must be closed** before deploying into `GameData` or probing the board with scripts (it owns COM5):
-   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs. **Flashing the sketch and the board test
-   are allowed with KSP open but never in flight** (user, 2026-11-14/15): the plugin opens COM5 only in the flight
-   scene and closes it on leaving (`KSPSerialIO[PORT] closed`); check the last scene change in KSP.log first and ask
-   the user to stay out of flight. It still needs the user's explicit OK and the ksp-workbench OK (rule 2).
+   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs. From 0.19.5.0 the plugin also owns
+   COM5 in the editor, so "outside flight" is no longer sufficient for external board scripts. Prefer KSP
+   closed for flashing and board tests; with the game open, first confirm a scene without serial ownership
+   (main menu or Space Center), a logged closed port, and ask the user to stay there. The user's explicit OK
+   and the ksp-workbench OK are still required (rule 2).
    **Pi-only deploys (`./ci deploy_hmi`) need neither KSP closed nor an OK**: run them as soon as a Pi-only commit
    is ready (user, 2026-11-15); the HMI reconnects to kRPC by itself.
 2. **The `wk-rea` KSP install is shared with another Claude session** (`ksp-workbench-*`, owns the other
@@ -192,3 +193,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Control packets use a latest-value buffer, but STAGE/SAS/RCS presses are events: capture their edges and
   receipt times on the serial reader before replacing that buffer. Decode/apply game controls only on Unity's
   thread; a latch in the main-thread decoder cannot recover packets already overwritten by the reader.
+
+- Editor mode navigation must use stock SelectPanel callbacks and wait for onEditorScreenChange; do not
+  publish a speculative mode or invoke UI on the reader thread. Queue successive presses while the panel is
+  switching, bound them by receipt age, and clear all transport controls/buttons when entering another scene.
+- Keep approved mockup content separate from visual identity: extend the real Apollo/Classic drawing helpers,
+  and verify actual renderer captures. Windows environment variables such as KSPHMI_SHOTS must be set inside
+  WSL when the ci wrapper does not forward them.
