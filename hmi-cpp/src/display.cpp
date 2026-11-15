@@ -7,6 +7,7 @@
 #include "apollo.hpp"
 #include "fmt.hpp"
 #include "gauges.hpp"
+#include "log.hpp"
 #include "scenes.hpp"
 #include "theme.hpp"
 
@@ -117,8 +118,24 @@ Display::Display(const Config& cfg, Canvas& canvas)
       day_hours_(cfg.format.day_hours),
       server_text_(fmt::str("kRPC server: %s:%d", cfg.krpc.address.c_str(), cfg.krpc.rpc_port)),
       net_(cfg.krpc.address),
-      skin_(cfg.display.skin == "apollo" ? "apollo" : "classic") {
-    if (skin_ == "apollo") apollo_ = std::make_unique<ApolloSkin>(*this, cfg);
+      cfg_(cfg),
+      config_skin_(known_skin(cfg.display.skin) ? cfg.display.skin : "classic"),
+      skin_(config_skin_) {
+    if (!known_skin(cfg.display.skin)) log::warning("ksphmi.display", "unknown skin '" + cfg.display.skin + "', using classic");
+    log::info("ksphmi.display", "skin: " + skin_ + " (config)");
+}
+
+bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo"; }
+
+void Display::set_skin(const std::string& name, const char* why) {
+    if (!known_skin(name) || name == skin_) return;
+    log::info("ksphmi.display", "skin: " + name + " (" + why + ", was " + skin_ + ")");
+    skin_ = name;
+}
+
+Rect Display::orbit_text(const std::string& s, float units, Color color, double x, double y, Anchor a) {
+    if (orbit_label) return orbit_label(s, units, color, x, y, a);
+    return c_.text(s, units, color, x, y, a);
 }
 
 Display::~Display() {
@@ -126,7 +143,12 @@ Display::~Display() {
 }
 
 void Display::draw(const Snapshot& snap, double now) {
-    if (apollo_) {
+    // The simulator's context reply may pick the skin; otherwise the [display] setting. Each skin keeps its own
+    // caches (built lazily, released with the Display), so switching back and forth costs nothing after the first.
+    if (known_skin(snap.skin)) set_skin(snap.skin, "context");
+    else set_skin(config_skin_, "config");
+    if (skin_ == "apollo") {
+        if (!apollo_) apollo_ = std::make_unique<ApolloSkin>(*this, cfg_);
         apollo_->draw(snap, now);
         return;
     }
@@ -471,7 +493,7 @@ int Display::apsis_label_width() {
 
 void Display::orbit(const Rect& rect, const Snapshot& s) {
     const double u = c_.u;
-    panel(c_, rect);
+    if (panel_titles) panel(c_, rect);
     if (panel_titles) c_.text("ORBIT", 2.6, LABEL, rect.x + 1.8 * u, rect.y + 1.8 * u);
     if (s.orbit_state && panel_titles) c_.text("INERTIAL", 1.8, MUTED, rect.right() - 1.8 * u, rect.y + 1.8 * u, Anchor::TopRight);
     // Escape trajectories are unbounded: contain every primitive, including off-screen vessel markers, without
@@ -532,17 +554,17 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
     }
     if (points.size() > 1) c_.polyline(points, elliptic, 1, ACCENT);
     c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(2.0, radius * scale)), BODY);
-    c_.text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
+    orbit_text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
 
     float marker = static_cast<float>(0.8 * u);
     if (elliptic) {
         Pt ap = to_screen(a * (1 + e), PI);
         c_.circle(ap.x, ap.y, marker, GOOD);
-        c_.text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
+        orbit_text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
     }
     Pt pe = to_screen(rp, 0.0);
     c_.circle(pe.x, pe.y, marker, s.periapsis < s.atmosphere_depth ? WARN : ACCENT);
-    c_.text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
+    orbit_text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
 
     double denom = 1 + e * std::cos(s.true_anomaly);
     double r_now = denom > 1e-3 ? p / denom : 0;
@@ -634,17 +656,17 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
     c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(2.0, radius * scale)), BODY);
-    c_.text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
+    orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
     if (conic && conic->eccentricity > 1e-5) {
         if (conic->apoapsis()) {
             Pt ap = point(*conic->position(PI));
             c_.circle(ap.x, ap.y, static_cast<float>(.8 * u), GOOD);
-            c_.text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
+            orbit_text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
         }
         Pt pe = point(*conic->position(0));
         c_.circle(pe.x, pe.y, static_cast<float>(.8 * u), s.periapsis < s.atmosphere_depth ? WARN : ACCENT);
-        c_.text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
+        orbit_text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
     }
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, true);
     // The white ring followed during docking: never from true anomaly, attitude, target velocity, or the changing
@@ -702,8 +724,8 @@ void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSp
     auto apsis = [&](const char* label, const Vec3& where) {
         Pt p = point(where);
         c_.circle(p.x, p.y, marker, MANEUVER);
-        if (p.x >= cx) c_.text(label, 2.4, MANEUVER, p.x + 1.1 * u, p.y, Anchor::MidLeft);
-        else c_.text(label, 2.4, MANEUVER, p.x - 1.1 * u, p.y, Anchor::MidRight);
+        if (p.x >= cx) orbit_text(label, 2.4, MANEUVER, p.x + 1.1 * u, p.y, Anchor::MidLeft);
+        else orbit_text(label, 2.4, MANEUVER, p.x - 1.1 * u, p.y, Anchor::MidRight);
     };
     if (next.eccentricity > 1e-5) {
         if (span.closed && next.apoapsis()) apsis("Ap", *next.position(PI));

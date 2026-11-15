@@ -436,7 +436,7 @@ TEST(apollo_skin_keeps_the_layout_zones_and_text_inside_its_tiles) {
     for (auto [w, h] : SIZES) {
         Screen s(w, h, "apollo");
         Display& d = *s.display;
-        CHECK(d.apollo() != nullptr);
+        CHECK_EQ(d.skin(), std::string("apollo"));
         std::vector<Rect> tiles, active;
         d.on_tile_begin = [&](const Rect& r) { tiles.push_back(r), active.push_back(r); };
         d.on_tile_end = [&](const Rect&) { active.pop_back(); };
@@ -492,6 +492,31 @@ TEST(apollo_panel_art_is_built_once_per_screen_kind) {
     // the classic skin is untouched by the option
     Screen classic(1260, 840);
     CHECK(classic.display->apollo() == nullptr);
+}
+
+TEST(skin_switches_at_runtime_from_the_context_and_keeps_its_cache) {
+    Screen s(1260, 840);  // config: classic
+    Snapshot snap = demo();
+    s.display->draw(snap, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("classic"));
+    CHECK(s.display->apollo() == nullptr);  // built lazily, only when first shown
+    snap.skin = "apollo";  // the simulator asks for it on the context reply
+    s.display->draw(snap, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("apollo"));
+    CHECK_EQ(s.display->apollo()->builds, 1);
+    snap.skin = "classic";
+    s.display->draw(snap, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("classic"));
+    snap.skin = "apollo";
+    s.display->draw(snap, monotonic());
+    CHECK_EQ(s.display->apollo()->builds, 1);  // its panel art survived the switch: no rebuild, no new texture
+    snap.skin = "chrome";  // unknown: back to the [display] setting
+    s.display->draw(snap, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("classic"));
+    snap.skin = "";
+    Screen a(1260, 840, "apollo");
+    a.display->draw(snap, monotonic());
+    CHECK_EQ(a.display->skin(), std::string("apollo"));
 }
 
 TEST(apollo_views_render_within_screen) {

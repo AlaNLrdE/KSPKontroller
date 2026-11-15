@@ -11,6 +11,7 @@ from . import physics
 
 log = logging.getLogger("kspsim")
 
+SKINS = ("", "classic", "apollo")  # "" sends no skin field (as KSPSerialIO): the HMI's config decides
 SCENES = ("flight", "space_center", "vab", "sph", "mission_control", "astronaut_complex",
           "research", "administration", "tracking_station", "closed")  # closed = KSP not running: kRPC ports closed, no telemetry
 
@@ -28,6 +29,7 @@ class Simulator:
         self.vessel: physics.Vessel | None = None
         self.vessel_uid = 9  # object ids derive from it; a new vessel gets a new uid, as a switch in KSP does
         self.scene = "flight"
+        self.skin = ""  # HMI look sent on the UDP context channel: "" = none (the HMI's [display] skin decides)
         self.warp = warp
         self.ut = 0.0
         self.tick = tick
@@ -245,6 +247,14 @@ class Simulator:
         for f in self.listeners:
             f(scene)
         log.info("scene %s", scene)
+
+    def set_skin(self, skin: str) -> None:
+        """Ask the Raspberry Pi HMI for a look ("classic", "apollo"), or "" to leave it to its config."""
+        assert skin in SKINS
+        with self.lock:
+            changed, self.skin = skin != self.skin, skin
+        if changed:
+            log.info("HMI skin %s", skin or "from the HMI config")
 
     def set_manual(self, **changes) -> None:
         with self.lock:

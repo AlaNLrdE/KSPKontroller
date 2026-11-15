@@ -86,6 +86,13 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   glass colour (opaque): translucent triangles are slow on the software renderer. The NavBall keeps its whole
   zone (an inset rect pushed HDG under the mode buttons): its bezel goes around it, in the gaps between zones.
   `KSPHMI_SHOTS=DIR ./ci test_hmi` saves facility / no-vessel / caution screenshots that `--demo` cannot reach.
+- Skins switch at runtime (2026-11-14): `Snapshot.skin` comes from an optional ` skin=<name>` field of the UDP
+  50002 context reply (kspsim only; KSPSerialIO never sends it), read about once a second in every state from
+  `KrpcSource::publish` (telemetry thread). Known context skin > `[display] skin`. `ApolloSkin` is created the
+  first time it is shown and kept, so switching back reuses its panel texture (`builds` stays 1). Navball has
+  `chrome` (classic panel, readouts, buttons): apollo turns it off and draws its own around
+  `Navball::globe_geometry` (`globe` is already a free function in navball.cpp). `./ci test_hmi --sim` runs
+  kspsim with `--skin apollo` and requires `skin: apollo (context` in the HMI log.
 - WSL can fail with `Wsl/Service/E_UNEXPECTED` for minutes: wait with a background loop on
   `wsl.exe -d Ubuntu -e true`; never `wsl --shutdown` (other agents use it). No PIL in the venv: crop PNGs
   with a stdlib zlib script.

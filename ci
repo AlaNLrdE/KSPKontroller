@@ -560,7 +560,7 @@ hmi_sim() {
   out="$BUILD/hmi-cpp-sim"; mkdir -p "$out"
   log "kspsim on 127.0.0.1:$port/$((port + 1)), HMI against it"
   (cd "$ROOT/tools" && exec "$py" -m kspsim --no-board --headless --seconds 40 --address 127.0.0.1 \
-      --rpc-port "$port" --stream-port "$((port + 1))") >"$out/kspsim.log" 2>&1 &
+      --rpc-port "$port" --stream-port "$((port + 1))" --skin apollo) >"$out/kspsim.log" 2>&1 &
   sim_pid=$!
   sleep 3
   KSPHMI_LOCAL_CONFIG=/dev/null "$BUILD/hmi-cpp/ksphmi" --address 127.0.0.1 --size 2520x1680 --seconds 8 \
@@ -571,6 +571,8 @@ hmi_sim() {
   cat "$out/hmi.log"
   [ "$rc" = 0 ] || die "HMI exited with $rc"
   grep -q "following .* around Kerbin" "$out/hmi.log" || die "the HMI never followed the simulated vessel"
+  # kspsim asks for the apollo skin on the UDP 50002 context reply: the HMI must switch at runtime
+  grep -q "skin: apollo (context" "$out/hmi.log" || die "the HMI ignored the simulator's skin (context reply)"
   log "OK: followed the simulated vessel; frame saved to $out/flight.png"
 }
 

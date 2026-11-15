@@ -43,6 +43,16 @@ class App:
         for value, label in ((v, v.replace("_", " ").title()) for v in SCENES):
             ttk.Radiobutton(game, text=label, value=value, variable=self.scene,
                             command=lambda: sim.set_scene(self.scene.get())).pack(anchor="w")
+        # The HMI's look, sent on the UDP 50002 context reply; the Pi switches without restarting.
+        skin_row = ttk.Frame(game)
+        skin_row.pack(anchor="w", pady=(6, 0))
+        ttk.Label(skin_row, text="HMI skin").pack(side="left")
+        self.skin = tk.StringVar(value=sim.skin or "config")
+        skin_box = ttk.Combobox(skin_row, textvariable=self.skin, state="readonly", width=9,
+                                values=("config", "classic", "apollo"))
+        skin_box.pack(side="left", padx=4)
+        skin_box.bind("<<ComboboxSelected>>",
+                      lambda _e: sim.set_skin("" if self.skin.get() == "config" else self.skin.get()))
         self.board_text = tk.StringVar()
         self.krpc_text = tk.StringVar()
         for title, var, width in (("Arduino (KSPSerialIO protocol)", self.board_text, 64),

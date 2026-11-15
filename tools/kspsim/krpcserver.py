@@ -200,12 +200,17 @@ class KrpcServer:
             log.error(self.error)
             self.stop()
 
+    def context_reply(self) -> str:
+        """``KSPHMI/1 <scene>[ skin=<name>]``: the optional skin field is the simulator's own (KSPSerialIO sends none)."""
+        reply = "KSPHMI/1 " + self.sim.scene
+        return reply + (" skin=" + self.sim.skin if self.sim.skin else "")
+
     def _serve_context(self, sock):
         while self._context is sock:
             try:
                 data, peer = sock.recvfrom(256)
                 if data == b"KSPHMI/1":
-                    sock.sendto(("KSPHMI/1 " + self.sim.scene).encode("ascii"), peer)
+                    sock.sendto(self.context_reply().encode("ascii"), peer)
             except socket.timeout:
                 continue
             except OSError:

@@ -314,6 +314,19 @@ TEST(scene_context_accepts_only_versioned_known_scenes) {
     CHECK(find_view("vab") && !find_view("flight"));
 }
 
+TEST(scene_context_carries_an_optional_skin) {
+    Context c = parse_context_reply("KSPHMI/1 vab skin=apollo");
+    CHECK_EQ(c.scene, "vab");
+    CHECK_EQ(c.skin, "apollo");
+    CHECK_EQ(parse_context("KSPHMI/1 vab skin=apollo"), "vab");
+    c = parse_context_reply("KSPHMI/1 flight skin=classic");  // flight is no facility view, the skin still counts
+    CHECK_EQ(c.scene, "");
+    CHECK_EQ(c.skin, "classic");
+    CHECK_EQ(parse_context_reply("KSPHMI/1 vab").skin, "");  // KSPSerialIO: no field, the config decides
+    for (const char* reply : {"KSPHMI/2 vab skin=apollo", "KSPHMI/1 vab skin=", "KSPHMI/1 vab skin=a;b", "skin=apollo"})
+        CHECK_EQ(parse_context_reply(reply).skin, "");
+}
+
 TEST(discovery_accepts_only_local_peers) {
     for (const char* a : {"127.0.0.1", "192.168.100.10", "10.0.0.5", "172.16.1.1", "169.254.3.4"}) CHECK(is_local(a));
     for (const char* a : {"8.8.8.8", "1.1.1.1", "not-an-ip", "192.168.1", "192.168.001.1", "1.2.3.4.5", "256.1.1.1"})

@@ -142,8 +142,17 @@ under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local
 review that draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
 seven-segment readouts (``segments.cpp``), caution and warning lamps (UPLINK, NO DATA, NO LINK, SAS, RCS,
 PE ATMO, PE SURF, LOW PWR, LOW FUEL, ESCAPE), edgewise resource meters and bezels around ORBIT and the
-NavBall. Its static art is one texture per screen size and screen kind; per frame only lit segments, lamps,
-pointers and the two plots are drawn. Try it with ``./ci hmi --demo --skin apollo``.
+NavBall (round metal bezel, segment readouts for speed, heading, pitch, roll, throttle, G and the maneuver
+node, SAS modes as lamp tiles). Its static art is one texture per screen size and screen kind; per frame only
+lit segments, lamps, pointers and the two plots are drawn. Try it with ``./ci hmi --demo --skin apollo``.
+
+The skin can change while the HMI runs: the context reply on UDP 50002 may carry an optional field,
+``KSPHMI/1 <scene> skin=<name>``. Only the simulator sends it (its *HMI skin* selector, or ``--skin``);
+KSPSerialIO never does, so with the game ``[display] skin`` decides. The HMI asks for the context about once a
+second in every state, flight included (telemetry thread, 0.15 s timeout). Known skin in the reply > the
+setting; each skin keeps its caches, built the first time it is shown. Changes are logged
+(``ksphmi.display: skin: apollo (context, was classic)``). The default skin is the one line ``skin = ...`` in
+``hmi-cpp/config.toml``.
 
 The Pi initiates all connections, so a DHCP change of its own address does not affect the display.
 If the configured PC address stops working, the HMI broadcasts ``KSPHMI/1`` on UDP 50002 to the local

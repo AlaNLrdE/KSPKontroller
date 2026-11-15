@@ -8,6 +8,7 @@
 #include "display.hpp"
 #include "fmt.hpp"
 #include "gauges.hpp"
+#include "navball.hpp"
 #include "scenes.hpp"
 #include "segments.hpp"
 #include "theme.hpp"
@@ -522,23 +523,136 @@ void ApolloSkin::flight(Canvas& c, bool art, const Snapshot& s) {
     Rect orbit = Rect::f(right_x, top, right_w, orbit_h);
     Rect nav = Rect::f(right_x, top + orbit_h + gap, right_w, bottom - top - orbit_h - gap);
     Rect orbit_well = bezel(c, orbit, "ORBIT", art);
-    // The NavBall keeps its whole zone (its own layout is tuned to it): a thin bezel sits around it, in the gaps
-    // between the zones, and it shows its own caption.
-    if (art) {
-        Rect ring = nav.inflate(1.5 * u, 1.5 * u);
-        c.rounded_rect(ring.inflate(.3 * u, .3 * u), rnd(1.4 * u), Color{82, 84, 85});
-        c.rounded_rect(ring, rnd(1.2 * u), BEZEL);
-        c.fill_rect(float(ring.x + 1.2 * u), float(ring.y + .1 * u), float(ring.w - 2.4 * u), std::max(1.0f, rnd(.12 * u)), BEZEL_HI);
-        c.rounded_rect(nav, rnd(1.2 * u), WELL);
-    }
+    navball(c, art, nav, s);
     if (art) {
         label(c, "INERTIAL", 1.3f, orbit.right() - 2.6 * u, orbit.y + 1.3 * u, Anchor::MidRight, DIM_INK, true, .08f);
         return;
     }
+    // ORBIT's drawing is the classic one; its body and apsis labels are painted in the panel lettering.
     d_.panel_titles = false;
-    d_.orbit(orbit_well, s);
-    d_.panel_titles = true;
-    d_.navball().draw(c, nav, s.nav);
+    d_.orbit_label = [&c](const std::string& t, float units, Color color, double x, double y, Anchor a) {
+        return label(c, t.size() > 2 ? upper(t) : t, units * .8f, x, y, a, color, false, .08f);
+    };
+    try {
+        d_.orbit(orbit_well, s);
+    } catch (...) {
+        d_.panel_titles = true, d_.orbit_label = nullptr;
+        throw;
+    }
+    d_.panel_titles = true, d_.orbit_label = nullptr;
+}
+
+namespace {
+// Metal disc lit from above (the NavBall's round bezel), drawn row by row into the cached panel.
+void metal_disc(Canvas& c, double cx, double cy, double radius) {
+    int rr = static_cast<int>(radius);
+    for (int dy = -rr; dy <= rr; ++dy) {
+        double t = (dy + radius) / (2 * radius);
+        double v = t < .45 ? 150 - 70 * t / .45 : 80 + 70 * (t - .45) / .55;  // light top, dark middle, lighter bottom
+        double half = std::sqrt(std::max(radius * radius - double(dy) * dy, 0.0));
+        uint8_t l = uint8_t(std::clamp(std::lround(v), 0L, 255L));
+        c.fill_rect(float(cx - half), float(cy + dy), float(2 * half), 1.0f, Color{l, uint8_t(l + 2), uint8_t(l + 3)});
+    }
+}
+
+// A captioned readout: painted caption, then the window below it. Returns the window's top left.
+struct Readout {
+    float x, y;
+    seg::Layout l;
+};
+Readout readout(Canvas& c, bool art, double x, double y, double room, const char* caption, const std::string& pattern,
+                double max_h, bool right = false) {
+    const double u = c.u;
+    seg::Layout probe = seg::layout(pattern, 100);
+    float dh = std::max(4.0f, std::floor(float(std::min(max_h, 100 * room / probe.w))));
+    Readout r{0, float(y + 2.0 * u), seg::layout(pattern, dh)};
+    r.x = float(right ? x + room - r.l.w : x);
+    if (art) {
+        label(c, caption, 1.35f, right ? x + room : x, y, right ? Anchor::TopRight : Anchor::TopLeft, INK, true, .08f);
+        seg::window(c, r.x, r.y, r.l);
+    }
+    return r;
+}
+}  // namespace
+
+void ApolloSkin::navball(Canvas& c, bool art, const Rect& rect, const Snapshot& s) {
+    const double u = c.u;
+    const Navball::Globe g = Navball::globe_geometry(c, rect);
+    const double ring = g.r + 4.0 * u;
+    // readout columns either side of the bezel
+    const double lx = rect.x + 1.6 * u, lw = g.cx - ring - 1.2 * u - lx;
+    const double rx = g.cx + ring + 1.2 * u, rw = rect.right() - 1.6 * u - rx;
+    const double rows[5] = {rect.y + 3.3 * u, rect.y + 13.6 * u, rect.y + 21.2 * u, rect.y + 28.8 * u, rect.y + 36.0 * u};
+    const Readout speed = readout(c, art, lx, rows[0] + 3.4 * u, lw, "SPEED  M/S", "8888888", 2.4 * u);
+    const Readout pitch = readout(c, art, lx, rows[1], lw, "PITCH  DEG", "88888", 2.6 * u);
+    const Readout thr = readout(c, art, lx, rows[2], lw, "THROTTLE  %", "888", 2.6 * u);
+    const Readout node_dv = readout(c, art, lx, rows[3], lw, "NODE DV  M/S", "888888", 2.1 * u);
+    const Readout burn = readout(c, art, lx, rows[4], lw, "BURN  H:M:S", "888:88:88", 2.1 * u);
+    const Readout hdg = readout(c, art, rx, rows[0], rw, "HEADING  DEG", "888", 3.4 * u, true);
+    const Readout roll = readout(c, art, rx, rows[1], rw, "ROLL  DEG", "88888", 2.6 * u, true);
+    const Readout gee = readout(c, art, rx, rows[2], rw, "G-FORCE", "888", 2.6 * u, true);
+    const Readout t_node = readout(c, art, rx, rows[3], rw, "TIME TO NODE  H:M:S", "888:88:88", 2.1 * u, true);
+    const Readout start = readout(c, art, rx, rows[4], rw, "BURN START IN  H:M:S", "888:88:88", 2.1 * u, true);
+    // speed reference lamps above the speed window
+    static const char* const MODES[3][2] = {{"orbit", "ORBIT"}, {"surface", "SURF"}, {"target", "TGT"}};
+    const double mw = (lw - 2 * .5 * u) / 3, mh = 2.3 * u;
+    const float mode_units = fit(c, {"ORBIT", "SURF", "TGT"}, 1.2f, mw - 1.2 * u);
+    auto mode_rect = [&](int i) { return Rect::f(lx + i * (mw + .5 * u), rows[0] + .3 * u, mw, mh); };
+    // SAS mode lamps along the bottom
+    const auto& sas = Navball::sas_modes();
+    const double gap = .5 * u, sw = std::min(7.0 * u, (rect.w - 3.2 * u - 9 * gap) / 10), sh = 3.3 * u;
+    const double sx = rect.centerx() - (10 * sw + 9 * gap) / 2, sy = rect.bottom() - 5.9 * u;
+    std::vector<std::string> legends;
+    for (const auto& m : sas) legends.push_back(m.second);
+    const float sas_units = fit(c, legends, 1.35f, sw - 1.3 * u);
+    if (art) {
+        frame(c, rect, "NAVBALL  \xC2\xB7  FLIGHT DIRECTOR ATTITUDE INDICATOR");
+        c.circle(float(g.cx), float(g.cy), float(ring + .5 * u), Color{84, 86, 87});
+        metal_disc(c, g.cx, g.cy, ring);
+        c.ring(float(g.cx), float(g.cy), float(ring), std::max(1.0f, rnd(.12 * u)), Color{52, 54, 55});
+        c.circle(float(g.cx), float(g.cy), float(g.r + 3.0 * u), Color{30, 31, 32});
+        c.circle(float(g.cx), float(g.cy), float(g.r + 2.7 * u), WELL);
+        for (int k = 0; k < 4; ++k) {
+            double a = PI / 4 + k * PI / 2;
+            screw(c, g.cx + (ring - .9 * u) * std::cos(a), g.cy + (ring - .9 * u) * std::sin(a), .5 * u, a * 1.7);
+        }
+        label(c, "SPEED REF", 1.15f, lx, rows[0] - 1.6 * u, Anchor::TopLeft, DIM_INK, true, .08f);
+        for (int i = 0; i < 3; ++i) lamp(c, mode_rect(i), MODES[i][1], mode_units, true, nullptr);
+        label(c, "SAS MODE", 1.15f, sx, sy - 1.8 * u, Anchor::TopLeft, DIM_INK, true, .08f);
+        for (int i = 0; i < 10; ++i) lamp(c, Rect::f(sx + i * (sw + gap), sy, sw, sh), sas[i].second, sas_units, true, nullptr);
+        return;
+    }
+    Navball& ball = d_.navball();
+    ball.chrome = false;
+    ball.draw(c, rect, s.nav);
+    ball.chrome = true;
+    if (!s.nav) {
+        label(c, "ATTITUDE UNAVAILABLE", 2.0f, g.cx, g.cy, Anchor::Center, INK, false);
+        return;
+    }
+    const Navigation& n = *s.nav;
+    for (int i = 0; i < 3; ++i)
+        if (n.speed_mode == MODES[i][0]) lamp(c, mode_rect(i), MODES[i][1], mode_units, false, &L_WHITE);
+    for (int i = 0; i < 10; ++i)
+        if (n.sas && n.sas_mode == sas[i].first)
+            lamp(c, Rect::f(sx + i * (sw + gap), sy, sw, sh), sas[i].second, sas_units, false, &L_GREEN);
+    seg::draw(c, speed.x, speed.y, speed.l, n.speed ? fmt::str("%.1f", *n.speed) : "--", seg::GREEN);
+    seg::draw(c, pitch.x, pitch.y, pitch.l, fmt::str("%.1f", n.pitch), seg::GREEN);
+    seg::draw(c, roll.x, roll.y, roll.l, fmt::str("%.1f", n.roll), seg::GREEN);
+    long long heading = ((std::llround(n.heading) % 360) + 360) % 360;
+    seg::draw(c, hdg.x, hdg.y, hdg.l, fmt::str("%03lld", heading), seg::GREEN);
+    seg::draw(c, thr.x, thr.y, thr.l, std::to_string(std::llround(std::clamp(n.throttle, 0.0, 1.0) * 100)), seg::GREEN);
+    Color g_color = n.g_force < 5 ? seg::GREEN : n.g_force < 10 ? seg::AMBER : seg::RED;
+    seg::draw(c, gee.x, gee.y, gee.l, fmt::str("%.1f", n.g_force), g_color);
+    if (n.node_remaining) {
+        seg::draw(c, node_dv.x, node_dv.y, node_dv.l, fmt::str("%.1f", std::max(0.0, *n.node_remaining)), seg::GREEN);
+        if (n.node_time) seg::draw(c, t_node.x, t_node.y, t_node.l, hms(*n.node_time, day_hours_).text, seg::GREEN);
+        if (n.burn_seconds) seg::draw(c, burn.x, burn.y, burn.l, hms(*n.burn_seconds, day_hours_).text, seg::GREEN);
+        if (n.burn_seconds && n.node_time) {
+            double in = *n.node_time - *n.burn_seconds / 2;
+            seg::draw(c, start.x, start.y, start.l, hms(in, day_hours_).text, in < 0 ? seg::AMBER : seg::GREEN);
+        }
+    }
 }
 
 void ApolloSkin::resources(Canvas& c, bool art, const Rect& rect, const Snapshot& s) {
@@ -698,7 +812,6 @@ void ApolloSkin::facility(Canvas& c, bool art, const Snapshot& s) {
 void ApolloSkin::waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel) {
     const double u = c.u;
     const double cx = c.w / 2.0, sy = 34 * u, sr = 18 * u;
-    Rect scope = Rect::f(cx - sr, sy - sr, 2 * sr, 2 * sr);
     Rect annunciator = Rect::f(cx - 24 * u, 57 * u, 48 * u, 7.5 * u);
     const char* legend = no_vessel ? "NOT IN FLIGHT" : "WAITING FOR KSP";
     if (art) {

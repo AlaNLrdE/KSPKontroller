@@ -50,6 +50,8 @@ private:
     void flight(Canvas& c, bool art, const Snapshot& s);
     void resources(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void staging(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
+    /// NavBall zone: white group frame, the globe in a round metal bezel, segment readouts and SAS mode lamps.
+    void navball(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void facility(Canvas& c, bool art, const Snapshot& s);
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
 
