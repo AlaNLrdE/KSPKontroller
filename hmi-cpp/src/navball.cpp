@@ -1,5 +1,6 @@
 #include "navball.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <stdexcept>
 
@@ -227,20 +228,30 @@ void Navball::symbol(Canvas& c, const std::string& kind, Color color, float x, f
     }
 }
 
+Quat Navball::smooth(const Quat& shown, const Quat& target, double dt) {
+    if (!(dt > 0) || angle_between(shown, target) > SNAP_DEG) return target;
+    return slerp(shown, target, 1 - std::exp(-dt / SMOOTHING_S));
+}
+
 void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>& nav) {
     const double u = c.u;
     panel(c, rect);
     c.text("NAVBALL", 2.6, {122, 140, 164}, rect.x + 1.8 * u, rect.y + 1.8 * u);
     if (!nav) {
+        animating_ = false;
         c.text("Attitude unavailable", 3.4, WHITE, rect.centerx(), rect.centery(), Anchor::Center);
         return;
     }
     const Navigation& n = *nav;
     const double radius = std::min(rect.h * .31, rect.w * .31);
     const double cx = rect.centerx() - 1.8 * u, cy = rect.y + rect.h * .46;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    shown_ = shown_at_ < 0 ? n.rotation : smooth(shown_, n.rotation, now - shown_at_);
+    shown_at_ = now;
+    animating_ = angle_between(shown_, n.rotation) > 0.05;
     Basis axes;
     try {
-        axes = basis(n.rotation);
+        axes = basis(shown_);
     } catch (const std::invalid_argument&) {  // a zero quaternion: show the globe level rather than nothing
         axes = basis(Quat{0, 0, 0, 1});
     }

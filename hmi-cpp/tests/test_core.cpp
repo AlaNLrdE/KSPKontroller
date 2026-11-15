@@ -119,6 +119,16 @@ static void check_vector(const Vec3& a, const Vec3& b) {
     CHECK_NEAR(a.z, b.z, 1e-6);
 }
 
+TEST(attitude_slerp_and_navball_smoothing) {
+    Quat a = attitude(0, 0, 0), b = attitude(0, 90, 0);
+    CHECK_NEAR(angle_between(a, b), 90, 1e-6);
+    CHECK_NEAR(angle_between(a, slerp(a, b, 0.5)), 45, 1e-6);
+    CHECK_NEAR(angle_between(slerp(a, b, 0), a), 0, 1e-6);
+    CHECK_NEAR(angle_between(slerp(a, b, 1), b), 0, 1e-6);
+    Quat neg{-b.x, -b.y, -b.z, -b.w};  // same attitude, opposite sign: still the short 45 degree way
+    CHECK_NEAR(angle_between(a, slerp(a, neg, 0.5)), 45, 1e-6);
+}
+
 TEST(attitude_compass_pitch_roll_and_poles) {
     check_vector(basis(attitude(0, 0, 0)).forward, {0, 1, 0});
     check_vector(basis(attitude(0, 90, 0)).forward, {0, 0, 1});

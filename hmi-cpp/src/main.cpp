@@ -291,7 +291,8 @@ int run(int argc, char** argv) {
             std::shared_ptr<const Snapshot> snap =
                 args.bench ? std::make_shared<const Snapshot>(bench_source.sample(i + 1)) : source->latest();
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick.
-            bool needed = snap != last || snap->state != State::Flight || stale(*snap, tick);
+            bool needed = snap != last || snap->state != State::Flight || stale(*snap, tick) ||
+                          (snap->state == State::Flight && display.navball().animating());
             if (needed) {
                 double t0 = monotonic();
                 display.draw(*snap, t0);

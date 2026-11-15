@@ -20,6 +20,39 @@ Vec3 rotate(const Quat& q, const Vec3& v) {
 
 Basis basis(const Quat& q) { return {rotate(q, {1, 0, 0}), rotate(q, {0, 1, 0}), rotate(q, {0, 0, -1})}; }
 
+namespace {
+bool normalised(const Quat& q, Quat& out) {
+    double n = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    if (!(n > 1e-12) || !std::isfinite(n)) return false;
+    out = {q.x / n, q.y / n, q.z / n, q.w / n};
+    return true;
+}
+}  // namespace
+
+Quat slerp(const Quat& a, const Quat& b, double t) {
+    Quat p, q;
+    if (!normalised(a, p) || !normalised(b, q)) return b;
+    double d = p.x * q.x + p.y * q.y + p.z * q.z + p.w * q.w;
+    if (d < 0) q = {-q.x, -q.y, -q.z, -q.w}, d = -d;  // q and -q are the same attitude: take the short way
+    t = std::min(1.0, std::max(0.0, t));
+    double wa, wb;
+    if (d > 0.9995) {  // nearly equal: linear blend, renormalised below
+        wa = 1 - t, wb = t;
+    } else {
+        double theta = std::acos(std::min(1.0, d)), s = std::sin(theta);
+        wa = std::sin((1 - t) * theta) / s, wb = std::sin(t * theta) / s;
+    }
+    Quat r{wa * p.x + wb * q.x, wa * p.y + wb * q.y, wa * p.z + wb * q.z, wa * p.w + wb * q.w}, out;
+    return normalised(r, out) ? out : q;
+}
+
+double angle_between(const Quat& a, const Quat& b) {
+    Quat p, q;
+    if (!normalised(a, p) || !normalised(b, q)) return 180;
+    double d = std::fabs(p.x * q.x + p.y * q.y + p.z * q.z + p.w * q.w);
+    return degrees_of(2 * std::acos(std::min(1.0, d)));
+}
+
 Quat attitude(double pitch, double heading, double roll) {
     double p = radians(pitch), h = radians(heading), r = radians(roll);
     Vec3 f{std::sin(p), std::cos(p) * std::cos(h), std::cos(p) * std::sin(h)};

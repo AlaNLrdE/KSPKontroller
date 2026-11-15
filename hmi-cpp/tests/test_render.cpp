@@ -9,6 +9,7 @@
 #include "config.hpp"
 #include "display.hpp"
 #include "log.hpp"
+#include "navball.hpp"
 #include "scenes.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
@@ -425,6 +426,22 @@ TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
         if (texts.count("KSP HMI") && texts.count("Starting..."))
             CHECK(!texts["KSP HMI"].collides(texts["Starting..."]));
     }
+}
+
+TEST(navball_attitude_smoothing) {
+    Quat a = attitude(0, 0, 0), b = attitude(0, 90, 0);
+    // Smoothing moves part of the way each frame, converges, and snaps for large jumps.
+    Quat s = a;
+    double prev = angle_between(s, attitude(0, 20, 0));
+    for (int i = 0; i < 30; ++i) {
+        s = Navball::smooth(s, attitude(0, 20, 0), 1.0 / 30);
+        double d = angle_between(s, attitude(0, 20, 0));
+        CHECK(d < prev + 1e-9);
+        prev = d;
+    }
+    CHECK(prev < 0.1);
+    CHECK_NEAR(angle_between(Navball::smooth(a, b, 1.0 / 30), b), 0, 1e-6);  // 90 > SNAP_DEG
+    CHECK_NEAR(angle_between(Navball::smooth(a, attitude(0, 20, 0), 0), attitude(0, 20, 0)), 0, 1e-6);
 }
 
 int main(int argc, char** argv) {

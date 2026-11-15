@@ -46,8 +46,26 @@ private:
         SDL_Rect src;
     };
 
+public:
+    /// Time constant of the attitude smoothing (s): about one kRPC sample period at 10 Hz.
+    static constexpr double SMOOTHING_S = 0.09;
+    /// Larger jumps than this (degrees) are shown at once: a vessel switch or a scene change, not a rotation.
+    static constexpr double SNAP_DEG = 45;
+    /// One smoothing step: the attitude to draw `dt` seconds after `shown`, heading for `target`.
+    static Quat smooth(const Quat& shown, const Quat& target, double dt);
+    /// True while the drawn attitude is still turning towards the last sample: the main loop keeps redrawing
+    /// at the display frame rate until it settles, instead of only when a new 10 Hz sample arrives.
+    bool animating() const { return animating_; }
+
+private:
     void build_labels(Canvas& c);
     void build_lighting(Canvas& c, int size, double radius);
+
+    /// Attitude actually drawn: it follows the sampled one with a short exponential lag, so the globe turns
+    /// smoothly at the display frame rate although kRPC samples it only rate_hz times per second.
+    Quat shown_{0, 0, 0, 1};
+    double shown_at_ = -1;  ///< monotonic seconds of the last smoothing step, < 0 = none yet
+    bool animating_ = false;
 
     std::vector<Cell> cells_;
     std::vector<Line> lines_;
