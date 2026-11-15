@@ -18,6 +18,9 @@ Files
      - Pin and bit defines, the packet structs, global state, ``setup()`` and ``loop()``.
    * - ``SerialCOMS.ino``
      - ``KSPBoardReceiveData`` (non-blocking frame receiver) and ``KSPBoardSendData``.
+       Incomplete frames expire after 250 ms without a consumed byte, before parsing queued bytes;
+       a reconnect handshake is preserved even when the host closes mid-frame and reopens before
+       the separate 2 s link-idle timeout.
    * - ``HandShake.ino``
      - Replies ``3, 1, 4`` to the plugin's probe.
    * - ``Input.ino``

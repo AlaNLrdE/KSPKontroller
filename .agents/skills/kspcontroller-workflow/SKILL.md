@@ -120,12 +120,21 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   and KSP configuration assemblies (the real settings initializer calls Unity). Assert test bindings first
   and close real plugin workers after each scenario; never deploy the stand-in DLLs.
 
+- An abrupt host close can leave any receive state incomplete while the port reopens before IDLETIMER.
+  Use a separate 250 ms inter-byte deadline, checked before consuming queued bytes, without renewing link
+  liveness. Native regressions truncate telemetry at every byte boundary; the hardware test also deliberately
+  truncates header/payload/checksum and requires the first reconnect probe to succeed. A passing native test
+  does not prove the ESP32-S3 bridge or the 60-frame abrupt-close stress case is fixed: repeat hardware runs.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
 (Access Violation in Mesh.Internal_Create, seen in 10 crash reports). All plugin logging uses `KSPLogQueue.Log`
 (direct on the main thread, queued and drained from `Update` otherwise); `./ci verify` check `no direct Debug.Log` enforces it.
 In a fresh worktree copy `build/refasm` from the main checkout before `./ci build_KSPSerialIO`.
+
+For a direct Windows Sphinx invocation, set `PLANTUML_JAR` to a forward-slash path (as `./ci sphinx` does).
+The default backslash path is shell-quoted by `docs/conf.py` and Java can receive literal single quotes.
 
 ## KSPSerialIO.Hmi.dll and kRPC (2026-11-15)
 
