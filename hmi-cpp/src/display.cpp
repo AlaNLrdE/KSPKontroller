@@ -234,6 +234,10 @@ void Display::header(const Snapshot& snap, double now) {
         c_.text(snap.vessel.empty() ? "Unnamed vessel" : snap.vessel, 5.2, VALUE, 2.5 * u, top);
         c_.text(snap.body + "  \xC2\xB7  " + fmt::situation(snap.situation), 3.0, LABEL, 2.5 * u, top + 5.4 * u);
         c_.text(fmt::clock(snap.ut, day_hours_), 3.4, LABEL, w - 2.5 * u, top + 5.0 * u, Anchor::TopRight);
+    } else if (snap.state == State::NoVessel && snap.scene == "vab" && snap.ship) {
+        const std::string name = snap.ship->name.empty() ? "Untitled ship" : snap.ship->name;
+        c_.text(clip_utf8(name, 60), 5.2, VALUE, 2.5 * u, top);
+        c_.text("VEHICLE ASSEMBLY  \xC2\xB7  \xCE\x94v " + snap.ship->situation_label(), 3.0, LABEL, 2.5 * u, top + 5.4 * u);
     } else if (snap.state == State::NoVessel && find_view(snap.scene)) {
         c_.text("KSP KONTROLLER", 5.2, VALUE, 2.5 * u, top);
         c_.text(find_view(snap.scene)->subtitle, 3.0, LABEL, 2.5 * u, top + 5.4 * u);
@@ -276,7 +280,194 @@ void Display::waiting(const Snapshot& snap, double now) {
     c_.text(snap.server.empty() ? server_text_ : snap.server, 3.0, LABEL, cx, c_.h - 5 * u, Anchor::MidTop);
 }
 
+// ------------------------------------------------------------------------------------------- VAB ship report
+namespace {
+// Largest size (0.05 unit steps, at most `units`, at least `least`) at which `s` fits in `room` pixels.
+float fit_units(Canvas& c, const std::string& s, float units, double room, float least = 1.2f) {
+    float size = units;
+    while (size > least && c.text_width(c.font(size), s) > room) size = std::max(least, size - .05f);
+    return size;
+}
+
+std::string dv_text(double v) { return std::isfinite(v) ? fmt::str("%.0f m/s", v) : "--"; }
+
+// Stage colours of the stacked bar, cycled from the launch stage up.
+constexpr Color STAGE_COLORS[] = {{70, 200, 255}, {96, 222, 140}, {255, 186, 72}, {200, 140, 255}, {255, 120, 160}};
+
+void outline(Canvas& c, const Rect& r, float t, Color color) {
+    c.fill_rect(float(r.x), float(r.y), float(r.w), t, color);
+    c.fill_rect(float(r.x), float(r.bottom() - t), float(r.w), t, color);
+    c.fill_rect(float(r.x), float(r.y), t, float(r.h), color);
+    c.fill_rect(float(r.right() - t), float(r.y), t, float(r.h), color);
+}
+}  // namespace
+
+const Destination* Display::vab_target() const {
+    for (const auto& d : cfg_.vab.destinations)
+        if (d.key == cfg_.vab.target) return &d;
+    return nullptr;
+}
+
+void Display::vab_report(const Snapshot& snap) {
+    const ShipReport& r = *snap.ship;
+    const double u = c_.u;
+    const double top = 13 * u, bottom = c_.h - 2.5 * u, x0 = 2.5 * u, gap = 1.6 * u;
+    const double left_r = c_.w * 0.44, x1 = left_r + gap, right_r = c_.w - 2.5 * u;
+    const float line = std::max(1.0f, static_cast<float>(static_cast<int>(0.2 * u)));
+    const bool pending = r.delta_v_pending;
+    const double total = r.total_delta_v(), vac = r.total_delta_v_vac();
+    const Destination* target = vab_target();
+
+    // ---- left: delta-v
+    const Rect dvp = Rect::f(x0, top, left_r - x0, bottom - top);
+    if (on_vab_panel) on_vab_panel("delta-v", dvp);
+    panel(c_, dvp);
+    const double px = dvp.x + 1.3 * u, pr = dvp.right() - 1.3 * u, pw = pr - px;
+    c_.text("\xCE\x94v TOTAL", 2.4, LABEL, px, dvp.y + u);
+    const std::string sit = r.situation_label();
+    c_.text(sit, fit_units(c_, sit, 1.9f, pw * .55), MUTED, pr, dvp.y + 1.2 * u, Anchor::TopRight);
+    Color total_color = VALUE;
+    if (!pending && target) total_color = total >= target->delta_v ? GOOD : BAD;
+    c_.text(pending ? "--" : dv_text(total), 8, total_color, px, dvp.y + 4.2 * u);
+    c_.text(pending ? "vacuum --" : "vacuum " + dv_text(vac), 2.4, LABEL, px, dvp.y + 14 * u);
+    if (target) {
+        const std::string want = "TARGET  " + destination_label(target->key) + "  " + dv_text(target->delta_v);
+        c_.text(want, fit_units(c_, want, 2.1f, pw * .62), LABEL, px, dvp.y + 18.2 * u);
+        if (!pending) {
+            const double margin = total - target->delta_v;
+            const std::string m = margin >= 0 ? fmt::str("+%.0f m/s spare", margin) : fmt::str("%.0f m/s short", margin);
+            c_.text(m, fit_units(c_, m, 2.6f, pw * .36), margin >= 0 ? GOOD : BAD, pr, dvp.y + 17.9 * u, Anchor::TopRight);
+        }
+    } else {
+        c_.text("No target: set [vab] target in config.toml", 2.0, MUTED, px, dvp.y + 18.2 * u);
+    }
+    // total against the target: a bar with the target as a tick
+    const Rect bar = Rect::f(px, dvp.y + 22.4 * u, pw, 2.0 * u);
+    c_.rect(bar, GRID);
+    const double scale = std::max({total, target ? target->delta_v : 0.0, 1.0}) * 1.08;
+    if (!pending && total > 0)
+        c_.fill_rect(float(bar.x), float(bar.y), float(bar.w * std::min(1.0, total / scale)), float(bar.h), total_color);
+    if (target) {
+        const float tx = float(bar.x + bar.w * target->delta_v / scale);
+        c_.fill_rect(tx - line, float(bar.y - .6 * u), 2 * line, float(bar.h + 1.2 * u), VALUE);
+    }
+
+    // stacked stage bar, launch stage on the left
+    c_.text("STAGE \xCE\x94v", 1.9, LABEL, px, dvp.y + 26.6 * u);
+    const Rect stack = Rect::f(px, dvp.y + 29.4 * u, pw, 3.4 * u);
+    c_.rect(stack, GRID);
+    if (!pending && total > 0) {
+        double x = stack.x;
+        int index = 0;
+        for (const auto& st : r.stages) {
+            if (!std::isfinite(st.delta_v) || st.delta_v <= 0) continue;
+            const double w = stack.w * st.delta_v / total;
+            const Color col = STAGE_COLORS[index++ % (sizeof STAGE_COLORS / sizeof STAGE_COLORS[0])];
+            c_.fill_rect(float(x), float(stack.y), float(std::max(1.0, w - line)), float(stack.h), col);
+            const std::string n = std::to_string(st.stage);
+            if (c_.text_width(c_.font(1.9f), n) + .8 * u < w)
+                c_.text(n, 1.9, BG, x + w / 2, stack.centery(), Anchor::Center);
+            x += w;
+        }
+    }
+
+    // stage table
+    const double ty = dvp.y + 35.6 * u;
+    const double c_stage = px, c_dv = px + pw * .30, c_vac = px + pw * .46, c_twr = px + pw * .58,
+                 c_burn = px + pw * .71, c_events = px + pw * .75;
+    c_.text("STAGE", 1.8, MUTED, c_stage, ty);
+    c_.text("\xCE\x94v", 1.8, MUTED, c_dv, ty, Anchor::TopRight);
+    c_.text("VAC", 1.8, MUTED, c_vac, ty, Anchor::TopRight);
+    c_.text("TWR", 1.8, MUTED, c_twr, ty, Anchor::TopRight);
+    c_.text("BURN", 1.8, MUTED, c_burn, ty, Anchor::TopRight);
+    c_.text("FIRES", 1.8, MUTED, c_events, ty);
+    c_.line({float(px), float(ty + 3 * u)}, {float(pr), float(ty + 3 * u)}, line, GRID);
+    const double row0 = ty + 4 * u, pitch = 5.4 * u;
+    const int rows = std::max(1, static_cast<int>((dvp.bottom() - 1.5 * u - row0) / pitch));
+    if (pending) {
+        c_.text("Calculating \xCE\x94v\xE2\x80\xA6", 3.4, WARN, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
+        c_.text("KSP is computing the stage delta-v of this ship", 2.2, MUTED, dvp.centerx(), row0 + 9 * u, Anchor::MidTop);
+    } else if (r.stages.empty()) {
+        c_.text("No stages", 3.0, MUTED, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
+    }
+    for (int i = 0; !pending && i < static_cast<int>(r.stages.size()) && i < rows; ++i) {
+        const StageReport& st = r.stages[i];
+        double y = row0 + i * pitch;
+        if (i == rows - 1 && static_cast<int>(r.stages.size()) > rows) {
+            c_.text(fmt::str("+%d more stages", static_cast<int>(r.stages.size()) - rows + 1), 2.2, MUTED, c_stage, y + .6 * u);
+            break;
+        }
+        // TWR below 1 cannot leave the pad (launch stage); later stages are judged in phase 2's checklist
+        const Color twr_color = i == 0 && std::isfinite(st.twr) && st.twr < 1.0 ? BAD : VALUE;
+        c_.text(std::to_string(st.stage), 3.0, ACCENT, c_stage, y);
+        c_.text(std::isfinite(st.delta_v) ? fmt::str("%.0f", st.delta_v) : "--", 3.0, VALUE, c_dv, y, Anchor::TopRight);
+        c_.text(std::isfinite(st.delta_v_vac) ? fmt::str("%.0f", st.delta_v_vac) : "--", 2.4, LABEL, c_vac, y + .5 * u,
+                Anchor::TopRight);
+        c_.text(std::isfinite(st.twr) ? fmt::str("%.2f", st.twr) : "--", 3.0, twr_color, c_twr, y, Anchor::TopRight);
+        c_.text(std::isfinite(st.burn) ? fmt::duration(st.burn, day_hours_) : "--", 2.4, LABEL, c_burn, y + .5 * u,
+                Anchor::TopRight);
+        const std::string ev = events_text(st);
+        if (!ev.empty()) c_.text(ev, fit_units(c_, ev, 2.0f, pr - c_events), LABEL, c_events, y + .7 * u);
+    }
+
+    // ---- right: destinations
+    const int n = static_cast<int>(cfg_.vab.destinations.size());
+    const int cols = 2, drows = std::max(1, (std::min(n, MAX_DESTINATIONS) + cols - 1) / cols);
+    const double dpitch = 4.4 * u, dest_h = 4.6 * u + 6 * dpitch;
+    const Rect dp = Rect::f(x1, top, right_r - x1, dest_h);
+    if (on_vab_panel) on_vab_panel("destinations", dp);
+    panel(c_, dp);
+    const double dx = dp.x + 1.3 * u, dw = dp.w - 2.6 * u, cell_w = (dw - u) / cols;
+    c_.text("DESTINATIONS", 2.4, LABEL, dx, dp.y + u);
+    c_.text("\xCE\x94v FROM THE PAD", 1.7, MUTED, dp.right() - 1.3 * u, dp.y + 1.3 * u, Anchor::TopRight);
+    if (n == 0) c_.text("No destinations in config.toml [vab.destinations]", 2.0, MUTED, dp.centerx(), dp.centery(), Anchor::Center);
+    for (int i = 0; i < n && i < MAX_DESTINATIONS; ++i) {
+        const Destination& d = cfg_.vab.destinations[i];
+        const int col = i / drows, row = i % drows;  // down the first column, then the second
+        const Rect cell = Rect::f(dx + col * (cell_w + u), dp.y + 4.4 * u + row * dpitch, cell_w, dpitch - .6 * u);
+        const bool reach = !pending && total >= d.delta_v;
+        if (target && d.key == target->key) outline(c_, cell.inflate(.3 * u, .2 * u), line, ACCENT);
+        c_.circle(float(cell.x + 1.4 * u), float(cell.centery()), float(.8 * u), pending ? MUTED : reach ? GOOD : BAD);
+        const std::string value = fmt::str("%.0f", d.delta_v);
+        const double vw = c_.text_width(c_.font(1.9f), value);
+        c_.text(value, 1.9, LABEL, cell.right() - .6 * u, cell.centery(), Anchor::MidRight);
+        const std::string name = destination_label(d.key);
+        c_.text(name, fit_units(c_, name, 2.1f, cell.w - 3.2 * u - vw - 1.2 * u), pending || reach ? VALUE : LABEL,
+                cell.x + 2.8 * u, cell.centery(), Anchor::MidLeft);
+    }
+
+    // ---- right: vehicle summary
+    const double vy = dp.bottom() + gap;
+    c_.text("VEHICLE", 2.4, LABEL, x1 + .3 * u, vy);
+    const double tw = (right_r - x1 - .8 * u) / 2, th = 7 * u, tg = .8 * u, t0 = vy + 3.4 * u;
+    auto opt = [](const std::optional<double>& v, const char* f) { return v ? fmt::str(f, *v) : std::string("--"); };
+    auto num = [](const std::optional<int>& v) { return v ? std::to_string(*v) : std::string("--"); };
+    const std::string size = r.height && r.width ? fmt::str("%.1f \xC3\x97 %.1f m", *r.height, *r.width) : "--";
+    const struct {
+        const char* label;
+        std::string value;
+    } tiles[8] = {
+        {"MASS", opt(r.mass, "%.2f t")},          {"DRY MASS", opt(r.dry, "%.2f t")},
+        {"COST", opt(r.cost, "%.0f")},            {"FUNDS", r.funds ? fmt::str("%.0f", *r.funds) : "--"},
+        {"PARTS", num(r.parts)},                  {"CREW / SEATS", num(r.crew) + " / " + num(r.seats)},
+        {"HEIGHT \xC3\x97 WIDTH", size},          {"ENGINES", num(r.engines)},
+    };
+    for (int i = 0; i < 8; ++i) {
+        const Rect t = Rect::f(x1 + (i % 2) * (tw + tg), t0 + (i / 2) * (th + tg), tw, th);
+        if (on_vab_panel) on_vab_panel(tiles[i].label, t);
+        Color color = VALUE;
+        if (i == 3 && r.funds && r.cost) color = *r.funds >= *r.cost ? GOOD : BAD;  // can the program pay for it
+        tile(t, tiles[i].label, tiles[i].value, color);
+    }
+    c_.text(fmt::str("Editor ship report  |  revision %u  |  updates as you build", r.revision), 2.2, MUTED, x1,
+            bottom - 2.6 * u);
+}
+
 void Display::facility(const Snapshot& snap) {
+    if (snap.scene == "vab" && snap.ship) {  // the live editor report replaces the VAB cards
+        vab_report(snap);
+        return;
+    }
     const double u = c_.u;
     const View* view = find_view(snap.scene);
     c_.text(view->title, 6.5, VALUE, 4 * u, 15 * u);

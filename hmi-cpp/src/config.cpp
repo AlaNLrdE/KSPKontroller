@@ -5,6 +5,8 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -131,6 +133,34 @@ std::string dirname(const std::string& p) {
     return slash == std::string::npos ? "." : (slash == 0 ? "/" : p.substr(0, slash));
 }
 
+// [vab] target and [vab.destinations]: later files add destinations or change their delta-v.
+void apply_vab(Config& c, const TomlValues& m) {
+    static const std::string prefix = "vab.destinations.";
+    for (auto it = m.lower_bound(prefix); it != m.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it) {
+        const std::string key = it->first.substr(prefix.size());
+        bool plain = !key.empty() && key.size() <= 32;
+        for (char ch : key) plain = plain && (std::islower(static_cast<unsigned char>(ch)) || std::isdigit(static_cast<unsigned char>(ch)) || ch == '_');
+        if (!plain) throw std::runtime_error(it->first + ": destination names use a-z, 0-9 and _ (at most 32)");
+        const double dv = to_double(m, it->first, 0);
+        if (!std::isfinite(dv) || dv <= 0 || dv > 100000)
+            throw std::runtime_error(it->first + " must be a delta-v in m/s between 0 and 100000");
+        auto found = std::find_if(c.vab.destinations.begin(), c.vab.destinations.end(),
+                                  [&](const Destination& d) { return d.key == key; });
+        if (found != c.vab.destinations.end()) found->delta_v = dv;
+        else c.vab.destinations.push_back({key, dv});
+    }
+    if (static_cast<int>(c.vab.destinations.size()) > MAX_DESTINATIONS)
+        throw std::runtime_error("vab.destinations: at most " + std::to_string(MAX_DESTINATIONS) + " destinations");
+    std::sort(c.vab.destinations.begin(), c.vab.destinations.end(), [](const Destination& a, const Destination& b) {
+        return a.delta_v != b.delta_v ? a.delta_v < b.delta_v : a.key < b.key;
+    });
+    c.vab.target = to_string(m, "vab.target", c.vab.target);
+    if (!c.vab.target.empty() &&
+        std::none_of(c.vab.destinations.begin(), c.vab.destinations.end(),
+                     [&](const Destination& d) { return d.key == c.vab.target; }))
+        throw std::runtime_error("vab.target '" + c.vab.target + "' is not one of [vab.destinations]");
+}
+
 }  // namespace
 
 TomlValues parse_toml(const std::string& text) {
@@ -144,7 +174,15 @@ TomlValues parse_toml(const std::string& text) {
         if (s.empty()) continue;
         if (s.front() == '[') {
             if (s.back() != ']' || s.size() < 3 || s[1] == '[') fail(line, "unsupported table header");
-            table = unquote_key(trim(s.substr(1, s.size() - 2)), line);
+            std::string name = trim(s.substr(1, s.size() - 2));
+            table.clear();
+            for (size_t at = 0;;) {  // dotted names: each part is a key of its own
+                size_t dot = name.find('.', at);
+                std::string part = trim(name.substr(at, dot == std::string::npos ? std::string::npos : dot - at));
+                table += (table.empty() ? "" : ".") + unquote_key(part, line);
+                if (dot == std::string::npos) break;
+                at = dot + 1;
+            }
             continue;
         }
         size_t eq = s.find('=');
@@ -177,6 +215,7 @@ void apply_toml(Config& c, const TomlValues& m) {
         day_hours > std::numeric_limits<int>::max())
         throw std::runtime_error("format.day_hours must be a positive integer within the int range");
     c.format.day_hours = static_cast<int>(day_hours);
+    apply_vab(c, m);
 }
 
 std::string find_app_dir() {

@@ -42,6 +42,10 @@ public:
     void header(const Snapshot& s, double now);
     void waiting(const Snapshot& s, double now);
     void facility(const Snapshot& s);
+    /// VAB scene with an editor ship report: delta-v, stages, destinations ([vab] in config.toml) and vehicle.
+    void vab_report(const Snapshot& s);
+    /// The configured [vab] target destination, or nullptr.
+    const Destination* vab_target() const;
     void flight(const Snapshot& s);
     void tile(const Rect& rect, const std::string& label, const std::string& value, Color color,
               const std::string& note = "");
@@ -64,6 +68,9 @@ public:
     /// Called with the bounding square of every resource dial.
     std::function<void(const std::string&, const Rect&)> on_gauge;
     std::optional<Pt> last_vessel_marker;
+    /// Called with every panel / tile of the VAB report (tests: text stays inside, panels do not overlap).
+    std::function<void(const std::string&, const Rect&)> on_vab_panel;
+    const Config& config() const { return cfg_; }
     /// Where the maneuver node diamond was drawn, and how often the dashed post-burn orbit was rebuilt.
     std::optional<Pt> last_node_marker;
     /// ORBIT draws its own title and INERTIAL caption (the apollo skin paints them on the bezel instead).

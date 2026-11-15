@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "shipreport.hpp"
 #include "vec.hpp"
 
 namespace ksphmi {
@@ -147,6 +149,8 @@ struct Snapshot {
     std::optional<Systems> systems;
     std::optional<OrbitState> orbit_state;
     std::optional<ManeuverOrbit> maneuver_orbit;  ///< only with a node in the current sphere of influence
+    /// VAB scene only: the editor ship report (KSPHMI kRPC service); null = unavailable, the static cards are shown.
+    std::shared_ptr<const ShipReport> ship;
     double received = 0;  ///< monotonic seconds when the sample was taken
 };
 

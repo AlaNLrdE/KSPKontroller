@@ -33,7 +33,7 @@ public:
     int builds = 0;
 
 private:
-    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL };
+    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL, VAB };
     struct Key {
         int w = 0, h = 0, screen = -1;
         std::string scene;
@@ -53,6 +53,8 @@ private:
     /// NavBall zone: white group frame, the globe in a round metal bezel, segment readouts and SAS mode lamps.
     void navball(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void facility(Canvas& c, bool art, const Snapshot& s);
+    /// VAB editor ship report (Snapshot::ship): DELTA-V group, stage table, destination lamps, VEHICLE readouts.
+    void vab(Canvas& c, bool art, const Snapshot& s);
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
 
     Display& d_;
