@@ -57,9 +57,11 @@ Source map
    * - ``navball.*`` / ``gauges.*``
      - Navigation globe, marker projection, smoothing and gauge geometry.
      - Cache static work; distinguish orientation from speed reference frame.
-   * - ``fbdev.*``, ``png.*``, ``splash.*``
-     - Linux framebuffer transfer, PNG artifacts and boot splash.
-     - Hardware output differs from off-screen testing.
+   * - ``fbdev.*``, ``png.*``, ``splash.*``, ``bootstate.*``
+     - Linux framebuffer transfer, PNG artifacts, the animated boot splash and its pure boot-stage logic
+       (``boot_view``) with the probes and the ``ksphmi.ready`` hand-over file.
+     - Hardware output differs from off-screen testing. Probes run on a worker at 2 Hz; drawing only reads
+       ``BootView``. ``SplashPainter`` must keep animated drawing inside ``Layout::dynamic()`` rectangles.
 
 Sources, state and concurrency
 ------------------------------
@@ -149,7 +151,8 @@ Outputs and service lifecycle
   Selecting Linux fbdev there raises an explicit error.
 
 The Pi user unit ``ksphmi.service`` executes ``~/ksphmi/cpp/build/ksphmi`` and restarts after process
-exit. A separate system splash service from ``setup-kiosk.sh`` paints before the user session starts.
+exit. A separate system splash service from ``setup-kiosk.sh`` animates the boot until the HMI writes its ready
+file after the first presented frame (see :doc:`../hmi`).
 Lingering allows the user service to start at boot. Root-required kiosk changes are run by the user.
 Use ``ssh ksphmi`` (configured locally); do not embed the Pi's address or account in source/docs.
 

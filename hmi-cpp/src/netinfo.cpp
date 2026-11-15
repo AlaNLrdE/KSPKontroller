@@ -2,6 +2,7 @@
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -68,6 +69,24 @@ std::vector<std::string> all_addresses() {
     }
     freeifaddrs(list);
     return found;
+}
+
+NetInterface primary_interface() {
+    NetInterface found, up;
+    ifaddrs* list = nullptr;
+    if (getifaddrs(&list) != 0) return found;
+    for (ifaddrs* i = list; i; i = i->ifa_next) {
+        if (!i->ifa_name || (i->ifa_flags & IFF_LOOPBACK)) continue;
+        if (up.name.empty() && (i->ifa_flags & IFF_UP)) up.name = i->ifa_name;
+        if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
+        std::string a = net::to_string(reinterpret_cast<sockaddr_in*>(i->ifa_addr)->sin_addr);
+        if (!a.empty() && a.rfind("127.", 0) != 0) {
+            found = {i->ifa_name, a};
+            break;
+        }
+    }
+    freeifaddrs(list);
+    return found.name.empty() ? up : found;
 }
 
 namespace {

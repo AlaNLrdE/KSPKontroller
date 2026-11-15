@@ -59,15 +59,22 @@ class KioskTest(unittest.TestCase):
         text = SCRIPT.read_text()
         for needle in ('--undo', 'ksphmi-splash.service', 'TAG+="systemd"', 'mask --now getty@tty1',
                        'unmask getty@tty1', 'enable-linger', '.ksphmi-backup', 'Storage=persistent',
-                       '/etc/ksphmi-kiosk.applied'):
+                       '/etc/ksphmi-kiosk.applied', 'ATTR{name}=="vc4drmfb"', 'disable --now ksphmi-splash'):
             self.assertIn(needle, text)
 
-    def test_splash_unit_is_an_early_oneshot_as_the_hmi_user(self):
+    def test_splash_unit_is_early_long_running_and_never_holds_up_the_boot(self):
         unit = (SCRIPT.parent / 'ksphmi-splash.service').read_text()
-        for line in ('DefaultDependencies=no', 'After=dev-fb0.device', 'Type=oneshot', 'User=@USER@', 'Group=video',
-                     'ExecStart=@HOME@/ksphmi/cpp/build/ksphmi --splash', 'WantedBy=sysinit.target',
-                     'Before=systemd-user-sessions.service'):
-            self.assertIn(line, unit)
+        lines = [l.strip() for l in unit.splitlines() if l.strip() and not l.startswith('#')]
+        for line in ('DefaultDependencies=no', 'Wants=dev-fb0.device', 'After=dev-fb0.device local-fs.target',
+                     'Type=simple', 'User=@USER@', 'Group=video', 'TimeoutStopSec=3',
+                     'ExecStart=@HOME@/ksphmi/cpp/build/ksphmi --splash', 'WantedBy=sysinit.target'):
+            self.assertIn(line, lines)
+        # A long-running splash ordered before the user sessions would delay SSH and the HMI itself.
+        self.assertFalse([l for l in lines if l.startswith('Before=') and 'shutdown.target' not in l])
+        self.assertNotIn('Type=oneshot', lines)
+        runtime = [int(l.split('=', 1)[1]) for l in lines if l.startswith('RuntimeMaxSec=')]
+        self.assertEqual(len(runtime), 1)
+        self.assertGreater(runtime[0], 600)  # the splash's own 10 minute cap comes first
         hmi = (SCRIPT.parent / 'ksphmi.service').read_text()
         self.assertIn('WantedBy=default.target', hmi)
         self.assertIn('Restart=always', hmi)

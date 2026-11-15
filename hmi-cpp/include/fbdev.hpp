@@ -31,12 +31,20 @@ public:
     /// Re-apply the current video mode (FBIOPUT_VSCREENINFO, FB_ACTIVATE_FORCE): with DRM's fbdev emulation the
     /// mode is only set when somebody calls set_par, normally the text console; the splash must not rely on it.
     void activate();
+    /// The next write rewrites every row (somebody else may have drawn on the device meanwhile).
+    void repaint_all() { first_ = true; }
+    /// Driver name from sysfs ("vc4drmfb", "simple"); empty when unknown.
+    const std::string& name() const { return name_; }
+    /// True when the device node is gone or is no longer the one opened (another driver took fb0 over, as
+    /// vc4drmfb replaces the firmware's simplefb a few seconds into the Pi's boot): reopen it.
+    bool replaced() const;
 
     static constexpr double UNBLANK_EVERY = 30.0;
 
 private:
     void unblank();
-    std::string device_;
+    std::string device_, sysfs_, name_;
+    unsigned long inode_ = 0;
     int fd_ = -1, width_ = 0, height_ = 0, bpp_ = 0, stride_ = 0;
     uint8_t* map_ = nullptr;
     size_t map_size_ = 0;

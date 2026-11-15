@@ -14,6 +14,13 @@ std::string route_address(const std::string& target);
 /// Every IPv4 address of this machine's interfaces, loopback excluded.
 std::vector<std::string> all_addresses();
 
+/// An interface for the boot screen: the first one with an IPv4 address (loopback excluded), else the first
+/// interface that is up without one (address empty), else both empty.
+struct NetInterface {
+    std::string name, address;
+};
+NetInterface primary_interface();
+
 /// Network identity refreshed on a worker; drawing only reads the cached line.
 class NetInfo {
 public:

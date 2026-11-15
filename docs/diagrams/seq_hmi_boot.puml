@@ -1,0 +1,68 @@
+@startuml seq_hmi_boot
+title Pi boot: animated splash and hand-over to the HMI
+skinparam sequenceMessageAlign left
+participant "systemd (PID 1)\nwith udev" as Systemd
+participant "ksphmi --splash\nksphmi-splash.service" as Splash
+participant "Probe worker\n(2 Hz)" as Probe
+participant "/dev/fb0\nvc4drmfb" as FB
+participant "ksphmi\nksphmi.service (user)" as HMI
+participant "ksphmi.ready\n/run/user/<uid>" as Ready
+activate Systemd
+Systemd -> Systemd : udev tags fb0 only when its name is vc4drmfb\n(the earlier simplefb fb0 is ignored)
+Systemd ->> Splash : start (Type=simple, no Before=: boot and logins carry on)
+activate Splash
+Splash -> Ready : exists?
+activate Ready
+Ready --> Splash : no
+deactivate Ready
+Splash ->> Probe : start detached worker
+activate Probe
+Splash -> FB : open, FBIOPUT_VSCREENINFO
+activate FB
+FB --> Splash : 2520x1680, mapped
+deactivate FB
+loop about 8 frames per second, until ready, SIGTERM or 10 minutes
+  Splash -> Splash : boot_view(probes, CLOCK_BOOTTIME)\nrestore animated regions, redraw them
+  Splash -> Ready : exists?
+  activate Ready
+  Ready --> Splash : no
+  deactivate Ready
+  Splash -> FB : write changed rows
+  activate FB
+  FB --> Splash : written
+  deactivate FB
+  opt fb0 node or driver name changed
+    Splash -> FB : close and reopen
+    activate FB
+    FB --> Splash : reopened
+    deactivate FB
+  end
+end
+Probe -> Probe : systemctl is-active multi-user.target,\ninterface address, ksphmi process (each 0.5 s)
+Systemd ->> HMI : user manager (lingering) starts ksphmi.service
+activate HMI
+HMI -> Ready : remove stale file
+activate Ready
+Ready --> HMI : removed
+deactivate Ready
+HMI -> HMI : first frame presented (KMSDRM or fbdev)
+HMI -> Ready : write after the first present
+activate Ready
+Ready --> HMI : written
+deactivate Ready
+Splash -> Ready : exists?
+activate Ready
+Ready --> Splash : yes
+deactivate Ready
+Splash ->> Probe : stop
+deactivate Probe
+Splash --> Systemd : exit 0 (within one frame, about 125 ms)
+deactivate Splash
+HMI -> FB : fbdev only: rewrite every row 1 s later
+activate FB
+FB --> HMI : repainted
+deactivate FB
+deactivate HMI
+deactivate Systemd
+note over Splash, HMI : The splash checks the ready file again right before each write,\nso it never paints over the HMI's first frame.
+@enduml
