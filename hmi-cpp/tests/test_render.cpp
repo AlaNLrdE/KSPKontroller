@@ -220,7 +220,10 @@ TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
             CHECK(labels.count(hdg));
             for (const char* label : {"HOLD", "PRO", "RET", "N+", "N-", "R+", "R-", "TGT", "ANTI", "NODE"}) {
                 CHECK(labels.count(label));
-                if (labels.count(hdg) && labels.count(label)) CHECK(!labels[hdg].collides(labels[label]));
+                if (labels.count(hdg) && labels.count(label)) {
+                    CHECK(!labels[hdg].collides(labels[label]));
+                    CHECK(labels[label].y - labels[hdg].bottom() >= 1.2 * u);  // a visible gap, not touching
+                }
             }
             CHECK_EQ(s.pixel(panel.x - 1, panel.centery()), FILL_PIXEL);
         }
