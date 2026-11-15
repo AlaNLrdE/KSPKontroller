@@ -1,0 +1,4 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/hmi-cpp",
+    "dotnet.preferCSharpExtension": true
+}
