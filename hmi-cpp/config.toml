@@ -17,6 +17,7 @@ speed = 20               # time acceleration of the simulated orbit
 output = "sdl"           # sdl = window / SDL full screen; fbdev = Linux framebuffer; auto = GPU (SDL), else fbdev (Pi service)
 fbdev = "/dev/fb0"
 fps = 30                 # 30 with the Pi's GPU (~11 ms per frame); the NavBall interpolates between 10 Hz samples
+layer_cache = "auto"     # NavBall-only frames between samples over a cached screen: auto = with a GPU renderer; on | off
 fullscreen = true
 width = 0                # 0 = the monitor's own resolution
 height = 0

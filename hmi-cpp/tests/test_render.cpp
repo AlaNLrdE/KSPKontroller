@@ -601,6 +601,103 @@ TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
     }
 }
 
+// ------------------------------------------------------------------------------------- layer cache
+namespace {
+std::vector<uint32_t> pixels(const Screen& s) {
+    std::vector<uint32_t> out;
+    for (int y = 0; y < s.surface->h; ++y)
+        for (int x = 0; x < s.surface->w; ++x) out.push_back(s.pixel(x, y));
+    return out;
+}
+int differing(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
+    int n = 0;
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i) n += a[i] != b[i];
+    return n + static_cast<int>(a.size() > b.size() ? a.size() - b.size() : b.size() - a.size());
+}
+}  // namespace
+
+TEST(navball_only_frames_over_the_layer_cache_match_a_full_redraw) {
+    const Quat before = attitude(5, 30, 0), after = attitude(25, 75, 20);
+    for (const char* skin : {"classic", "apollo"})
+        for (auto [w, h] : {std::pair<int, int>{1260, 840}, {2520, 1680}}) {
+            Snapshot snap = demo(600);
+            CHECK(snap.nav.has_value());
+            // Reference: the plain full redraw at the new attitude, without the cache.
+            Screen ref(w, h, skin);
+            CHECK(!ref.display->animate());  // cache off: the caller does a full draw
+            ref.display->navball().hold = after;
+            ref.display->draw(snap, monotonic());
+            const auto expected = pixels(ref);
+            // A full frame through the cache is the same picture.
+            Screen cached(w, h, skin);
+            CHECK(cached.display->set_layer_cache(true));
+            cached.display->navball().hold = after;
+            cached.display->draw(snap, monotonic());
+            CHECK_EQ(differing(pixels(cached), expected), 0);
+            // Composed: the layer drawn at the old attitude, then only the NavBall at the new one.
+            Screen composed(w, h, skin);
+            CHECK(composed.display->set_layer_cache(true));
+            composed.display->navball().hold = before;
+            composed.display->draw(snap, monotonic());
+            const auto old_frame = pixels(composed);
+            CHECK(differing(old_frame, expected) > 1000);  // the attitude change is visible
+            composed.display->navball().hold = after;
+            CHECK(composed.display->animate());
+            CHECK_EQ(differing(pixels(composed), expected), 0);
+        }
+}
+
+TEST(layer_cache_follows_skin_switches_and_screens) {
+    const Quat after = attitude(-15, 200, -30);
+    Screen s(1260, 840, "classic");
+    CHECK(s.display->set_layer_cache(true));
+    Snapshot snap = demo(900);
+    s.display->navball().hold = attitude(0, 0, 0);
+    s.display->draw(snap, monotonic());
+    snap.skin = "apollo";  // switch while flying: the next full draw rebuilds the layer in the new skin
+    s.display->draw(snap, monotonic());
+    s.display->navball().hold = after;
+    CHECK(s.display->animate());
+    const auto composed = pixels(s);
+    Screen ref(1260, 840, "apollo");
+    ref.display->navball().hold = after;
+    ref.display->draw(snap, monotonic());
+    CHECK_EQ(differing(composed, pixels(ref)), 0);
+    // No globe in the last draw (not in flight, or no attitude): no NavBall-only frames.
+    Snapshot waiting = snap;
+    waiting.state = State::Connecting;
+    s.display->draw(waiting, monotonic());
+    CHECK(!s.display->animate());
+    Snapshot blind = snap;
+    blind.nav.reset();
+    s.display->draw(blind, monotonic());
+    CHECK(!s.display->animate());
+    s.display->draw(snap, monotonic());
+    CHECK(s.display->animate());
+    CHECK(!s.display->set_layer_cache(false));
+    CHECK(!s.display->animate());
+}
+
+TEST(navball_only_frame_software_time) {
+    Screen s(2520, 1680);
+    CHECK(s.display->set_layer_cache(true));
+    Snapshot snap = demo(300);
+    s.display->navball().hold = attitude(0, 0, 0);
+    s.display->draw(snap, monotonic());  // warm-up
+    auto t0 = std::chrono::steady_clock::now();
+    for (int i = 1; i <= 5; ++i) s.display->navball().hold = attitude(0, i * 3.0, 0), s.display->draw(snap, monotonic());
+    auto t1 = std::chrono::steady_clock::now();
+    for (int i = 1; i <= 5; ++i) {
+        s.display->navball().hold = attitude(0, i * 3.0, 0);
+        CHECK(s.display->animate());
+    }
+    auto t2 = std::chrono::steady_clock::now();
+    double full = std::chrono::duration<double, std::milli>(t1 - t0).count() / 5;
+    double anim = std::chrono::duration<double, std::milli>(t2 - t1).count() / 5;
+    std::printf("     software 2520x1680 with the layer cache: full %.1f ms, navball-only %.1f ms\n", full, anim);
+    CHECK(anim < full);
+}
+
 TEST(navball_attitude_smoothing) {
     Quat a = attitude(0, 0, 0), b = attitude(0, 90, 0);
     // Smoothing moves part of the way each frame, converges, and snaps for large jumps.

@@ -23,6 +23,8 @@ struct Config {
         std::string output = "sdl", fbdev = "/dev/fb0";
         std::string skin = "apollo";   ///< apollo (default) | classic
         int fps = 10;
+        /// auto | on | off: compose NavBall-only animation frames over a cached render target (auto = GPU only)
+        std::string layer_cache = "auto";
         bool fullscreen = true;
         int width = 0, height = 0;
     } display;

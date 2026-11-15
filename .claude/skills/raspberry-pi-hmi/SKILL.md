@@ -93,6 +93,13 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `chrome` (classic panel, readouts, buttons): apollo turns it off and draws its own around
   `Navball::globe_geometry` (`globe` is already a free function in navball.cpp). `./ci test_hmi --sim` runs
   kspsim with `--skin apollo` and requires `skin: apollo (context` in the HMI log.
+- NavBall layer cache (2026-11-14, `[display] layer_cache`, auto = GPU only): full draws go into a render target;
+  `Navball::before_globe` fires just before the globe so Display keeps the pixels under `globe_square()`;
+  `Display::animate()` = layer + those pixels + `Navball::redraw()` clipped to the square (globe and everything
+  drawn after it there: rim, markers, boresight, the classic speed box overlaps the top). SDL resets the clip
+  per target: use `Canvas::set_target` / `blit`, never raw `SDL_SetRenderTarget`. `Navball::hold` fixes the
+  attitude for pixel tests and `--bench N --bench-anim`. In software the NavBall is ~6.7 of 8.7 ms per frame, so
+  the cache saves little there (PC: 8.2 -> 5.5 ms classic, 4.5 ms apollo) and the full-screen copy costs ~1.5 ms.
 - WSL can fail with `Wsl/Service/E_UNEXPECTED` for minutes: wait with a background loop on
   `wsl.exe -d Ubuntu -e true`; never `wsl --shutdown` (other agents use it). No PIL in the venv: crop PNGs
   with a stdlib zlib script.

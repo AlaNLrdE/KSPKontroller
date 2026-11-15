@@ -159,6 +159,7 @@ void apply_toml(Config& c, const TomlValues& m) {
     c.display.fbdev = to_string(m, "display.fbdev", c.display.fbdev);
     c.display.skin = to_string(m, "display.skin", c.display.skin);
     c.display.fps = to_int(m, "display.fps", c.display.fps);
+    c.display.layer_cache = to_string(m, "display.layer_cache", c.display.layer_cache);
     c.display.fullscreen = to_bool(m, "display.fullscreen", c.display.fullscreen);
     c.display.width = to_int(m, "display.width", c.display.width);
     c.display.height = to_int(m, "display.height", c.display.height);

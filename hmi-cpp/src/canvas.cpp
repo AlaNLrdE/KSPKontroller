@@ -198,6 +198,26 @@ void Canvas::set_clip(const Rect& r) {
     }
 }
 
+void Canvas::set_target(SDL_Texture* texture) {
+    flush();
+    SDL_SetRenderTarget(renderer_, texture);
+    Rect keep = clip_;
+    clip_ = Rect(-1, -1, -1, -1);  // force set_clip to apply it to this target
+    set_clip(keep);
+}
+
+void Canvas::blit(SDL_Texture* texture, const Rect& src, const Rect& dst) {
+    flush();
+    SDL_RenderSetClipRect(renderer_, nullptr);
+    SDL_SetTextureColorMod(texture, 255, 255, 255);
+    SDL_SetTextureAlphaMod(texture, 255);
+    SDL_Rect s{src.x, src.y, src.w, src.h}, d{dst.x, dst.y, dst.w, dst.h};
+    SDL_RenderCopy(renderer_, texture, &s, &d);
+    Rect keep = clip_;
+    clip_ = Rect(-1, -1, -1, -1);
+    set_clip(keep);
+}
+
 void Canvas::fill_rect(float x, float y, float rw, float rh, Color c) {
     if (rw <= 0 || rh <= 0) return;
     if (!aa_) {  // software renderer: SDL_FillRect / blended fill, far faster than rasterising two triangles

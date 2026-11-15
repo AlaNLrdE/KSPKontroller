@@ -115,6 +115,12 @@ public:
     void set_clip(const Rect& r);
 
     // Shapes. Coordinates in pixels (floats), colours with alpha.
+    /// Draw into `texture` (a SDL_TEXTUREACCESS_TARGET texture), or the screen with nullptr. Flushes the batch
+    /// and re-applies the current clip on the new target (SDL keeps one clip per target).
+    void set_target(SDL_Texture* texture);
+    /// Exact, unclipped copy of `src` in `texture` to `dst` (pixels; use a texture with SDL_BLENDMODE_NONE).
+    void blit(SDL_Texture* texture, const Rect& src, const Rect& dst);
+
     void rect(const Rect& r, Color c);
     void fill_rect(float x, float y, float w, float h, Color c);
     void rounded_rect(const Rect& r, float radius, Color c);
