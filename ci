@@ -26,7 +26,7 @@
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
-#   ./ci test_sim            Simulator tests, including the HMI kRPC client against the simulated server
+#   ./ci test_sim            Simulator tests, including the krpc client against the simulated kRPC server
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
