@@ -324,7 +324,6 @@ void matrixUpdate() {
   } else if (!Connected) {
     if (everConnected) drawLost(ms); else drawWaiting(ms);
   } else {
-    everConnected = true;
     if (lastStageSeen != 255 && VData.CurrentStage != lastStageSeen) stageFlashUntil = ms + 1500;
     lastStageSeen = VData.CurrentStage;
     uint8_t screen = chooseScreen(ms);

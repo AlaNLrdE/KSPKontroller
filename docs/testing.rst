@@ -71,6 +71,9 @@ and check recovery after bad checksums, zero/mismatched lengths and expired part
 port counts empty-buffer reads and requires zero. Unknown-ID tests first receive each supported packet type,
 then send a checksum-valid ID 99 frame of the same length: the previous structure and link timestamps
 must remain unchanged, only the invalid counter advances, and a following handshake must work.
+Recovery tests receive each supported packet type at 100 ms without drawing the matrix, disconnect before
+the splash ends, and check that a reset is requested only after 30 seconds of silence. The reset call is a
+counting stand-in; never-connected and invalid-packet-only cases must not arm link recovery.
 Requires a native C++17 compiler; artifacts stay under
 ``build/firmware-tests``. The same command runs ``matrix.ino`` data-page tests with UBSan (including
 float-to-int overflow checks): infinity and NaN show three dashes, finite extremes saturate before conversion,

@@ -9,7 +9,7 @@ repeat
       :Connected = false, LEDs off\nreset partial receiver before parsing\nkeep unread serial bytes;
     endif
     if (complete valid packet?) then (yes)
-      :update receive time\ndispatch handshake / telemetry / display command;
+      :update receive time, everConnected = true\ndispatch handshake / telemetry / display command;
       :green LED on, Connected = true;
     else (no)
       if (ever connected and no valid packet >30 s?) then (yes)

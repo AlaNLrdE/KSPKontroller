@@ -33,7 +33,12 @@ void digitalWrite(int, int) {}
 int lightsOff = 0;
 void LEDSAllOff() { ++lightsOff; }
 void Indicators() {}
-void NVIC_SystemReset() { throw std::runtime_error("unexpected board reset"); }
+int resetRequests = 0;
+bool allowReset = false;
+void NVIC_SystemReset() {
+    ++resetRequests;
+    if (!allowReset) throw std::runtime_error("unexpected board reset");
+}
 unsigned long now = 0, deadtime = 0, deadtimeOld = 0, dbgLastRxMs = 0, forcedUntil = 0;
 unsigned long dbgTxMaxUs = 0;
 uint32_t dbgTxPackets = 0;
@@ -148,8 +153,58 @@ void test_incremental_receiver() {
     check(Serial.emptyReads == 0, "parser must never read an empty serial buffer");
 }
 
+void reset_boot_state() {
+    Serial.rx.clear();
+    Serial.tx.clear();
+    clockMs = now = deadtime = deadtimeOld = dbgLastRxMs = 0;
+    Connected = everConnected = allowReset = false;
+    resetRequests = 0;
+    KSPBoardResetReceiver();
+}
+
+void test_early_connection_recovery() {
+    for (byte packetId : {byte(0), byte(1), byte(2)}) {
+        reset_boot_state();
+        clockMs = 100;
+        if (packetId == 0) Serial.feed(handshake());
+        else if (packetId == 1) {
+            VesselData packet{};
+            packet.id = 1;
+            Serial.feed(frame(reinterpret_cast<byte*>(&packet), sizeof packet));
+        } else {
+            DisplayCommand packet{2, 1};
+            Serial.feed(frame(reinterpret_cast<byte*>(&packet), sizeof packet));
+        }
+        check(input() == packetId && everConnected, "first valid receive must register connection before any matrix draw");
+        clockMs = 100 + IDLETIMER + 1;  // disconnect while the 2500 ms splash would still be showing
+        check(input() == -1 && !Connected && everConnected, "idle must preserve connection history during splash");
+        clockMs = 100 + LINKRESETMS;
+        input();
+        check(resetRequests == 0, "link recovery must not reset before its deadline");
+        ++clockMs;
+        allowReset = true;
+        input();
+        check(resetRequests == 1, "early connection followed by silence must request link reset");
+    }
+    reset_boot_state();
+    clockMs = LINKRESETMS + 1000;
+    input();
+    check(!everConnected && resetRequests == 0, "a board that never connected must keep waiting without link reset");
+    reset_boot_state();
+    clockMs = 100;
+    auto invalid = handshake();
+    invalid.back() ^= 1;
+    Serial.feed(invalid);
+    check(input() == -1 && !everConnected, "an invalid packet must not register first connection");
+    clockMs = LINKRESETMS + 1000;
+    input();
+    check(resetRequests == 0, "invalid traffic must not arm link recovery");
+    reset_boot_state();
+}
+
 int main() {
     try {
+        test_early_connection_recovery();
         expect_handshake();
         clockMs = 100;
         partial_telemetry();
@@ -174,7 +229,7 @@ int main() {
         reject_unknown_after(HandShakePacket{0, 1, 2, 3}, HPacket);
         reject_unknown_after(DisplayCommand{2, 1}, DCmd);
         test_incremental_receiver();
-        std::puts("PASS firmware receiver: timeouts, all frame splits, byte-wise delivery, invalid frames and IDs");
+        std::puts("PASS firmware receiver: early connection recovery, timeouts, frame splits, byte-wise delivery, invalid frames and IDs");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "FAIL firmware receiver: %s\n", e.what()); return 1; }
 }

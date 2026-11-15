@@ -97,6 +97,7 @@ boolean KSPBoardReceiveData() {
         KSPBoardResetReceiver();
         dbgRxOk++;
         dbgLastRxMs = millis();
+        everConnected = true;  // record receipt even when the matrix is still showing its splash
         return true;
       }
       KSPBoardResetReceiver();

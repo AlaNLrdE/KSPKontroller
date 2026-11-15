@@ -109,7 +109,9 @@ Recovery and diagnostics
 
 The idle timeout (2 s), watchdog (2 s) and post-connection link reset (30 s) are independent. Idle
 means the foreground loop still runs but no valid packet has arrived; the watchdog addresses a
-stalled loop. A valid packet restores connected state. A hardware reset re-enumerates USB, which is
+stalled loop. A valid packet restores connected state. The receiver also sets ``everConnected`` at the
+first successful checksum, including packets received during the splash; rendering only reads that flag.
+A board that never received a valid packet does not arm the 30-second link reset. A hardware reset re-enumerates USB, which is
 why the host must rescan rather than assume the COM number is permanent.
 
 ``DebugPacket`` exposes uptime, loop/send maxima, accepted/rejected packet counters, reset reason

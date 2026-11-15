@@ -87,6 +87,11 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
   Keep overlapping BE BE EF headers, and reset header state on timeout too. Native tests split handshakes
   at every byte boundary after garbage, send all packet types byte by byte, and reject empty-buffer reads.
 
+- everConnected belongs to valid packet acceptance, never matrix drawing. A packet at 100 ms can time out
+  before the 2500 ms splash ends; if rendering owns this flag, the 30 s link reset is never armed. Native
+  tests receive all three packet types without drawing, check the reset deadline, and ensure no-valid-packet
+  and invalid-packet-only boots keep waiting without link resets. Hardware reset calls are counted stubs.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
