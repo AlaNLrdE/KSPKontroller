@@ -504,6 +504,18 @@ std::string KrpcSource::address() const {
 
 void KrpcSource::publish(Snapshot snap) {
     snap.server = fmt::str("kRPC %s:%d", address().c_str(), options_.rpc_port);
+    // The context channel (UDP 50002) also carries the simulator's skin choice: ask about once a second in every
+    // state, flight included. Bounded (0.15 s) and on this thread, never on the frame loop.
+    double now = monotonic();
+    if (now - context_at_ >= 1.0) {
+        context_at_ = now;
+        Context ctx = read_context_reply(address(), options_.context_port);
+        if (ctx.skin != context_skin_)
+            log::info(LOG, "context skin: " + (ctx.skin.empty() ? std::string("none (the [display] setting)") : ctx.skin));
+        context_skin_ = ctx.skin;
+        if (snap.state == State::NoVessel && snap.scene.empty()) snap.scene = ctx.scene;
+    }
+    snap.skin = context_skin_;
     Source::publish(std::move(snap));
 }
 
@@ -588,7 +600,12 @@ void KrpcSource::session(Client& conn) {
         if (!vessel) {  // kRPC 0.7 at the Space Center / Tracking Station returns null instead of raising
             Snapshot s;
             s.state = State::NoVessel;
-            s.scene = read_context(address(), options_.context_port);
+            Context ctx = read_context_reply(address(), options_.context_port);
+            s.scene = ctx.scene;
+            if (ctx.skin != context_skin_)
+                log::info(LOG, "context skin: " + (ctx.skin.empty() ? std::string("none (the [display] setting)") : ctx.skin));
+            context_skin_ = ctx.skin;
+            context_at_ = monotonic();
             s.detail = why;
             s.received = monotonic();
             publish(s);

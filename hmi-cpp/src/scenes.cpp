@@ -1,6 +1,7 @@
 #include "scenes.hpp"
 
 #include <arpa/inet.h>
+#include <cctype>
 #include <sys/socket.h>
 
 #include "net.hpp"
@@ -51,28 +52,46 @@ const View* find_view(const std::string& scene) {
     return nullptr;
 }
 
-std::string parse_context(const std::string& reply) {
+Context parse_context_reply(const std::string& reply) {
+    Context out;
     for (unsigned char c : reply)
-        if (c >= 0x80) return "";  // Python decode('ascii') fails
-    size_t space = reply.find(' ');
-    if (space == std::string::npos) return "";
-    std::string prefix = reply.substr(0, space), scene = reply.substr(space + 1);
-    return prefix == "KSPHMI/1" && find_view(scene) ? scene : "";
+        if (c >= 0x80) return out;  // Python decode('ascii') fails
+    std::vector<std::string> fields;
+    for (size_t at = 0; at <= reply.size();) {
+        size_t space = reply.find(' ', at);
+        if (space == std::string::npos) space = reply.size();
+        fields.push_back(reply.substr(at, space - at));
+        at = space + 1;
+    }
+    if (fields.size() < 2 || fields[0] != "KSPHMI/1") return out;
+    if (find_view(fields[1])) out.scene = fields[1];
+    for (size_t i = 2; i < fields.size(); ++i)
+        if (fields[i].compare(0, 5, "skin=") == 0) {
+            std::string name = fields[i].substr(5);
+            bool plain = !name.empty() && name.size() <= 32;
+            for (char c : name) plain = plain && (std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-');
+            if (plain) out.skin = name;
+        }
+    return out;
 }
 
-std::string read_context(const std::string& address, int port) {
+std::string parse_context(const std::string& reply) { return parse_context_reply(reply).scene; }
+
+Context read_context_reply(const std::string& address, int port) {
     auto addr = net::resolve_ipv4(address, port);
-    if (!addr) return "";
+    if (!addr) return {};
     net::Fd sock(socket(AF_INET, SOCK_DGRAM, 0));
-    if (!sock) return "";
+    if (!sock) return {};
     net::set_timeout(sock.get(), 0.15);
-    if (connect(sock.get(), reinterpret_cast<const sockaddr*>(&*addr), sizeof *addr) != 0) return "";
+    if (connect(sock.get(), reinterpret_cast<const sockaddr*>(&*addr), sizeof *addr) != 0) return {};
     static const char request[] = "KSPHMI/1";
-    if (send(sock.get(), request, sizeof request - 1, 0) < 0) return "";
+    if (send(sock.get(), request, sizeof request - 1, 0) < 0) return {};
     char buf[256];
     ssize_t n = recv(sock.get(), buf, sizeof buf, 0);
-    if (n <= 0) return "";
-    return parse_context(std::string(buf, static_cast<size_t>(n)));
+    if (n <= 0) return {};
+    return parse_context_reply(std::string(buf, static_cast<size_t>(n)));
 }
+
+std::string read_context(const std::string& address, int port) { return read_context_reply(address, port).scene; }
 
 }  // namespace ksphmi

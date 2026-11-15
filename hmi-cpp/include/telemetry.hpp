@@ -83,6 +83,9 @@ private:
     mutable std::mutex address_mutex_;
     std::mutex client_mutex_;
     krpc::Client* active_ = nullptr;
+    /// Skin field of the last context reply, refreshed about once a second in every state (telemetry thread).
+    std::string context_skin_;
+    double context_at_ = -1e9;
 };
 
 constexpr double KERBIN_MU = 3.5316e12;

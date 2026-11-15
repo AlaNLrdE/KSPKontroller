@@ -24,6 +24,17 @@ public:
     Navball& operator=(const Navball&) = delete;
 
     void draw(Canvas& c, const Rect& rect, const std::optional<Navigation>& nav);
+    /// Where the globe goes in a NavBall rect (centre and radius in pixels).
+    struct Globe {
+        double cx, cy, r;
+    };
+    static Globe globe_geometry(const Canvas& c, const Rect& rect);
+    /// SAS modes in display order: kRPC name and the button caption.
+    static const std::vector<std::pair<const char*, const char*>>& sas_modes();
+    /// The classic panel, caption, readouts, bezel ring, THR/G arcs and SAS buttons around the globe. The apollo
+    /// skin turns them off and draws its own (segment readouts, lamps, metal bezel); the globe, its markings, the
+    /// markers and the boresight are always drawn here.
+    bool chrome = true;
 
     /// Marker glyphs (prograde, retrograde, normal, anti_normal, radial, anti_radial, target, anti_target, maneuver).
     static void symbol(Canvas& c, const std::string& kind, Color color, float x, float y, float size);

@@ -436,6 +436,32 @@ class KrpcTest(unittest.TestCase):
             sock.sendto(request, ("127.0.0.1", port))
             return sock.recv(256).decode("ascii")
 
+    def test_context_reply_carries_the_simulator_skin(self):
+        from kspsim.krpcserver import KrpcServer
+        from kspsim.sim import SKINS
+
+        sim = Simulator("orbit")
+        server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
+        server.start()
+        try:
+            self.assertEqual(self.context(server.context_port), "KSPHMI/1 flight")  # as KSPSerialIO: no field
+            for skin in ("apollo", "classic"):
+                sim.set_skin(skin)
+                self.assertEqual(self.context(server.context_port), "KSPHMI/1 flight skin=" + skin)
+            sim.set_scene("vab")
+            self.assertEqual(self.context(server.context_port), "KSPHMI/1 vab skin=classic")
+            sim.set_skin("")
+            self.assertEqual(self.context(server.context_port), "KSPHMI/1 vab")
+            # every skin the simulator offers is one the HMI knows (hmi-cpp/src/display.cpp known_skin)
+            with open(os.path.join(ROOT, "hmi-cpp", "src", "display.cpp"), encoding="utf-8") as f:
+                display = f.read()
+            for skin in SKINS[1:]:
+                self.assertIn('name == "%s"' % skin, display)
+            with self.assertRaises(AssertionError):
+                sim.set_skin("chrome")
+        finally:
+            server.stop()
+
     def test_krpc_client_end_to_end(self):
         import krpc
         from kspsim.krpcserver import KrpcServer

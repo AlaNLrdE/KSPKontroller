@@ -34,7 +34,9 @@ The window
 
 * **Game**: *Flight*; *Space center* (the board gets no telemetry and goes idle, the HMI shows
   ``NOT IN FLIGHT``); *KSP closed* (kRPC ports closed: the HMI shows ``OFFLINE`` and reconnects when the
-  game "starts" again).
+  game "starts" again). *HMI skin* (``config`` / ``classic`` / ``apollo``, or ``--skin``) adds
+  ``skin=<name>`` to the UDP 50002 context reply: the Pi HMI switches its look at once (``config`` sends no
+  field, as KSPSerialIO, so the HMI's own setting decides). Changes are logged as ``HMI skin ...``.
 * **Scenario** loads a new vessel, as switching vessels in KSP does (the HMI re-opens its streams):
   on the pad, an 80 x 250 km orbit, a sub-orbital arc falling back through the atmosphere, an escape
   trajectory (hyperbolic, the HMI shows ``Escape``).

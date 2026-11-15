@@ -29,7 +29,7 @@ volatile std::sig_atomic_t quit_signal = 0;
 void on_signal(int) { quit_signal = 1; }
 
 struct Args {
-    std::string config, address, size, screenshot;
+    std::string config, address, size, screenshot, skin;
     bool demo = false, windowed = false, offscreen = false, splash = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
@@ -38,12 +38,14 @@ struct Args {
 void usage(FILE* out) {
     std::fprintf(out,
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed] [--size WxH]\n"
+                 "              [--skin classic|apollo]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N] [--offscreen]\n"
                  "       ksphmi --splash [--screenshot FILE --size WxH]\n\n"
                  "KSP flight data display (kRPC client), for the Raspberry Pi.\n\n"
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
+                 "  --skin NAME        classic or apollo (overrides [display] skin)\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
                  "  --size WxH         window or screen size, for example 1920x1080\n"
                  "  --screenshot FILE  draw for --seconds, save the frame as PNG and exit (off-screen)\n"
@@ -68,6 +70,7 @@ bool parse(int argc, char** argv, Args& a) {
             std::exit(0);
         } else if (k == "--config") value(a.config);
         else if (k == "--address") value(a.address);
+        else if (k == "--skin") value(a.skin);
         else if (k == "--size") value(a.size);
         else if (k == "--screenshot") value(a.screenshot);
         else if (k == "--seconds") value(v), a.seconds = std::stod(v);
@@ -244,6 +247,7 @@ int run(int argc, char** argv) {
     }
     if (args.splash) return splash(args);
     Config cfg = load_config(args.config);
+    if (!args.skin.empty()) cfg.display.skin = args.skin;
     if (!args.address.empty()) cfg.krpc.address = args.address;  // one place: the source and the waiting screen
     int want_w = cfg.display.width, want_h = cfg.display.height;
     if (!args.size.empty()) {

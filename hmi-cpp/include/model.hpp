@@ -138,6 +138,7 @@ struct Snapshot {
     std::string detail;  ///< why we are not in FLIGHT, shown on the waiting screen
     std::string scene;   ///< KSPSerialIO scene context, empty if unavailable
     std::string server;  ///< current endpoint, including a server found after DHCP changes
+    std::string skin;    ///< HMI look requested by the context reply (the simulator), "" = the [display] setting
     std::string vessel, situation, body;
     double body_radius = 0, atmosphere_depth = 0, ut = 0, altitude = 0;
     double apoapsis = 0, periapsis = 0, time_to_apoapsis = 0, time_to_periapsis = 0;

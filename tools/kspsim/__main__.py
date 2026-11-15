@@ -86,6 +86,8 @@ def main(argv=None) -> int:
                          "dashed orbit (the window's Maneuver node tab changes or deletes it)")
     sas_names = [m.replace(" ", "-") for m in physics.SAS_MODES]
     ap.add_argument("--sas", choices=sas_names, help="start with SAS on in this mode")
+    ap.add_argument("--skin", choices=("classic", "apollo"),
+                    help="ask the Pi HMI for this look on the UDP 50002 context reply (default: its own config)")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
@@ -96,6 +98,8 @@ def main(argv=None) -> int:
 
     sim = Simulator(args.scenario, args.warp)
     sim.board_throttle = not args.no_board_throttle
+    if args.skin:
+        sim.set_skin(args.skin)
     if args.node:
         dv, _, seconds = args.node.partition(",")
         sim.set_node(float(dv), float(seconds or 300))

@@ -26,10 +26,19 @@ const std::vector<View>& views();
 /// The view for a scene name, or nullptr.
 const View* find_view(const std::string& scene);
 
-/// Scene name from a reply, or "" for anything but "KSPHMI/1 <known scene>" in ASCII.
+/// A context reply: "KSPHMI/1 <scene>[ skin=<name>]". The simulator adds the optional skin field (the HMI look it
+/// should use); KSPSerialIO sends none, so in the game the [display] skin setting decides.
+struct Context {
+    std::string scene;  ///< a known facility view, or "" (flight, main menu, unknown)
+    std::string skin;   ///< "" when the reply has no skin field
+};
+/// Parse a reply: "" fields for anything but "KSPHMI/1 <scene>[ skin=<name>]" in ASCII (unknown scenes give "").
+Context parse_context_reply(const std::string& reply);
+/// Scene name from a reply, or "" for anything but "KSPHMI/1 <known scene>[ fields]" in ASCII.
 std::string parse_context(const std::string& reply);
 
 /// One bounded request (0.15 s). An older plugin or a blocked UDP port leaves the generic waiting view.
+Context read_context_reply(const std::string& address, int port = 50002);
 std::string read_context(const std::string& address, int port = 50002);
 
 /// Only private, link-local or loopback IPv4 peers may redirect the HMI (Python ipaddress.is_private rules).

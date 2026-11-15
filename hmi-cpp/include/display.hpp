@@ -7,6 +7,7 @@
 #include <map>
 #include <tuple>
 #include <memory>
+#include <string>
 #include <optional>
 
 #include "canvas.hpp"
@@ -16,6 +17,8 @@
 #include "netinfo.hpp"
 
 namespace ksphmi {
+
+class ApolloSkin;
 
 class Display {
 public:
@@ -54,6 +57,16 @@ public:
     std::optional<Pt> last_vessel_marker;
     /// Where the maneuver node diamond was drawn, and how often the dashed post-burn orbit was rebuilt.
     std::optional<Pt> last_node_marker;
+    /// ORBIT draws its own title and INERTIAL caption (the apollo skin paints them on the bezel instead).
+    bool panel_titles = true;
+    /// The skin drawn now: "classic" or "apollo". The context reply's skin (simulator) wins over [display] skin.
+    const std::string& skin() const { return skin_; }
+    static bool known_skin(const std::string& name);
+    /// Switch at once (logged); unknown names are ignored. The next draw re-applies the context or config choice.
+    void set_skin(const std::string& name, const char* why = "request");
+    /// ORBIT's body and apsis labels go through this when set (the apollo skin paints them in its lettering).
+    std::function<Rect(const std::string&, float, Color, double, double, Anchor)> orbit_label;
+    ApolloSkin* apollo() { return apollo_.get(); }
     int maneuver_builds = 0;
 
 private:
@@ -72,6 +85,7 @@ private:
     void orbit_contents(const Rect& rect, const Snapshot& s);
     void inertial_orbit(const Rect& rect, const Snapshot& s);
     int apsis_label_width();
+    Rect orbit_text(const std::string& s, float units, Color color, double x, double y, Anchor a);
     /// Static dial face (chrome bezel, shaded face, scale, E/F, resource icon, odometer window), rendered once
     /// per size, state (live, unknown, absent) and resource at twice the resolution, smoothed down and kept as a
     /// texture.
@@ -92,6 +106,9 @@ private:
     std::string server_text_;
     NetInfo net_;
     Navball navball_;
+    Config cfg_;
+    std::string config_skin_, skin_;
+    std::unique_ptr<ApolloSkin> apollo_;
 };
 
 }  // namespace ksphmi

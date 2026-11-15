@@ -452,8 +452,11 @@ def check_hmi_context(ctx):
             ok = ok and name + ".Add(" in source and name + ".Remove(" in source
     project = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "KSPSerialIO.csproj"))
     ok = ok and 'Compile Include="HmiContext.cs"' in project
-    report("PASS" if ok else "FAIL", "hmi: scene context contract",
-           "UDP 50002 protocol and facility event subscriptions")
+    # Optional " skin=<name>" field: only the simulator sends it, the HMI parses it; the plugin never does.
+    skin_ok = "skin=" in client and "skin=" in server and "skin=" not in source
+    report("PASS" if ok and skin_ok else "FAIL", "hmi: scene context contract",
+           "UDP 50002 protocol, facility event subscriptions, optional skin field (simulator only)"
+           if skin_ok else "skin= field must be parsed by hmi-cpp, sent by kspsim, and absent from HmiContext.cs")
     try:
         out = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", "name=KSP HMI scene context"],

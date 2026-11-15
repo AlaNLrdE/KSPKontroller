@@ -157,6 +157,7 @@ void apply_toml(Config& c, const TomlValues& m) {
     c.demo.speed = to_double(m, "demo.speed", c.demo.speed);
     c.display.output = to_string(m, "display.output", c.display.output);
     c.display.fbdev = to_string(m, "display.fbdev", c.display.fbdev);
+    c.display.skin = to_string(m, "display.skin", c.display.skin);
     c.display.fps = to_int(m, "display.fps", c.display.fps);
     c.display.fullscreen = to_bool(m, "display.fullscreen", c.display.fullscreen);
     c.display.width = to_int(m, "display.width", c.display.width);

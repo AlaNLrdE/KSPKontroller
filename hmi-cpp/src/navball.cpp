@@ -233,18 +233,33 @@ Quat Navball::smooth(const Quat& shown, const Quat& target, double dt) {
     return slerp(shown, target, 1 - std::exp(-dt / SMOOTHING_S));
 }
 
+Navball::Globe Navball::globe_geometry(const Canvas& c, const Rect& rect) {
+    return {rect.centerx() - 1.8 * c.u, rect.y + rect.h * .46, std::min(rect.h * .31, rect.w * .31)};
+}
+
+const std::vector<std::pair<const char*, const char*>>& Navball::sas_modes() {
+    static const std::vector<std::pair<const char*, const char*>> modes = {
+        {"stability_assist", "HOLD"}, {"prograde", "PRO"}, {"retrograde", "RET"}, {"normal", "N+"},
+        {"anti_normal", "N-"},        {"radial", "R+"},    {"anti_radial", "R-"}, {"target", "TGT"},
+        {"anti_target", "ANTI"},      {"maneuver", "NODE"}};
+    return modes;
+}
+
 void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>& nav) {
     const double u = c.u;
-    panel(c, rect);
-    c.text("NAVBALL", 2.6, {122, 140, 164}, rect.x + 1.8 * u, rect.y + 1.8 * u);
+    if (chrome) {
+        panel(c, rect);
+        c.text("NAVBALL", 2.6, {122, 140, 164}, rect.x + 1.8 * u, rect.y + 1.8 * u);
+    }
     if (!nav) {
         animating_ = false;
-        c.text("Attitude unavailable", 3.4, WHITE, rect.centerx(), rect.centery(), Anchor::Center);
+        if (chrome) c.text("Attitude unavailable", 3.4, WHITE, rect.centerx(), rect.centery(), Anchor::Center);
         return;
     }
     const Navigation& n = *nav;
-    const double radius = std::min(rect.h * .31, rect.w * .31);
-    const double cx = rect.centerx() - 1.8 * u, cy = rect.y + rect.h * .46;
+    const Globe g = globe_geometry(c, rect);
+    const double radius = g.r;
+    const double cx = g.cx, cy = g.cy;
     const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     shown_ = shown_at_ < 0 ? n.rotation : smooth(shown_, n.rotation, now - shown_at_);
     shown_at_ = now;
@@ -255,8 +270,9 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     } catch (const std::invalid_argument&) {  // a zero quaternion: show the globe level rather than nothing
         axes = basis(Quat{0, 0, 0, 1});
     }
-    c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
-           rect.y + 1.8 * u, Anchor::TopRight);
+    if (chrome)
+        c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
+               rect.y + 1.8 * u, Anchor::TopRight);
     const double r = radius;
     const int size = static_cast<int>(std::ceil(2 * r + 4));
     const double origin = size / 2.0;
@@ -336,11 +352,13 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
 
     const float fx = static_cast<float>(cx), fy = static_cast<float>(cy), fr = static_cast<float>(r);
     const float fu = static_cast<float>(u);
-    c.ring(fx, fy, fr + 1.7f * fu, std::max(2.0f, rnd(2.6 * u)), {91, 104, 114});
-    // The arc rect is 2 * (r + 1.7u) wide, truncated to whole pixels.
-    float bezel = static_cast<int>(2 * (r + 1.7 * u)) / 2.0f;
-    c.arc(fx, fy, bezel, PI / 4, 5 * PI / 4, std::max(1.0f, rnd(.7 * u)), {151, 164, 171});
-    c.arc(fx, fy, bezel, 5 * PI / 4, 9 * PI / 4, std::max(1.0f, rnd(.7 * u)), {48, 57, 64});
+    if (chrome) {
+        c.ring(fx, fy, fr + 1.7f * fu, std::max(2.0f, rnd(2.6 * u)), {91, 104, 114});
+        // The arc rect is 2 * (r + 1.7u) wide, truncated to whole pixels.
+        float bezel = static_cast<int>(2 * (r + 1.7 * u)) / 2.0f;
+        c.arc(fx, fy, bezel, PI / 4, 5 * PI / 4, std::max(1.0f, rnd(.7 * u)), {151, 164, 171});
+        c.arc(fx, fy, bezel, 5 * PI / 4, 9 * PI / 4, std::max(1.0f, rnd(.7 * u)), {48, 57, 64});
+    }
     c.ring(fx, fy, fr + .25f * fu, std::max(1.0f, rnd(.25 * u)), {181, 190, 194});
     // Roll scale and fixed top index: stationary while the globe turns.
     for (int deg = -60; deg <= 60; deg += 10) {
@@ -388,6 +406,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     c.polyline(wings, false, std::max(2.0f, rnd(.35 * u)), GOLD);
     c.circle(fx, fy, std::max(2.0f, .55f * fu), {44, 30, 9});
     c.circle(fx, fy, std::max(1.0f, .3f * fu), GOLD);
+    if (!chrome) return;
 
     // Speed mode and heading displays, plus the stock RCS/SAS status lamps.
     Rect box = Rect::f(cx - 9 * u, cy - r - 5.4 * u, 18 * u, 5.7 * u);
@@ -450,10 +469,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
         c.text(fmt::speed(remaining), 2, GREEN, cx + r + 7 * u, cy - r - 3 * u, Anchor::Center);
     }
     // SAS mode gadgets: read-only indicators following the game's selected mode.
-    static const std::pair<const char*, const char*> modes[] = {
-        {"stability_assist", "HOLD"}, {"prograde", "PRO"}, {"retrograde", "RET"}, {"normal", "N+"},
-        {"anti_normal", "N-"},        {"radial", "R+"},    {"anti_radial", "R-"}, {"target", "TGT"},
-        {"anti_target", "ANTI"},      {"maneuver", "NODE"}};
+    const auto& modes = sas_modes();
     double y = rect.bottom() - 8.5 * u, gap = .4 * u;
     double width = std::min(6.1 * u, (rect.w - 4 * u - 9 * gap) / 10);
     double start = rect.centerx() - (10 * width + 9 * gap) / 2;
