@@ -7,7 +7,9 @@
  * Contains code borrowed from the EasyTransfer library.
  */
 
-uint8_t rx_len;        ///< Payload size announced by the packet being received (0 = no packet in progress)
+enum ReceiveState { RX_HEADER1, RX_HEADER2, RX_LENGTH, RX_ID, RX_PAYLOAD, RX_CHECKSUM };
+ReceiveState rx_state = RX_HEADER1; ///< Next byte expected, preserved across calls
+uint8_t rx_len;        ///< Announced payload size (0 until the length byte arrives)
 uint8_t * address;     ///< Destination struct for the packet being received
 byte buffer[256];      ///< Temporary storage and parsing buffer; buffer[0] holds the packet id
 uint8_t structSize;    ///< Size of the struct that matches the packet id being received
@@ -16,6 +18,7 @@ uint8_t calc_CS;       ///< Calculated checksum
 
 /// @brief Abandons an incomplete frame without discarding unread serial bytes (which may contain a new handshake).
 void KSPBoardResetReceiver() {
+  rx_state = RX_HEADER1;
   rx_len = 0;
   rx_array_inx = 0;
   address = nullptr;
@@ -34,19 +37,28 @@ void KSPBoardResetReceiver() {
  * @return true when a complete, valid packet was stored; the packet id is left in the global @c id.
  */
 boolean KSPBoardReceiveData() {
-  if ((rx_len == 0)&&(Serial.available()>3)){
-    // Skip bytes until the first header byte
-    while(Serial.read()!= 0xBE) {
-      if (Serial.available() == 0)
+  while (Serial.available() > 0) {
+    const byte next = Serial.read();
+    switch (rx_state) {
+    case RX_HEADER1:
+      if (next == 0xBE) rx_state = RX_HEADER2;
+      break;
+    case RX_HEADER2:
+      if (next == 0xEF) rx_state = RX_LENGTH;
+      else if (next != 0xBE) rx_state = RX_HEADER1;  // BE BE EF retains the second BE
+      break;
+    case RX_LENGTH:
+      rx_len = next;
+      if (rx_len == 0) {
+        KSPBoardResetReceiver();
+        dbgRxBadSize++;
         return false;
-    }
-    if (Serial.read() == 0xEF){
-      rx_len = Serial.read();
-      id = Serial.read();
-      rx_array_inx = 1;
-
-      // Select the destination struct from the packet id
-      switch(id) {
+      }
+      rx_state = RX_ID;
+      break;
+    case RX_ID:
+      id = next;
+      switch (id) {
       case 0:
         structSize = sizeof(HPacket);
         address = (byte*)&HPacket;
@@ -60,54 +72,38 @@ boolean KSPBoardReceiveData() {
         address = (byte*)&DCmd;
         break;
       default:
-        // Never reuse the previous packet's destination for an unsupported ID.
         KSPBoardResetReceiver();
         dbgRxBadSize++;
         return false;
       }
-    }
-
-    //make sure the binary structs on both Arduinos are the same size.
-    if(rx_len != structSize){
-      rx_len = 0;
-      dbgRxBadSize++;
-      return false;
-    }
-  }
-
-  if(rx_len != 0){
-    // Accumulate payload bytes (the last one received is the checksum)
-    while(Serial.available() && rx_array_inx <= rx_len){
-      buffer[rx_array_inx++] = Serial.read();
-    }
-    buffer[0] = id;
-
-    if(rx_len == (rx_array_inx-1)){
-      //seem to have got whole message
-      //last uint8_t is CS
-      calc_CS = rx_len;
-      for (int i = 0; i<rx_len; i++){
-        calc_CS^=buffer[i];
+      if (rx_len != structSize) {
+        KSPBoardResetReceiver();
+        dbgRxBadSize++;
+        return false;
       }
-
-      if(calc_CS == buffer[rx_array_inx-1]){//CS good
-        memcpy(address,buffer,structSize);
-        rx_len = 0;
-        rx_array_inx = 1;
+      buffer[0] = id;
+      rx_array_inx = 1;
+      calc_CS = rx_len ^ id;
+      rx_state = RX_PAYLOAD;
+      break;
+    case RX_PAYLOAD:
+      buffer[rx_array_inx++] = next;
+      calc_CS ^= next;
+      if (rx_array_inx == rx_len) rx_state = RX_CHECKSUM;
+      break;
+    case RX_CHECKSUM:
+      if (calc_CS == next) {
+        memcpy(address, buffer, structSize);
+        KSPBoardResetReceiver();
         dbgRxOk++;
         dbgLastRxMs = millis();
         return true;
       }
-      else{
-        //failed checksum, need to clear this out anyway
-        dbgRxBadChecksum++;
-        rx_len = 0;
-        rx_array_inx = 1;
-        return false;
-      }
+      KSPBoardResetReceiver();
+      dbgRxBadChecksum++;
+      return false;
     }
   }
-
   return false;
 }
 

@@ -65,7 +65,10 @@ Firmware native regression tests
 and ``HandShake.ino`` functions with fake serial, clock and indicator peripherals. Packet declarations
 are extracted from the production sketch, including their size assertions. Tests cover incomplete telemetry
 expiring after two seconds, the immediate next handshake (including bytes queued before expiry is checked),
-and ordinary fragmentation below the timeout. Unknown-ID tests first receive each supported packet type,
+and ordinary fragmentation below the timeout. Header tests deliver ``00 00 00 BE EF`` before the remainder,
+split a handshake at every byte boundary, deliver all three packet types byte by byte, preserve ``BE BE EF``,
+and check recovery after bad checksums, zero/mismatched lengths and expired partial headers. The fake serial
+port counts empty-buffer reads and requires zero. Unknown-ID tests first receive each supported packet type,
 then send a checksum-valid ID 99 frame of the same length: the previous structure and link timestamps
 must remain unchanged, only the invalid counter advances, and a following handshake must work.
 Requires a native C++17 compiler; artifacts stay under

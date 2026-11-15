@@ -20,7 +20,8 @@ struct FakeSerial {
     std::deque<byte> rx;
     std::vector<byte> tx;
     int available() { return static_cast<int>(rx.size()); }
-    int read() { if (rx.empty()) return -1; byte b = rx.front(); rx.pop_front(); return b; }
+    int emptyReads = 0;
+    int read() { if (rx.empty()) { ++emptyReads; return -1; } byte b = rx.front(); rx.pop_front(); return b; }
     void write(const byte* data, size_t size) { tx.insert(tx.end(), data, data + size); }
     void feed(const std::vector<byte>& data) { rx.insert(rx.end(), data.begin(), data.end()); }
 } Serial;
@@ -91,6 +92,62 @@ void reject_unknown_after(const Packet& packet, Packet& destination) {
     expect_handshake();  // skip the rejected payload and accept the next valid frame
 }
 
+void fragmented_handshake(size_t split) {
+    KSPBoardResetReceiver();
+    Serial.rx.clear();
+    Serial.tx.clear();
+    auto bytes = handshake();
+    Serial.feed({0, 0, 0});
+    Serial.feed(std::vector<byte>(bytes.begin(), bytes.begin() + split));
+    check(input() == -1, "fragmented handshake must wait for remaining bytes");
+    Serial.feed(std::vector<byte>(bytes.begin() + split, bytes.end()));
+    check(input() == 0, "fragmented header after garbage must survive until the remainder arrives");
+    HandShakePacket reply{0, 3, 1, 4};
+    check(Serial.tx == frame(reinterpret_cast<byte*>(&reply), sizeof reply), "fragmented handshake must reply exactly once");
+}
+
+template <typename Packet>
+void receive_byte_by_byte(const Packet& packet) {
+    auto bytes = frame(reinterpret_cast<const byte*>(&packet), sizeof packet);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        Serial.feed({bytes[i]});
+        ++clockMs;
+        check(input() == (i + 1 == bytes.size() ? packet.id : -1), "byte-wise delivery must accept only the complete frame");
+    }
+}
+
+void test_incremental_receiver() {
+    fragmented_handshake(2);  // reported sequence: 00 00 00 BE EF, then size/id/payload/checksum
+    for (size_t split = 1; split < handshake().size(); ++split) fragmented_handshake(split);
+    receive_byte_by_byte(HandShakePacket{0, 1, 2, 3});
+    receive_byte_by_byte(VesselData{1});
+    receive_byte_by_byte(DisplayCommand{2, 1});
+    Serial.feed({0xBE});  // preserve the overlapping BE BE EF header
+    expect_handshake();
+    auto broken = handshake();
+    broken.back() ^= 1;
+    Serial.feed(broken);
+    Serial.feed(handshake());
+    check(input() == -1, "bad checksum must be rejected");
+    check(input() == 0, "next valid frame must survive a rejected checksum");
+    Serial.feed({0xBE, 0xEF, 0});
+    Serial.feed(handshake());
+    check(input() == -1, "zero payload size must be rejected");
+    check(input() == 0, "next valid frame must survive a rejected length");
+    Serial.feed({0xBE, 0xEF, 255, 0});
+    Serial.feed(handshake());
+    check(input() == -1, "oversized handshake length must be rejected before payload accumulation");
+    check(input() == 0, "next valid frame must survive a mismatched length");
+    auto probe = handshake();
+    for (size_t split : {size_t(1), size_t(2), size_t(3)}) {
+        Serial.feed(std::vector<byte>(probe.begin(), probe.begin() + split));
+        check(input() == -1, "partial header must wait");
+        clockMs += IDLETIMER + 1;
+        expect_handshake();  // timeout must reset every header state as well as partial payload
+    }
+    check(Serial.emptyReads == 0, "parser must never read an empty serial buffer");
+}
+
 int main() {
     try {
         expect_handshake();
@@ -116,7 +173,8 @@ int main() {
         reject_unknown_after(VesselData{1}, VData);
         reject_unknown_after(HandShakePacket{0, 1, 2, 3}, HPacket);
         reject_unknown_after(DisplayCommand{2, 1}, DCmd);
-        std::puts("PASS firmware receiver: timeouts, fragmentation, unknown IDs preserve all destinations and liveness");
+        test_incremental_receiver();
+        std::puts("PASS firmware receiver: timeouts, all frame splits, byte-wise delivery, invalid frames and IDs");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "FAIL firmware receiver: %s\n", e.what()); return 1; }
 }

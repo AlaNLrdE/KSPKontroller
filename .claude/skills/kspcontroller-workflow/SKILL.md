@@ -99,6 +99,11 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   the receive state, count it in dbgRxBadSize, and do not renew valid-packet counters or link timestamps.
   Native receiver tests cover all three destinations plus the next handshake.
 
+- Serial availability before skipping garbage does not guarantee that header, size and ID bytes remain.
+  Preserve explicit header/length/ID/payload/checksum states and read only one available byte per transition.
+  Keep overlapping BE BE EF headers, and reset header state on timeout too. Native tests split handshakes
+  at every byte boundary after garbage, send all packet types byte by byte, and reject empty-buffer reads.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
