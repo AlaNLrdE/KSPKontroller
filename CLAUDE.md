@@ -77,6 +77,14 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Heredocs containing quotes break in the Bash tool: write scripts with the Write tool, run them with
   `build/venv/Scripts/python.exe` (system `python` is not installed). `Write` needs a prior Read on existing files.
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
+- Helpers captured with command substitution must keep stdout machine-readable: `ensure_refassemblies`
+  returns only the absolute reference-assembly path; download/status messages go to stderr, even on a cold cache.
+- `./ci deploy_all` includes the Pi: preflight SSH/packages/linger, build plugin/sketch, then `deploy_hmi`
+  (native C++ build + ctest + restart on the Pi), then plugin install and board flash/test. Pi failure stops
+  before plugin install or flash; `NO_TEST=1` skips only the board test, never the Pi build/tests.
+- A failed abrupt-close/reopen hardware test is a real reconnection failure even if the later idle-timeout
+  test passes: silence alone does not prove the board is alive. Rerun against the installed firmware with KSP
+  closed before changing it; intermittent failures may disappear on repeated tests and must not be called fixed.
 - A board frozen with the orange LED not pulsing: double-tap RESET (orange pulses), or unplug USB for 10 s, then
   `./ci upload_sketch`. A plain RESET often does not recover it.
 - HMI facility screens need KSPSerialIO UDP 50002 context as well as kRPC: stock kRPC active_vessel is null
@@ -85,6 +93,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   fails. Disable discovery in isolated client tests so an open real game cannot redirect their connections.
 - Pi kiosk boot setup is `sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh` (run by the user): hide boot text and
   firmware splash, mask tty1 getty, persist cursor settings; user-service lingering starts the HMI without login.
+- On Windows, `hmi_ssh` prefers native Windows OpenSSH: Git Bash/MSYS SSH can abort long remote builds
+  with `poll: No error`. Keep stdin available for piped tar transfers; do not blindly retry deployments.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
   the repo). Anything needing `sudo` there is run by the user. `hmi-cpp/` is LF (`.gitattributes`), not CRLF.
 - The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). The Pi builds it:
