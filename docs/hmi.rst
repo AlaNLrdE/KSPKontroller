@@ -138,8 +138,8 @@ under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local
 ``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
 --config FILE --fps N --bench N --offscreen --skin NAME`` (``ksphmi --help``).
 
-``[display] skin`` picks the look: ``classic`` (the default, flat dark panels) or ``apollo``, a proposal under
-review that draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
+``[display] skin`` picks the look: ``apollo`` (the default since 2026-11-14) or ``classic`` (the previous flat
+dark panels, kept for switching back). Apollo draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
 seven-segment readouts (``segments.cpp``), caution and warning lamps (UPLINK, NO DATA, NO LINK, SAS, RCS,
 PE ATMO, PE SURF, LOW PWR, LOW FUEL, ESCAPE), edgewise resource meters and bezels around ORBIT and the
 NavBall (round metal bezel, segment readouts for speed, heading, pitch, roll, throttle, G and the maneuver

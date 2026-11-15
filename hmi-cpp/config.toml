@@ -20,7 +20,7 @@ fps = 30                 # 30 with the Pi's GPU (~11 ms per frame); the NavBall 
 fullscreen = true
 width = 0                # 0 = the monitor's own resolution
 height = 0
-skin = "classic"         # classic = flat dark panels; apollo = 1960s spacecraft panel (proposal, under review)
+skin = "apollo"          # apollo = 1960s spacecraft panel (default); classic = the previous flat dark panels
 
 [format]
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time
