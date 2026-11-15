@@ -10,6 +10,7 @@
 #include "display.hpp"
 #include "log.hpp"
 #include "scenes.hpp"
+#include "splash.hpp"
 #include "telemetry.hpp"
 #include "theme.hpp"
 
@@ -307,6 +308,26 @@ TEST(full_frame_software_render_time) {
     time("resource", [&] { s.display->resources(Rect::f(42, 54 * u, 1067, 25 * u), snap); });
     time("staging", [&] { s.display->staging(Rect::f(42, 80.6 * u, 1067, 15 * u), snap); });
     CHECK(ms < 1000);
+}
+
+TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        s.fill(FILL);
+        std::map<std::string, Rect> texts;
+        s.canvas->on_text = [&](const std::string& t, const Rect& r) { texts[t] = r; };
+        draw_splash(*s.canvas);
+        const uint32_t bg = (theme::BG.r << 16) | (theme::BG.g << 8) | theme::BG.b;
+        // Every corner is the HMI background: no console black or stale pixels survive the splash.
+        CHECK_EQ(s.pixel(0, 0), bg);
+        CHECK_EQ(s.pixel(w - 1, h - 1), bg);
+        CHECK(texts.count("KSP HMI"));
+        CHECK(texts.count("Starting..."));
+        Rect screen(0, 0, w, h);
+        for (auto& [t, r] : texts) CHECK(screen.contains(r));
+        if (texts.count("KSP HMI") && texts.count("Starting..."))
+            CHECK(!texts["KSP HMI"].collides(texts["Starting..."]));
+    }
 }
 
 int main(int argc, char** argv) {

@@ -61,6 +61,18 @@ void Framebuffer::unblank() {
     if (ioctl(fd_, FBIOBLANK, FB_BLANK_UNBLANK) != 0)  // keep drawing; the log says why the screen may stay dark
         log::warning("ksphmi.display", std::string("cannot unblank the framebuffer: ") + std::strerror(errno));
     unblanked_at_ = monotonic();
+    first_ = true;  // next write repaints every row
+}
+
+void Framebuffer::activate() {
+    fb_var_screeninfo var{};
+    if (ioctl(fd_, FBIOGET_VSCREENINFO, &var) != 0) {
+        log::warning("ksphmi.display", std::string("cannot read the video mode: ") + std::strerror(errno));
+        return;
+    }
+    var.activate = FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
+    if (ioctl(fd_, FBIOPUT_VSCREENINFO, &var) != 0)
+        log::warning("ksphmi.display", std::string("cannot set the video mode: ") + std::strerror(errno));
 }
 
 int Framebuffer::write(const SDL_Surface* frame) {
