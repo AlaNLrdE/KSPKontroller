@@ -125,6 +125,12 @@ void KSPBoardSendData(uint8_t * address, uint8_t len){
   frame[3 + len] = CS;
 
   Serial.write(frame, (size_t)len + 4);
+  // UART::write() of the renesas_uno core (1.6.0) returns on TX_DATA_EMPTY, while the LAST byte is still in the
+  // shift register. A frame written right after it (ControlPacket and DebugPacket in the same loop()) then lost
+  // that last byte, the checksum: about 1 frame in 180 arrived one byte short (kspsim log, 2026-11-14). Waiting
+  // one byte time (10 bits at 115200 = 87 us) lets it leave first. Serial.flush() would do the same but spins on
+  // a TX_COMPLETE flag with no timeout.
+  delayMicroseconds(100);
 
   dbgTxPackets++;
   unsigned long sendUs = micros() - sendStartUs;
