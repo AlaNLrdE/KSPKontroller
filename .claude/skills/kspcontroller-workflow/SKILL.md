@@ -55,6 +55,13 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.
 - `Serial.availableForWrite()` always reads 0 on this core: do not trust it.
+- On the UNO R4 **WiFi** (`unor4wifi` defines `-DNO_USB`) `Serial` is `_UART1_` at 115200 to the **ESP32-S3 USB
+  bridge**, which owns COM5; the RA4M1 native USB is not used (pin 21 is the USB mux). So "wedged USB" means the
+  bridge: `NVIC_SystemReset()`/watchdog reset only the RA4M1 and do not recover it (stage_dead: board rebooted 30 s
+  into a silence, link still dead 5 min). Only unplugging USB (power-cycles the ESP32-S3) recovers it.
+  The signature on the host: `write_avg_ms` ~19.7 with `rx_bytes=0` and COM5 still present.
+- Until 0.19.3.16 `CheckLink` measured silence from the last queued packet, so it never fired while flying
+  (board-dead-1923: `link_state=up` with `rx_age_ms` 400000+). `./ci verify` check `log: link loss detected`.
 - SAS (pin 2) and RCS (pin 9) are push buttons: each press sets the bit to the opposite of the reported AGSAS /
   AGRCS. A switch-level read (old RCS code) only held RCS on while pressed (fixed 2026-11-14).
 - Disabled inputs use `-1` pin defines with `#if PIN >= 0` around every use (STAGEPIN, THROTTLEPIN), and the
