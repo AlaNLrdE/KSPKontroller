@@ -63,5 +63,21 @@ class NewlineAgnosticTest(unittest.TestCase):
                 self.assertEqual(contract[0][0], "PASS", contract[0][2])
 
 
+class BoardResultTest(unittest.TestCase):
+    def test_hardware_failure_cannot_be_hidden_by_other_passing_checks(self):
+        passing = "".join("  [PASS] %s: good\n" % name for name in
+                          ("handshake", "telemetry", "debug", "reopen", "idle timeout"))
+        for status, exit_code in (("FAIL", 1), (None, 0), ("PASS", 1), ("PASS", 0)):
+            with self.subTest(status=status, exit_code=exit_code):
+                output = passing + ("  [%s] truncated reopen: result\n" % status if status else "")
+                process = mock.Mock(stdout=output, returncode=exit_code)
+                with mock.patch.object(verify, "ksp_running", return_value=False), \
+                     mock.patch.object(verify.subprocess, "run", return_value=process), \
+                     mock.patch.object(verify, "results", []):
+                    verify.check_board({"args": mock.Mock(port="COM5")})
+                    failed = any(result[0] == "FAIL" for result in verify.results)
+                self.assertEqual(failed, status != "PASS" or exit_code != 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -125,6 +125,8 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   liveness. Native regressions truncate telemetry at every byte boundary; the hardware test also deliberately
   truncates header/payload/checksum and requires the first reconnect probe to succeed. A passing native test
   does not prove the ESP32-S3 bridge or the 60-frame abrupt-close stress case is fixed: repeat hardware runs.
+  When extending the hardware suite, update `verify.check_board` too and propagate a nonzero test-process
+  exit code: otherwise its older passing cases can hide a failure of the new case.
 
 ## Never call Debug.Log from a worker thread
 

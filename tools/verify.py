@@ -1051,9 +1051,12 @@ def check_board(ctx):
     cmd = [sys.executable, os.path.join(ROOT, "tools", "test_arduino.py")] + ([port] if port else [])
     p = subprocess.run(cmd, capture_output=True, text=True)
     out = p.stdout
-    for name in ("handshake", "telemetry", "debug", "reopen", "idle timeout"):
+    for name in ("handshake", "telemetry", "debug", "reopen", "truncated reopen", "idle timeout"):
         m = re.search(r"\[(PASS|FAIL)\] %s: (.*)" % name, out)
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
+
+    if p.returncode != 0:
+        report("FAIL", "board: test process", "hardware test exited with code %d" % p.returncode)
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
