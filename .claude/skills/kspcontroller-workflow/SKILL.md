@@ -64,6 +64,11 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   `verify --board` no handshake). `./ci upload_sketch` alone failed ("No device found on COM5"); double-tap
   RESET (orange LED pulsing) then `./ci upload_sketch` succeeded and all `verify --board` checks passed.
   Escalation: unplug 10 s -> double-tap RESET + upload_sketch -> ESP32-S3 bridge firmware update.
+- Bad frames board -> PC (kspsim "bad frame" lines, ~1 in 180): each was exactly ONE byte short, the checksum,
+  always where a ControlPacket and a DebugPacket were written in the same loop(). renesas_uno 1.6.0
+  `UART::write()` returns while the last byte is still shifting out. Fix c81d663: `delayMicroseconds(100)`
+  after each frame (not `Serial.flush()`, which spins without a timeout); 0 bad frames afterwards. The plugin
+  does not count PC-side bad frames, so check them with kspsim (`build/kspsim.log`).
   The signature on the host: `write_avg_ms` ~19.7 with `rx_bytes=0` and COM5 still present.
 - Until 0.19.3.16 `CheckLink` measured silence from the last queued packet, so it never fired while flying
   (board-dead-1923: `link_state=up` with `rx_age_ms` 400000+). `./ci verify` check `log: link loss detected`.
