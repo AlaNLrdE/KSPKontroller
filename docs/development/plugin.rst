@@ -69,6 +69,11 @@ must match it byte for byte.
 Control application
 -------------------
 
+The receive parser validates the exact payload size (25 bytes for controls, 4 for handshakes) before
+capturing events or copying into ``NewPacketBuffer``. A valid checksum alone does not make a truncated
+packet safe: the shared buffer retains old bytes, and struct decoding reads its entire fixed size.
+Diagnostics follow their own validated length check and do not enter this shared buffer.
+
 ``VesselControls`` decodes the latest control packet into values convenient for the game. The main
 thread compares current and prior values before applying changes. SAS/RCS are event-like bit changes;
 lights, gear and other level switches use their new state. The initial control packet establishes a

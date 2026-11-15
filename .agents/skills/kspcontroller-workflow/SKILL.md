@@ -92,6 +92,11 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
   tests receive all three packet types without drawing, check the reset deadline, and ensure no-valid-packet
   and invalid-packet-only boots keep waiting without link resets. Hardware reset calls are counted stubs.
 
+- Plugin packet length checks must guard publication and decoding, not just Buttons.Capture: require
+  exactly 25 control bytes and 4 handshake bytes before copying to NewPacketBuffer. An ID-only control
+  packet otherwise reuses handshake magic and can assert Abort. `--plugin-only` tests the actual built
+  assembly via reflection, with log queue main-thread identity unset so no Unity UI/native calls execute.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer

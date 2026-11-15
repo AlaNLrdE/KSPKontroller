@@ -860,7 +860,7 @@ namespace KSPSerialIO
         /**
          * @brief Feeds received bytes through the packet state machine.
          *
-         * Implements the framing @c [0xBE][0xEF][size][payload][checksum]. On a valid checksum the
+         * Implements the framing @c [0xBE][0xEF][size][payload][checksum]. After checksum and exact-size validation the
          * payload is copied to NewPacketBuffer and NewPacketFlag is raised; on any framing error the
          * parser drops back to FIRSTHEADER and resynchronizes on the next 0xBE 0xEF.
          * @param ReadBuffer Bytes just read from the port.
@@ -907,10 +907,10 @@ namespace KSPSerialIO
                             // Diagnostics never go through NewPacketBuffer: they must not overwrite a pending ControlPacket
                             LogBoardDebug(CurrentBytesRead);
                         }
-                        else if (CompareChecksum(ReadBuffer[x]))
+                        else if (CompareChecksum(ReadBuffer[x]) && ValidInboundPacketSize(PayloadBuffer[0], CurrentBytesRead))
                         {
                             SerialMutex.WaitOne();
-                            if (PayloadBuffer[0] == Cid && CurrentBytesRead == Marshal.SizeOf(typeof(ControlPacket)))
+                            if (PayloadBuffer[0] == Cid)
                                 Buttons.Capture(PayloadBuffer[1], Environment.TickCount);
                             Buffer.BlockCopy(PayloadBuffer, 0, NewPacketBuffer, 0, CurrentBytesRead);
                             NewPacketFlag = true;
@@ -926,6 +926,14 @@ namespace KSPSerialIO
                         break;
                 }
             }
+        }
+
+        /// @brief Only exact-size control and handshake packets may reach the shared decoder buffer.
+        private static bool ValidInboundPacketSize(byte packetId, int length)
+        {
+            if (packetId == Cid) return length == Marshal.SizeOf(typeof(ControlPacket));
+            if (packetId == HSPid) return length == Marshal.SizeOf(typeof(HandShakePacket));
+            return false;
         }
 
         /**

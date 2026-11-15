@@ -80,6 +80,18 @@ float-to-int overflow checks): infinity and NaN show three dashes, finite extrem
 and ordinary numbers retain decimals and unit dots. Matrix tests require a compiler with UBSan support;
 the LED driver and GPIO are stand-ins. These tests do not validate physical USB, watchdog, LEDs or buttons.
 
+Plugin receive regression tests
+-------------------------------
+
+After ``./ci build_KSPSerialIO``, run ``python3 tools/verify.py --plugin-only`` for the button tests and
+``tools/plugin-receiver-tests``. The latter loads the actual built plugin and reference assemblies, invokes
+the real receive and dispatch methods through reflection, and keeps logging queued without Unity lifecycle
+or UI calls. It checks the ID-only control regression after a handshake, short and oversized control and
+handshake payloads with correct checksums, preservation of pending valid packets, button events and
+handshake state, and successful recovery with valid payloads. Requires .NET 8; stale plugin output fails
+rather than testing an older assembly. Artifacts stay under ``build/plugin-receiver-tests``. This does not
+validate Unity control application, serial hardware or the game.
+
 Button event regression tests
 -----------------------------
 

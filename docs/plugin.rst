@@ -89,7 +89,10 @@ Reading the port safely
 ``SerialWorker`` issues one read at a time and waits for it to complete, so the parser state is
 only touched by one thread. The parser rejects zero-length packets, stops at the announced
 size, and any exception in the worker is logged and resets the parser instead of leaving it
-stuck. A completed packet is handed to the main thread through ``NewPacketBuffer`` guarded by
+stuck. Before capture or publication, checksum-valid controls must be exactly 25 bytes and handshakes
+exactly 4 bytes. Wrong-size packets are discarded without changing buttons, controls, pending valid packets
+or handshake state; fixed-size decoding must never reuse bytes left in the shared buffer. A completed,
+validated packet is handed to the main thread through ``NewPacketBuffer`` guarded by
 ``SerialMutex``. Before replacing that latest-value buffer, the reader captures STAGE rising edges and
 both SAS/RCS transitions in ``ButtonEvents`` with their receive timestamps. The first packet after a
 reset establishes the baseline; pending presses are cleared on reconnect or flight initialization.
