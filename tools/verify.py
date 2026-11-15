@@ -443,7 +443,7 @@ def check_hmi_render(ctx):
 def check_hmi_context(ctx):
     """Keep the optional read-only scene channel consistent across game, HMI and simulator."""
     source = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "HmiContext.cs"))
-    client = read(os.path.join(HMI_DIR, "src", "scenes.cpp")) + read(os.path.join(HMI_DIR, "src", "scenes.hpp"))
+    client = read(os.path.join(HMI_DIR, "src", "scenes.cpp")) + read(os.path.join(HMI_DIR, "include", "scenes.hpp"))
     server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
     ok = all("KSPHMI/1" in s and "50002" in s for s in (source, client, server))
     for facility in ("AstronautComplex", "MissionControl", "RnDComplex", "AdministrationFacility"):
@@ -464,6 +464,18 @@ def check_hmi_context(ctx):
            "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
 
 
+def check_hmi_cpp_layout(ctx):
+    """hmi-cpp keeps .cpp sources in src/ and .hpp/.h headers in include/, nothing else in either."""
+    bad = []
+    for sub, allowed in (("src", (".cpp",)), ("include", (".hpp", ".h"))):
+        folder = os.path.join(HMI_DIR, sub)
+        for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ["(missing)"]:
+            if not name.endswith(allowed):
+                bad.append("%s/%s" % (sub, name))
+    report("FAIL" if bad else "PASS", "hmi: source layout",
+           ", ".join(bad) if bad else "src/ only .cpp, include/ only headers")
+
+
 def check_hmi_cpp(ctx):
     """The HMI (hmi-cpp/) must have a view for every scene the plugin and the simulator report, read the resources
     the simulator serves, and keep its LF rule (it is built on the Pi)."""
@@ -479,7 +491,7 @@ def check_hmi_cpp(ctx):
     for scene in set(re.findall(r'(?:facility|scene) = "(\w+)"', plugin)) - {"spacecenter", "trackstation"}:
         if scene not in views:
             problems.append("plugin scene %s has no view" % scene)
-    model = read(os.path.join(src, "model.hpp"))
+    model = read(os.path.join(HMI_DIR, "include", "model.hpp"))
     names = re.findall(r'"(\w+)"', model.split("RESOURCE_NAMES", 1)[1].split(";", 1)[0])
     served = re.search(r"fields = \{(.*?)\}\r?\n", read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py")), re.S)
     if not served or names != re.findall(r"'(\w+)': \(", served.group(1)):
@@ -635,7 +647,7 @@ def check_krpc(ctx):
     if not os.path.isdir(mod):
         report("FAIL", "kRPC: installed", "no GameData/kRPC: the Pi HMI gets no game data (docs/hmi.rst)")
         return
-    # The HMI's own client speaks the same protocol as this krpc version (hmi-cpp/src/krpc.hpp); kspsim uses it too.
+    # The HMI's own client speaks the same protocol as this krpc version (hmi-cpp/include/krpc.hpp); kspsim uses it too.
     want = re.search(r"^krpc==([\d.]+)", read(os.path.join(ROOT, "tools", "requirements.txt")), re.M)
     try:
         v = json.loads(read(os.path.join(mod, "kRPC.version")))["VERSION"]
@@ -723,7 +735,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
 
 
 def main():
