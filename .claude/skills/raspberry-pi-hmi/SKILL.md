@@ -34,9 +34,18 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
 - Render screens on the PC to review them: `SDL_VIDEODRIVER=dummy python -m ksphmi --demo --size 2520x1680
   --screenshot out.png` (from hmi-pi/, with build/hmi-venv), then look at the PNG.
-- Static instrument art (dial faces: bezel, track, zones, ticks) is drawn once per size at 2x and
-  `smoothscale`d down into a cached opaque Surface: antialiased edges for free. Per frame draw only the dynamic
-  polygon (`draw.polygon` + `gfxdraw.aapolygon`) and text; the resource dials cost ~0.5 ms/frame on the PC.
+- Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per
+  size, state and resource at 2x and `smoothscale`d down into a cached opaque Surface: antialiased edges for
+  free. Per frame draw only the dynamic polygon (`draw.polygon` + `gfxdraw.aapolygon`), a cached SRCALPHA hub
+  sprite and text; the six chrome dials cost ~0.35 ms/frame on the PC (the old flat dials ~0.6-0.8 ms).
+- Chrome without images: a disc shaded row by row through grey stops (bright top, dark band just below the
+  middle, lighter bottom), a smaller reversed-gradient disc as the inner bevel, a dark seat ring and a short
+  white arc highlight top-left. Face shading: concentric circles from a grey rim to white at ~45% inwards.
+  Car-gauge needles pivot on a hub below the dial centre: keep the needle tail shorter than the hub radius or
+  it pokes into the window underneath.
+- hmi-cpp `Canvas::polygon` fills convex shapes only (pygame's `draw.polygon` takes concave ones): split
+  concave icons such as the lightning bolt into triangles. Its render tests and screenshots need the
+  `build/hmi-cpp-deps` libraries on `LD_LIBRARY_PATH` and `KSPHMI_FONT` (see `hmi_cpp_env` in `ci`).
 - Several captions in a row (dial labels): fit one common font size to the narrowest cell, computed when the
   layout changes; a per-frame fit makes the text size jitter.
 - Format numbers through `ksphmi/fmt.py` (no `-0 m`); a value that can be renamed in game (vessel name) must be a

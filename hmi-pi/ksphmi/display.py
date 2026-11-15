@@ -33,6 +33,8 @@ WARN = (255, 186, 72)
 BAD = (255, 92, 92)
 BODY = (46, 96, 150)
 ATMOSPHERE = (24, 48, 78)
+NEEDLE = (222, 36, 28)   # resource dial needle
+DIGITS = (236, 236, 226)  # light digits of the dial windows
 
 
 FBIOBLANK = 0x4611        # linux/fb.h
@@ -307,66 +309,106 @@ class Display:
             self._gauge_layout = (key, (radius, cells, math.floor(label_units * 20) / 20))
         return self._gauge_layout[1]
 
-    def gauge_face(self, radius: int, live: bool) -> pygame.Surface:
-        """The static part of a dial (bezel, track, warning zones, ticks), drawn once per size at twice the
-        resolution and smoothed down, so the edges are antialiased without per-frame cost."""
-        key = (radius, live)
+    def gauge_face(self, radius: int, state: str, name: str) -> pygame.Surface:
+        """The static part of a dial (chrome bezel, face, scale, E/F, icon, window), drawn once per size, state
+        ('live', 'unknown' or 'absent') and resource at twice the resolution and smoothed down, so the edges are
+        antialiased without per-frame cost."""
+        key = (radius, state, name)
         face = self._gauge_faces.get(key)
         if face is not None:
             return face
-        if len(self._gauge_faces) > 16:
+        if len(self._gauge_faces) > 40:
             self._gauge_faces.clear()
         side = 2 * radius + 4
         big = pygame.Surface((2 * side, 2 * side))
         big.fill(PANEL)
         c, r = side, 2 * radius
-        pygame.draw.circle(big, (30, 40, 54) if live else (25, 33, 45), (c, c), r)
-        pygame.draw.circle(big, (11, 16, 23), (c, c), round(.93 * r))
-        pygame.draw.polygon(big, (27, 36, 50), gauges.sector(c, c, .86 * r, .70 * r, 0, 1, 2))
+        live = state == 'live'
+        # chrome: an outer ring lit from above, a reversed bevel inside it, a dark seat, then the face
+        _gradient_disc(big, c, c, r, ((0, 250), (.38, 196), (.52, 92), (.70, 128), (1, 205)), (4, 6, 10))
+        pygame.draw.circle(big, (40, 44, 50), (c, c), r, max(1, round(.012 * r)))
+        _gradient_disc(big, c, c, round(.88 * r), ((0, 70), (.5, 150), (1, 240)), (4, 6, 10))
+        pygame.draw.circle(big, (26, 28, 32), (c, c), round(.83 * r))
+        pygame.draw.arc(big, (255, 255, 255), (c - .95 * r, c - .95 * r, 1.9 * r, 1.9 * r),
+                        math.radians(100), math.radians(160), max(2, round(.03 * r)))
+        rim, centre = {'live': ((176, 178, 182), (250, 250, 247)), 'unknown': ((116, 120, 126), (164, 168, 174)),
+                       'absent': ((58, 62, 68), (88, 92, 98))}[state]
+        fr = round(gauges.FACE * r)
+        for i in range(fr, 0, -max(1, fr // 48)):
+            t = min(1.0, max(0.0, (fr - i) / (.45 * fr)))  # darker only in the outer part of the face
+            pygame.draw.circle(big, tuple(round(a + (b - a) * t ** .7) for a, b in zip(rim, centre)), (c, c), i)
+        ink = (18, 18, 20) if live else (70, 74, 80) if state == 'unknown' else (48, 52, 58)
+        px, py = gauges.pivot(c, c, r)
         if live:
-            for f0, f1, color in ((0, gauges.BAD_BELOW, BAD), (gauges.BAD_BELOW, gauges.WARN_BELOW, WARN)):
-                dim = tuple(round(.55 * a + .45 * b) for a, b in zip(color, (11, 16, 23)))
-                pygame.draw.polygon(big, dim, gauges.sector(c, c, .91 * r, .87 * r, f0, f1, 2))
-        for step in range(21):
-            f = step / 20
-            major, ten = step % 10 == 0, step % 2 == 0
-            inner = .55 if major else .60 if ten else .64
-            color = (VALUE if major else LABEL if ten else MUTED) if live else GRID
-            pygame.draw.line(big, color, gauges.point(c, c, inner * r, f), gauges.point(c, c, .68 * r, f),
-                             max(2, round((.045 if major else .03) * r)))
+            for f0, f1, color in ((0, gauges.BAD_BELOW, (214, 30, 30)), (gauges.BAD_BELOW, gauges.WARN_BELOW,
+                                                                         (236, 150, 20))):
+                pygame.draw.polygon(big, color, gauges.sector(px, py, gauges.ZONE[1] * r, gauges.ZONE[0] * r,
+                                                              f0, f1, 1))
+        for step in range(9):
+            f = step / 8
+            length = .22 if step == 4 else .16 if step % 2 == 0 else .09
+            width = .050 if step % 2 == 0 else .026
+            a = gauges.gauge_angle(f)
+            dx, dy, nx, ny = math.cos(a), -math.sin(a), math.sin(a), math.cos(a)
+            outer, inner, half = gauges.SCALE * r, (gauges.SCALE - length) * r, width * r / 2
+            pygame.draw.polygon(big, ink, [(px + dx * outer + nx * half, py + dy * outer + ny * half),
+                                           (px + dx * outer - nx * half, py + dy * outer - ny * half),
+                                           (px + dx * inner - nx * half, py + dy * inner - ny * half),
+                                           (px + dx * inner + nx * half, py + dy * inner + ny * half)])
+        letters = pygame.font.Font(None, max(8, round(.40 * r)))
+        for s, f in (('E', 0), ('F', 1)):
+            glyph = letters.render(s, True, ink)
+            big.blit(glyph, glyph.get_rect(center=gauges.point(px, py, gauges.LETTERS * r, f)))
+        _gauge_icon(big, name, c, c - .13 * r, .34 * r, ink if live else rim)
+        top, bottom = gauges.WINDOW
+        window = pygame.Rect(0, 0, round(gauges.WINDOW_W * r), round((bottom - top) * r))
+        window.midtop = (c, round(c + top * r))
+        pygame.draw.rect(big, (120, 124, 130), window.inflate(round(.05 * r), round(.05 * r)),
+                         border_radius=round(.06 * r))
+        pygame.draw.rect(big, (8, 8, 10), window, border_radius=round(.04 * r))
         face = self._gauge_faces[key] = pygame.transform.smoothscale(big, (side, side))
         return face
+
+    def gauge_hub(self, radius: int) -> pygame.Surface:
+        """The charcoal needle hub with a small highlight, drawn over the needle each frame (cached per size)."""
+        key = (radius, 'hub')
+        hub = self._gauge_faces.get(key)
+        if hub is None:
+            side = max(4, round(.26 * radius))
+            big = pygame.Surface((2 * side, 2 * side), pygame.SRCALPHA)
+            c = side
+            pygame.draw.circle(big, (20, 21, 24), (c, c), c)
+            pygame.draw.circle(big, (58, 60, 66), (c, c), round(.78 * c))
+            pygame.draw.circle(big, (92, 95, 102), (round(c - .22 * c), round(c - .22 * c)), round(.22 * c))
+            hub = self._gauge_faces[key] = pygame.transform.smoothscale(big, (side, side))
+        return hub
 
     def gauge(self, resource, label: str, cx: float, cy: float, radius: float, room: float,
               label_units: float) -> None:
         u = self.u
         fraction = resource.fraction
         r = max(4, int(radius))
-        face = self.gauge_face(r, fraction is not None)
+        state = 'live' if fraction is not None else 'absent' if resource.capacity == 0 else 'unknown'
+        face = self.gauge_face(r, state, resource.name)
         self.screen.blit(face, face.get_rect(center=(int(cx), int(cy))))
+        px, py = gauges.pivot(int(cx), int(cy), r)
         if fraction is not None:
             color = BAD if fraction <= gauges.BAD_BELOW else WARN if fraction <= gauges.WARN_BELOW else GOOD
-            if fraction > 0:
-                pts = gauges.sector(cx, cy, .86 * r, .70 * r, 0, fraction)
-                pygame.draw.polygon(self.screen, color, pts)
-                pygame.gfxdraw.aapolygon(self.screen, [(round(x), round(y)) for x, y in pts], color)
-            # pointer across the track at the current level
-            a = gauges.gauge_angle(fraction)
-            dx, dy = math.cos(a), -math.sin(a)
-            nx, ny = -dy * .035 * r, dx * .035 * r
-            p0, p1 = (cx + dx * .62 * r, cy + dy * .62 * r), (cx + dx * .93 * r, cy + dy * .93 * r)
-            needle = [(p0[0] + nx, p0[1] + ny), (p1[0] + nx, p1[1] + ny), (p1[0] - nx, p1[1] - ny),
-                      (p0[0] - nx, p0[1] - ny)]
-            pygame.draw.polygon(self.screen, VALUE, needle)
-            pygame.gfxdraw.aapolygon(self.screen, [(round(x), round(y)) for x, y in needle], VALUE)
-            centre = "%d%%" % round(100 * fraction)
+            pts = gauges.needle(px, py, r, fraction)
+            pygame.draw.polygon(self.screen, NEEDLE, pts)
+            pygame.gfxdraw.aapolygon(self.screen, [(round(x), round(y)) for x, y in pts], NEEDLE)
+            window = "%d%%" % round(100 * fraction)
+            digits = DIGITS if color is GOOD else color
             amount = "%s / %s" % (_amount(resource.amount), _amount(resource.capacity))
             reference = "%s / %s" % (_amount(resource.capacity), _amount(resource.capacity))
         else:
-            color = MUTED
-            centre = 'N/A' if resource.capacity == 0 else '--'
-            amount = reference = 'NOT INSTALLED' if resource.capacity == 0 else '--'
-        self.text(centre, .44 * r / u, color if fraction is not None else MUTED, (cx, cy), 'center')
+            color = digits = MUTED
+            window = 'N/A' if state == 'absent' else '--'
+            amount = reference = 'NOT INSTALLED' if state == 'absent' else '--'
+        hub = self.gauge_hub(r)
+        self.screen.blit(hub, hub.get_rect(center=(round(px), round(py))))
+        top, bottom = gauges.WINDOW
+        self.text(window, .34 * r / u, digits, (cx, cy + (top + bottom) / 2 * r), 'center')
         top = cy + gauges.BELOW_CENTRE * r
         self.text(label, label_units, LABEL if fraction is not None else MUTED, (cx, top), 'midtop')
         width = self.font(self.GAUGE_AMOUNT).size(reference)[0]
@@ -529,6 +571,60 @@ class Display:
         position = point(state.position)
         pygame.draw.circle(self.screen, VALUE, position, 1.3 * u)
         pygame.draw.circle(self.screen, BG, position, .6 * u)
+
+
+def _gradient_disc(surf: pygame.Surface, cx: int, cy: int, radius: int, stops, tint) -> None:
+    """A disc shaded top to bottom through grey ``stops`` ((position 0..1, level 0..255), ...), with a slight
+    cool ``tint`` subtracted from red and green so it reads as polished steel. Drawn once into cached faces."""
+    for dy in range(-radius, radius + 1):
+        t = (dy + radius) / (2 * radius)
+        for (t0, v0), (t1, v1) in zip(stops, stops[1:]):
+            if t <= t1:
+                v = v0 + (v1 - v0) * (t - t0) / max(t1 - t0, 1e-9)
+                break
+        half = math.sqrt(max(radius * radius - dy * dy, 0))
+        color = tuple(max(0, min(255, round(v - k))) for k in tint)
+        pygame.draw.line(surf, color, (cx - half, cy + dy), (cx + half, cy + dy))
+
+
+def _gauge_icon(surf: pygame.Surface, name: str, x: float, y: float, s: float, color) -> None:
+    """A small symbol for each resource, drawn with primitives into a cached face; ``s`` is its height."""
+    def poly(points):
+        pygame.draw.polygon(surf, color, [(x + px * s, y + py * s) for px, py in points])
+
+    def label(text, size, at=(0, 0), ink=color):
+        glyph = pygame.font.Font(None, max(8, round(size * s))).render(text, True, ink)
+        surf.blit(glyph, glyph.get_rect(center=(x + at[0] * s, y + at[1] * s)))
+
+    face = surf.get_at((round(x), round(y)))[:3]
+    line = max(2, round(.09 * s))
+    if name == 'ElectricCharge':  # lightning bolt
+        poly([(.10, -.52), (-.30, .06), (-.02, .06), (-.14, .52), (.30, -.10), (.02, -.10), (.16, -.52)])
+    elif name == 'LiquidFuel':  # fuel pump with its hose and nozzle
+        pygame.draw.rect(surf, color, (x - .36 * s, y - .46 * s, .46 * s, .92 * s), border_radius=round(.06 * s))
+        pygame.draw.rect(surf, face, (x - .27 * s, y - .36 * s, .28 * s, .24 * s))
+        pygame.draw.lines(surf, color, False, [(x + .08 * s, y - .30 * s), (x + .24 * s, y - .18 * s),
+                                               (x + .24 * s, y + .26 * s), (x + .34 * s, y + .26 * s),
+                                               (x + .34 * s, y - .28 * s)], line)
+        poly([(.28, -.32), (.42, -.40), (.42, -.24)])
+    elif name == 'Oxidizer':  # droplet marked O2
+        pygame.draw.circle(surf, color, (x, y + .14 * s), .34 * s)
+        poly([(0, -.52), (-.30, -.02), (.30, -.02)])
+        label('O', .52, (-.06, .14), face)
+        label('2', .30, (.15, .26), face)
+    elif name == 'MonoPropellant':  # spherical RCS tank marked MP
+        pygame.draw.rect(surf, color, (x - .50 * s, y - .38 * s, s, .76 * s), border_radius=round(.36 * s))
+        label('MP', .56, (0, .02), face)
+    elif name == 'SolidFuel':  # solid booster: nose cone, casing, fins and nozzle
+        poly([(0, -.56), (-.15, -.30), (.15, -.30)])
+        pygame.draw.rect(surf, color, (x - .15 * s, y - .30 * s, .30 * s, .66 * s))
+        poly([(-.15, .10), (-.30, .38), (-.15, .34)])
+        poly([(.15, .10), (.30, .38), (.15, .34)])
+        poly([(-.08, .36), (.08, .36), (.13, .52), (-.13, .52)])
+        pygame.draw.line(surf, face, (x - .15 * s, y - .08 * s), (x + .15 * s, y - .08 * s), line)
+    elif name == 'XenonGas':  # element symbol in a ring
+        pygame.draw.circle(surf, color, (x, y), .44 * s, line)
+        label('Xe', .56, (0, .02))
 
 
 def _amount(value: float) -> str:

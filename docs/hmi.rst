@@ -31,12 +31,17 @@ How it works
   layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
 
 The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
-leaving resource gauges and a read-only staging queue below them. Each resource is a 240-degree dial (ticks
-every 10%, red zone below 10%, amber below 25%, a fill arc and pointer in the GOOD/WARN/BAD colour) with the
-percentage in the centre and the vessel-wide amount/capacity under its label, for ElectricCharge, LiquidFuel,
-Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when installed. Zero capacity means not installed
-(dimmed dial, ``N/A``), an empty installed tank shows 0%, and unavailable telemetry shows a dimmed dial with
-``--``. The static dial faces are drawn once per size (``ksphmi/gauges.py`` holds the pure geometry). Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
+leaving resource gauges and a read-only staging queue below them. Each resource is a classic car fuel gauge:
+a chrome bezel around a white face, a 110-degree arc across the upper half from E (left) to F (right) with
+major ticks at E, 1/4, 1/2 (longest), 3/4 and F, a red mark below 10% and an amber mark below 25%, a red
+needle on a charcoal hub in the lower centre, a dark-grey resource symbol (lightning bolt, fuel pump, O2
+droplet, MP tank, solid booster, Xe), and an odometer-style window with the percentage (light digits, amber or
+red when low). The resource label and the vessel-wide amount/capacity go under the dial, for ElectricCharge,
+LiquidFuel, Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when installed. Zero capacity means not
+installed (dark-grey face, no needle, ``N/A``), an empty installed tank shows the needle at E and 0%, and
+unavailable telemetry shows a light-grey face, no needle and ``--``. The static faces are drawn once per size,
+state and resource (``ksphmi/gauges.py`` holds the pure geometry); each frame draws only the needle, the hub,
+the window digits and the labels. Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
 activation stages with part counts and KSP's stage delta-v. Resource and stage streams refresh at 2 Hz, and
 their collections are rebuilt when the vessel's parts or staging queue changes (including docking/decoupling).
 These displays do not activate stages or transfer resources.

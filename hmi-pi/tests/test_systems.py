@@ -61,23 +61,42 @@ class ResourceTest(unittest.TestCase):
 
 
 class GaugeGeometryTest(unittest.TestCase):
-    def test_angle_mapping_sweeps_clockwise_through_the_top(self):
+    def test_angle_mapping_sweeps_the_fuel_gauge_arc_from_e_to_f(self):
         import math
-        from ksphmi.gauges import gauge_angle, point
-        self.assertAlmostEqual(math.degrees(gauge_angle(0)), 210)
+        from ksphmi.gauges import SWEEP, gauge_angle, pivot, point
+        self.assertTrue(100 <= SWEEP <= 120)
+        self.assertAlmostEqual(math.degrees(gauge_angle(0)), 90 + SWEEP / 2)
         self.assertAlmostEqual(math.degrees(gauge_angle(.5)), 90)
-        self.assertAlmostEqual(math.degrees(gauge_angle(1)), -30)
+        self.assertAlmostEqual(math.degrees(gauge_angle(1)), 90 - SWEEP / 2)
         self.assertEqual(gauge_angle(-1), gauge_angle(0))
         self.assertEqual(gauge_angle(7), gauge_angle(1))
-        x, y = point(100, 100, 10, .5)  # screen y grows downwards: the middle of the scale is on top
-        self.assertAlmostEqual(x, 100)
-        self.assertAlmostEqual(y, 90)
+        px, py = pivot(100, 100, 10)
+        self.assertAlmostEqual(px, 100)
+        self.assertGreater(py, 100)  # the hub is in the lower half of the face
+        x, y = point(px, py, 5, .5)  # screen y grows downwards: the middle of the scale is straight up
+        self.assertAlmostEqual(x, px)
+        self.assertAlmostEqual(y, py - 5)
         x0, y0 = point(0, 0, 1, 0)
         x1, y1 = point(0, 0, 1, 1)
-        self.assertLess(x0, 0)
-        self.assertGreater(x1, 0)
+        self.assertLess(x0, 0)  # E on the left
+        self.assertGreater(x1, 0)  # F on the right
         self.assertAlmostEqual(y0, y1)
-        self.assertGreater(y0, 0)  # both ends below the centre: the gap is at the bottom
+        self.assertLess(y0, 0)  # both ends above the hub: the arc is across the upper half
+
+    def test_scale_needle_and_window_stay_on_the_face(self):
+        import math
+        from ksphmi import gauges
+        px, py = gauges.pivot(0, 0, 1)
+        for step in range(41):
+            f = step / 40
+            for radius in (gauges.ZONE[1], gauges.SCALE, gauges.LETTERS):
+                x, y = gauges.point(px, py, radius, f)
+                self.assertLess(math.hypot(x, y), gauges.FACE, (f, radius))
+            for x, y in gauges.needle(px, py, 1, f):
+                self.assertLess(math.hypot(x, y), gauges.FACE, f)
+        top, bottom = gauges.WINDOW
+        self.assertLess(math.hypot(gauges.WINDOW_W / 2, bottom), gauges.FACE)
+        self.assertGreater(top, gauges.PIVOT)  # the window is under the hub
 
     def test_sector_closes_between_the_two_radii(self):
         import math
