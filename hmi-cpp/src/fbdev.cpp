@@ -1,5 +1,6 @@
 #include "fbdev.hpp"
 
+#if defined(__linux__)
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <sys/ioctl.h>
@@ -109,3 +110,19 @@ int Framebuffer::write(const SDL_Surface* frame) {
 }
 
 }  // namespace ksphmi
+#else
+#include <stdexcept>
+
+namespace ksphmi {
+Framebuffer::Framebuffer(const std::string& device) : device_(device) {
+    throw std::runtime_error("fbdev output requires Linux; use --windowed or --offscreen on this platform");
+}
+Framebuffer::~Framebuffer() = default;
+int Framebuffer::write(const SDL_Surface*) {
+    throw std::runtime_error("fbdev output requires Linux");
+}
+void Framebuffer::activate() {
+    throw std::runtime_error("fbdev output requires Linux");
+}
+}  // namespace ksphmi
+#endif

@@ -423,7 +423,9 @@ public:
                 std::stable_sort(selected.begin(), selected.end(),
                                  [](const auto& a, const auto& b) { return a.first > b.first; });
                 int count = 0;
-                for (const auto& [number, stage] : selected) {
+                for (const auto& entry : selected) {
+                    const int number = entry.first;
+                    const uint64_t stage = entry.second;
                     if (current && number > *current) continue;
                     if (count++ == 4) break;
                     stages_.add(std::to_string(number) + ".parts", sc("Stage_get_Parts", {obj(stage)}), 2);

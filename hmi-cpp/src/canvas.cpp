@@ -55,7 +55,8 @@ std::string find_font() {
     if (const char* env = std::getenv("KSPHMI_FONT"))
         if (*env) return env;
     for (const char* p : {"/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-                          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"})
+                          "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                          "/System/Library/Fonts/Supplemental/Arial Bold.ttf"})
         if (file_exists(p)) return p;
     return "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf";
 }

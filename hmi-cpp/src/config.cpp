@@ -1,6 +1,9 @@
 #include "config.hpp"
 
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 #include <cstdlib>
 #include <fstream>
@@ -170,7 +173,12 @@ std::string find_app_dir() {
     if (const char* env = std::getenv("KSPHMI_APP_DIR")) return env;
     std::vector<std::string> candidates;
     char exe[4096];
+#if defined(__APPLE__)
+    uint32_t size = sizeof exe;
+    ssize_t n = _NSGetExecutablePath(exe, &size) == 0 ? static_cast<ssize_t>(std::char_traits<char>::length(exe)) : -1;
+#else
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+#endif
     if (n > 0) {
         exe[n] = 0;
         std::string dir = dirname(exe);

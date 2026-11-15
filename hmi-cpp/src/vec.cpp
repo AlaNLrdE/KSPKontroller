@@ -1,5 +1,6 @@
 #include "vec.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace ksphmi {

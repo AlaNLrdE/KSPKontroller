@@ -72,7 +72,8 @@ Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 }  // namespace
 
 TEST(compact_metrics_leave_space_for_resources_and_staging) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         Display& d = *s.display;
         std::vector<Rect> tiles, active;
@@ -105,7 +106,8 @@ TEST(compact_metrics_leave_space_for_resources_and_staging) {
 }
 
 TEST(resource_dials_and_their_text_stay_inside_the_panel) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         Display& d = *s.display;
         double u = s.canvas->u;
@@ -143,7 +145,8 @@ TEST(resource_dials_and_their_text_stay_inside_the_panel) {
 }
 
 TEST(escape_orbit_and_far_vessel_never_draw_outside_panel) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         Rect panel = orbit_panel(s);
         Snapshot snap;
@@ -171,7 +174,8 @@ TEST(escape_orbit_and_far_vessel_never_draw_outside_panel) {
 TEST(inertial_marker_stays_put_and_inertial_escape_stays_clipped) {
     double mu = 3.5316e12, radius = 700000, speed = std::sqrt(mu / radius);
     Axes axes = view_axes({radius, 0, 0}, {0, 0, speed});
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         Rect panel = orbit_panel(s);
         std::vector<Pt> positions;
@@ -203,7 +207,8 @@ TEST(inertial_marker_stays_put_and_inertial_escape_stays_clipped) {
 }
 
 TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         double u = s.canvas->u;
         Rect panel = Rect::f(w * .44 + 1.6 * u, 36.6 * u, w * .56 - 4.1 * u, 60.9 * u);
@@ -243,7 +248,8 @@ TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
 }
 
 TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         double u = s.canvas->u;
         Rect panel = orbit_panel(s);
@@ -280,7 +286,8 @@ int maneuver_pixels(const Screen& s, const Rect& r) {
 }  // namespace
 
 TEST(maneuver_orbit_is_dashed_cached_and_clipped) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         double u = s.canvas->u;
         Rect panel = orbit_panel(s);
@@ -337,7 +344,8 @@ TEST(maneuver_orbit_is_dashed_cached_and_clipped) {
 }
 
 TEST(orbit_fills_the_panel_and_navball_stays_dominant) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         double u = s.canvas->u;
         Rect panel = orbit_panel(s);
@@ -363,7 +371,8 @@ TEST(orbit_fills_the_panel_and_navball_stays_dominant) {
 }
 
 TEST(all_views_render_within_screen) {
-    for (auto [w, h] : {std::pair<int, int>{1260, 840}, {1920, 1080}}) {
+    for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}}) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         s.canvas->on_text = [&](const std::string& label, const Rect& r) {
             if (!Rect(0, 0, w, h).contains(r)) check::fail(__FILE__, __LINE__, "text off screen: " + label);
@@ -433,7 +442,8 @@ TEST(segment_text_aligns_right_with_decimal_points_and_separators) {
 }
 
 TEST(apollo_skin_keeps_the_layout_zones_and_text_inside_its_tiles) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h, "apollo");
         Display& d = *s.display;
         CHECK_EQ(d.skin(), std::string("apollo"));
@@ -520,7 +530,8 @@ TEST(skin_switches_at_runtime_from_the_context_and_keeps_its_cache) {
 }
 
 TEST(apollo_views_render_within_screen) {
-    for (auto [w, h] : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}}) {
+    for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}}) {
+        const int w = size.first, h = size.second;
         Screen s(w, h, "apollo");
         s.canvas->on_text = [&](const std::string& label, const Rect& r) {
             if (!Rect(0, 0, w, h).contains(r)) check::fail(__FILE__, __LINE__, "text off screen: " + label);
@@ -582,7 +593,8 @@ TEST(apollo_review_screenshots_on_request) {
 }
 
 TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
-    for (auto [w, h] : SIZES) {
+    for (const auto& size : SIZES) {
+        const int w = size.first, h = size.second;
         Screen s(w, h);
         s.fill(FILL);
         std::map<std::string, Rect> texts;
@@ -619,7 +631,8 @@ int differing(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
 TEST(navball_only_frames_over_the_layer_cache_match_a_full_redraw) {
     const Quat before = attitude(5, 30, 0), after = attitude(25, 75, 20);
     for (const char* skin : {"classic", "apollo"})
-        for (auto [w, h] : {std::pair<int, int>{1260, 840}, {2520, 1680}}) {
+        for (const auto& size : {std::pair<int, int>{1260, 840}, {2520, 1680}}) {
+            const int w = size.first, h = size.second;
             Snapshot snap = demo(600);
             CHECK(snap.nav.has_value());
             // Reference: the plain full redraw at the new attitude, without the cache.
