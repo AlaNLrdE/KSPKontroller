@@ -80,6 +80,9 @@ def main(argv=None) -> int:
     ap.add_argument("--refresh", type=float, default=0.2, help="seconds between VesselData packets (plugin default)")
     ap.add_argument("--scenario", default="orbit", choices=physics.SCENARIOS)
     ap.add_argument("--warp", type=float, default=1.0)
+    ap.add_argument("--node", metavar="DV[,SECONDS]",
+                    help="start with a prograde maneuver node of DV m/s, SECONDS (default 300) ahead: the HMI's "
+                         "dashed orbit (the window's Maneuver node tab changes or deletes it)")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
@@ -90,6 +93,9 @@ def main(argv=None) -> int:
 
     sim = Simulator(args.scenario, args.warp)
     sim.board_throttle = not args.no_board_throttle
+    if args.node:
+        dv, _, seconds = args.node.partition(",")
+        sim.set_node(float(dv), float(seconds or 300))
     server = None if args.no_krpc else KrpcServer(sim, args.address, args.rpc_port, args.stream_port)
     board = None if args.no_board else BoardLink(sim, args.port, args.refresh)
     if server:

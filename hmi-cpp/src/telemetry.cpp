@@ -289,6 +289,102 @@ private:
     double retry_frame_at_ = 0;
 };
 
+// ------------------------------------------------------------------------------------------- maneuver orbit
+/// The orbit after the first maneuver node (Node.orbit) as state vectors at the node's UT, read with
+/// Orbit.position_at / velocity_at in the body's non-rotating frame, the frame of the current orbit. Only the node
+/// identity, UT and delta-v components are streamed (2 Hz); the post-burn state is fetched again only when they
+/// change, or every few seconds (KSP re-plans the patch from the current orbit, e.g. during the burn).
+/// Optional: any server error means no dashed orbit, retried after a second; the session never ends because of it.
+class ManeuverStreams {
+public:
+    ManeuverStreams(Client& c, uint64_t vessel, uint64_t body, uint64_t frame)
+        : c_(c), body_(body), frame_(frame), common_(c), node_(c) {
+        uint64_t control = object(c, sc("Vessel_get_Control", {obj(vessel)}));
+        common_.add("nodes", sc("Control_get_Nodes", {obj(control)}), 2);
+        optional_step([&] { soi_ = get_double(c, sc("CelestialBody_get_SphereOfInfluence", {obj(body)})); },
+                      [&] { soi_ = 0; });  // unknown: draw without the sphere of influence limit
+    }
+
+    /// Forget the node after a failure; streams are re-created after `retry` seconds.
+    void invalidate(double retry = 1.0) {
+        node_.clear();
+        node_id_ = 0;
+        key_valid_ = false;
+        result_.reset();
+        retry_at_ = monotonic() + retry;
+    }
+
+    std::optional<ManeuverOrbit> sample(double mu) {
+        double now = monotonic();
+        if (now < retry_at_) return std::nullopt;
+        auto nodes = pb::dec_items(c_.stream(common_.id("nodes")).data);
+        uint64_t node = nodes.empty() ? 0 : pb::dec_object(nodes.front());
+        if (node != node_id_) {
+            node_.clear();
+            node_id_ = node;
+            key_valid_ = false;
+            result_.reset();
+            if (node)
+                for (const char* name : {"UT", "Prograde", "Normal", "Radial"})
+                    node_.add(name, sc(std::string("Node_get_") + name, {obj(node)}), 2);
+        }
+        if (!node) return std::nullopt;
+        std::array<double, 4> key{};
+        int i = 0;
+        for (const char* name : {"UT", "Prograde", "Normal", "Radial"})
+            key[i++] = pb::dec_double(c_.stream(node_.id(name)).data);
+        if (!key_valid_ || key != key_ || now >= refresh_at_) {
+            std::optional<ManeuverOrbit> fresh = compute(node, key[0], mu);  // throws: caller invalidates
+            // Bit-identical values keep the display's dashed-line cache.
+            if (!(fresh && result_ && fresh->position == result_->position && fresh->velocity == result_->velocity &&
+                  fresh->ut == result_->ut))
+                result_ = fresh;
+            key_ = key;
+            key_valid_ = true;
+            refresh_at_ = now + 2.0;
+        }
+        return result_;
+    }
+
+private:
+    std::optional<ManeuverOrbit> compute(uint64_t node, double ut, double mu) {
+        uint64_t orbit = object(c_, sc("Node_get_Orbit", {obj(node)}));
+        if (!orbit) return std::nullopt;
+        // A node placed after a sphere of influence change belongs to another body's frame: not drawn.
+        if (object(c_, sc("Orbit_get_Body", {obj(orbit)})) != body_) return std::nullopt;
+        std::vector<std::string> args{obj(orbit), pb::enc_double(ut), obj(frame_)};
+        Vec3 position = vec3(c_.invoke(sc("Orbit_PositionAt", args)).data);
+        Vec3 velocity = vec3(c_.invoke(sc("Orbit_VelocityAt", args)).data);
+        if (!position.finite() || !velocity.finite()) return std::nullopt;
+        ManeuverOrbit m{position, velocity, ut, soi_};
+        if (!checked_) {  // once per vessel session: does the state agree with kRPC's own elements?
+            checked_ = true;
+            optional_step(
+                [&] {
+                    double periapsis = get_double(c_, sc("Orbit_get_Periapsis", {obj(orbit)}));
+                    auto conic = OrbitState{position, velocity, mu, {}}.conic();
+                    if (conic && std::fabs(conic->periapsis() - periapsis) > .01 * periapsis + 1000)
+                        log::warning(LOG, fmt::str("maneuver orbit: periapsis %.0f m from state vectors, %.0f m from "
+                                                   "kRPC (frame mismatch?)", conic->periapsis(), periapsis));
+                    else
+                        log::info(LOG, fmt::str("maneuver orbit: periapsis %.0f m agrees with kRPC", periapsis));
+                },
+                [] {});
+        }
+        return m;
+    }
+
+    Client& c_;
+    uint64_t body_, frame_;
+    double soi_ = 0;
+    Group common_, node_;
+    uint64_t node_id_ = 0;
+    std::array<double, 4> key_{};
+    bool key_valid_ = false, checked_ = false;
+    double refresh_at_ = 0, retry_at_ = 0;
+    std::optional<ManeuverOrbit> result_;
+};
+
 // ------------------------------------------------------------------------------------------- systems
 /// Resources and staging at 2 Hz, independent of attitude streams; rebuilt on stage / parts changes.
 class SystemsStreams {
@@ -541,10 +637,16 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     // only and never interrupts the orbital telemetry.
     std::unique_ptr<NavigationStreams> nav;
     std::unique_ptr<SystemsStreams> systems;
+    std::unique_ptr<ManeuverStreams> maneuver;
     try {
         nav = std::make_unique<NavigationStreams>(c, vessel, rate);
     } catch (const RpcError& e) {
         log::warning(LOG, "navball unavailable: " + short_error(e));
+    }
+    try {
+        maneuver = std::make_unique<ManeuverStreams>(c, vessel, body, inertial);
+    } catch (const RpcError& e) {
+        log::warning(LOG, "maneuver orbit unavailable: " + short_error(e));
     }
     try {
         systems = std::make_unique<SystemsStreams>(c, vessel);
@@ -586,6 +688,8 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         if (systems)
             optional_step([&] { s.systems = systems->sample(); }, [&] { s.systems.reset(); });
         s.orbit_state = OrbitState{position, velocity, mu, *axes};
+        // Optional dashed post-burn orbit: a failure only hides it (retried after 1 s).
+        if (maneuver) optional_step([&] { s.maneuver_orbit = maneuver->sample(mu); }, [&] { maneuver->invalidate(); });
         s.received = monotonic();
         publish(std::move(s));
         wait(period_);
@@ -624,6 +728,20 @@ DemoSource::~DemoSource() { stop(); }
 static double pymod(double a, double b) {
     double r = std::fmod(a, b);
     return r < 0 ? r + b : r;
+}
+
+ManeuverOrbit demo_maneuver(double a, double e, double mu, double anomaly, double prograde) {
+    // A node fixed in inertial space (the demo orbit never changes): post-burn state at that true anomaly.
+    double p = a * (1 - e * e), r = p / (1 + e * std::cos(anomaly)), k = std::sqrt(mu / p);
+    double radial = k * e * std::sin(anomaly), tangent = k * (1 + e * std::cos(anomaly));
+    Vec3 out{std::cos(anomaly), 0, std::sin(anomaly)}, along{-std::sin(anomaly), 0, std::cos(anomaly)};
+    Vec3 velocity = out * radial + along * tangent;
+    double speed = std::sqrt(dot(velocity, velocity));
+    ManeuverOrbit m;
+    m.position = out * r;
+    m.velocity = velocity * ((speed + prograde) / speed);
+    m.soi = KERBIN_SOI;
+    return m;
 }
 
 Snapshot DemoSource::sample(double ut) const {
@@ -683,6 +801,7 @@ Snapshot DemoSource::sample(double ut) const {
     sys.stages = {{2, 7, 1430}, {1, 4, 820}, {0, 2, 0}};
     s.systems = sys;
     s.orbit_state = OrbitState{position, velocity, mu, Axes{{1, 0, 0}, {0, 0, 1}}};
+    s.maneuver_orbit = demo_maneuver(a, e, mu);
     s.received = monotonic();
     return s;
 }

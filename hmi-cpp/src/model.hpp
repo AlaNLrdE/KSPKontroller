@@ -89,6 +89,46 @@ struct OrbitState {
     std::optional<Conic> conic() const;
 };
 
+/// A point of the ORBIT diagram in metres, in the fixed view plane (OrbitState::project).
+using Point2 = std::pair<double, double>;
+
+/// The orbit that results from the next maneuver node (kRPC Node.orbit), as the post-burn state at the node's UT
+/// in the same body non-rotating frame as OrbitState, so it shares the view axes. Recomputed only when the node
+/// changes (and every few seconds while it exists), never per frame; unchanged values stay bit-identical, which
+/// keeps the display's dashed-line cache valid.
+struct ManeuverOrbit {
+    Vec3 position, velocity;  ///< post-burn state at the burn point
+    double ut = 0;
+    double soi = 0;  ///< sphere of influence radius of the body; <= 0 or non-finite = unbounded
+    std::optional<Conic> conic(const OrbitState& frame) const {
+        return OrbitState{position, velocity, frame.mu, frame.axes}.conic();
+    }
+};
+
+/// Where a conic is drawn: the true-anomaly interval from `from` to `to` (radians, increasing = direction of
+/// motion). `closed` when it is the whole ellipse inside `limit`.
+struct ConicSpan {
+    double from = 0, to = 0;
+    bool closed = false;
+};
+
+/// The part of a conic to draw inside radius `limit` (<= 0 or non-finite = unbounded): the whole ellipse when its
+/// apoapsis fits, otherwise from `start` (the burn point's true anomaly) forward to the limit or the asymptote,
+/// as KSP draws a patch that leaves the sphere of influence. Nothing when `start` is already outside the limit.
+std::optional<ConicSpan> conic_span(const Conic& conic, double start, double limit);
+
+/// True anomaly of a position on a conic.
+double anomaly_of(const Conic& conic, const Vec3& position);
+
+/// Sample a span into projected points (metres in the view plane); a closed span returns an open list whose last
+/// point equals the first.
+std::vector<Point2> conic_track(const Conic& conic, const ConicSpan& span, const Axes& axes, int samples);
+
+/// Cut a polyline into dashes of `dash` length separated by `gap`, measured along the line so the pattern keeps a
+/// constant length on screen. Each dash is a short polyline. `phase` offsets the pattern start.
+std::vector<std::vector<Point2>> dash_polyline(const std::vector<Point2>& points, double dash, double gap,
+                                               double phase = 0);
+
 // ------------------------------------------------------------------------------------------- snapshot
 enum class State { Connecting, NoVessel, Flight };
 
@@ -108,6 +148,7 @@ struct Snapshot {
     std::optional<Navigation> nav;
     std::optional<Systems> systems;
     std::optional<OrbitState> orbit_state;
+    std::optional<ManeuverOrbit> maneuver_orbit;  ///< only with a node in the current sphere of influence
     double received = 0;  ///< monotonic seconds when the sample was taken
 };
 

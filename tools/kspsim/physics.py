@@ -54,6 +54,7 @@ REPORTED_FIELDS = (
 NAV_DEFAULTS = dict(roll=0.0, speed_mode=0.0, target_enabled=0.0, target_up=0.0, target_north=20.0,
                     target_east=40.0, relative_up=0.0, relative_north=0.0, relative_east=12.0,
                     node_enabled=0.0, node_dv=120.0, node_remaining=114.0, node_time=300.0,
+                    node_prograde=120.0, node_normal=0.0, node_radial=0.0,
                     burn_up=.2, burn_north=0.0, burn_east=1.0,
                     mass=10000.0, available_thrust=160000.0, specific_impulse=300.0)
 REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0)
@@ -141,6 +142,90 @@ def elements(x: float, y: float, vx: float, vy: float, mu: float = MU) -> Elemen
         m = e * math.sinh(f) - f
         t_pe = -m / math.sqrt(mu / (-a) ** 3)
     return Elements(a, e, nu, a * (1 + e) - RADIUS, a * (1 - e) - RADIUS, inf, inf, t_pe)
+
+
+def _stumpff(z: float) -> tuple[float, float]:
+    """Stumpff functions (C, S) of the universal Kepler equation."""
+    if z > 1e-8:
+        s = math.sqrt(z)
+        return (1 - math.cos(s)) / z, (s - math.sin(s)) / s ** 3
+    if z < -1e-8:
+        s = math.sqrt(-z)
+        return (math.cosh(s) - 1) / -z, (math.sinh(s) - s) / s ** 3
+    return 0.5, 1 / 6
+
+
+def _dot(a, b) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a, b) -> tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _unit(a) -> tuple[float, float, float]:
+    n = math.sqrt(_dot(a, a)) or 1.0
+    return (a[0] / n, a[1] / n, a[2] / n)
+
+
+def propagate3(r, v, dt: float, mu: float = MU):
+    """Kepler motion (any conic, universal variable) of a 3D state over dt seconds; no drag or thrust."""
+    r0 = math.sqrt(_dot(r, r))
+    if dt == 0 or r0 <= 0:
+        return tuple(r), tuple(v)
+    vr0 = _dot(r, v) / r0
+    alpha = 2 / r0 - _dot(v, v) / mu
+    sq = math.sqrt(mu)
+    chi = sq * abs(alpha) * dt if abs(alpha) > 1e-12 else sq * dt / r0
+    for _ in range(60):
+        z = alpha * chi * chi
+        c, s = _stumpff(z)
+        f = r0 * vr0 / sq * chi * chi * c + (1 - alpha * r0) * chi ** 3 * s + r0 * chi - sq * dt
+        df = r0 * vr0 / sq * chi * (1 - z * s) + (1 - alpha * r0) * chi * chi * c + r0
+        step = f / df
+        chi -= step
+        if abs(step) < 1e-9 * max(1.0, abs(chi)):
+            break
+    z = alpha * chi * chi
+    c, s = _stumpff(z)
+    f = 1 - chi * chi / r0 * c
+    g = dt - chi ** 3 * s / sq
+    nr = tuple(f * r[i] + g * v[i] for i in range(3))
+    rn = math.sqrt(_dot(nr, nr))
+    fdot = sq / (rn * r0) * (alpha * chi ** 3 * s - chi)
+    gdot = 1 - chi * chi / rn * c
+    return nr, tuple(fdot * r[i] + gdot * v[i] for i in range(3))
+
+
+def propagate(x: float, y: float, vx: float, vy: float, dt: float, mu: float = MU) -> tuple[float, float, float, float]:
+    """Planar form of propagate3 (the flight model's x/y plane)."""
+    (nx, ny, _), (nvx, nvy, _) = propagate3((x, y, 0.0), (vx, vy, 0.0), dt, mu)
+    return nx, ny, nvx, nvy
+
+
+def maneuver_state(values: dict):
+    """(position, velocity) right after the node, in the kRPC frame of the reported Position/Velocity: the reported
+    state coasted node_time seconds, plus node_prograde along the velocity, node_normal along r x v and node_radial
+    outwards, perpendicular to the velocity (KSP's maneuver node axes)."""
+    r, v = propagate3(tuple(values["position_" + a] for a in "xyz"), tuple(values["velocity_" + a] for a in "xyz"),
+                      values["node_time"])
+    pro = _unit(v)
+    normal = _unit(_cross(r, v))
+    radial = _cross(pro, normal)
+    dv = (values["node_prograde"], values["node_normal"], values["node_radial"])
+    return r, tuple(v[i] + dv[0] * pro[i] + dv[1] * normal[i] + dv[2] * radial[i] for i in range(3))
+
+
+def extremes(r, v, mu: float = MU) -> tuple[float, float, float, float]:
+    """(apoapsis altitude, periapsis altitude, eccentricity, semi-major axis) of a 3D state; Ap inf when open."""
+    rn = math.sqrt(_dot(r, r))
+    energy = _dot(v, v) / 2 - mu / rn
+    a = -mu / (2 * energy) if abs(energy) > 1e-9 else float("inf")
+    h = _cross(r, v)
+    e = math.sqrt(max(0.0, 1 + 2 * energy * _dot(h, h) / mu ** 2))
+    p = _dot(h, h) / mu
+    ap = a * (1 + e) - RADIUS if e < 1 and a > 0 else float("inf")
+    return ap, p / (1 + e) - RADIUS, e, a
 
 
 def density(altitude: float) -> float:

@@ -57,7 +57,7 @@ constexpr uint32_t FILL_PIXEL = 0x010203;
 
 Rect orbit_panel(const Screen& s) {
     double u = s.canvas->u;
-    return Rect::f(s.canvas->w * .44 + 1.6 * u, 13 * u, s.canvas->w * .56 - 4.1 * u, 22 * u);
+    return Rect::f(s.canvas->w * .44 + 1.6 * u, 13 * u, s.canvas->w * .56 - 4.1 * u, 27 * u);
 }
 
 Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
@@ -245,6 +245,7 @@ TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
         };
         for (double apoapsis : {90e3, 250e3, 2e6, 50e6, 1e12}) {
             Snapshot snap = DemoSource(20, 10, 80000, apoapsis).sample(0);
+            snap.maneuver_orbit.reset();  // the current orbit's labels (the dashed orbit has its own test)
             s.display->orbit(panel, snap);
             snap.orbit_state.reset();  // the fallback view without the inertial state
             s.display->orbit(panel, snap);
@@ -255,6 +256,99 @@ TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
         hyperbolic.orbit_state.reset();
         s.display->orbit(panel, hyperbolic);
         CHECK(!seen.empty() && seen.back() == "Pe");
+    }
+}
+
+namespace {
+int maneuver_pixels(const Screen& s, const Rect& r) {
+    int n = 0;
+    for (int y = r.y; y < r.bottom(); ++y)
+        for (int x = r.x; x < r.right(); ++x)
+            if (s.pixel(x, y) == (uint32_t(theme::MANEUVER.r) << 16 | theme::MANEUVER.g << 8 | theme::MANEUVER.b)) ++n;
+    return n;
+}
+}  // namespace
+
+TEST(maneuver_orbit_is_dashed_cached_and_clipped) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        double u = s.canvas->u;
+        Rect panel = orbit_panel(s);
+        std::vector<Rect> labels;
+        s.canvas->on_text = [&](const std::string& label, const Rect& r) {
+            if (label == "Ap" || label == "Pe") labels.push_back(r);
+        };
+        Snapshot snap = demo();
+        CHECK(snap.maneuver_orbit.has_value());
+        s.fill(FILL);
+        s.display->orbit(panel, snap);
+        s.canvas->flush();
+        CHECK(s.display->last_node_marker.has_value());
+        CHECK_EQ(s.display->maneuver_builds, 1);
+        CHECK(maneuver_pixels(s, panel) > 50);
+        CHECK(s.untouched_outside(panel, FILL_PIXEL));
+        CHECK_EQ(labels.size(), size_t(4));  // current Ap/Pe and the planned orbit's own Ap/Pe
+        for (const Rect& r : labels) CHECK(panel.inflate(-2 * u, -2 * u).contains(r));
+        if (s.display->last_node_marker) {  // the diamond sits on the burn point
+            Pt node = *s.display->last_node_marker;
+            CHECK(s.pixel(int(node.x + .7 * u), int(node.y)) != FILL_PIXEL);
+        }
+        Snapshot later = snap;
+        later.ut += 1, later.altitude += 1;  // a new sample, same node: no rebuild
+        s.display->orbit(panel, later);
+        s.display->orbit(panel, snap);
+        CHECK_EQ(s.display->maneuver_builds, 1);
+        snap.maneuver_orbit->velocity = snap.maneuver_orbit->velocity * 1.01;  // node edited: rebuilt once
+        s.display->orbit(panel, snap);
+        s.display->orbit(panel, snap);
+        CHECK_EQ(s.display->maneuver_builds, 2);
+
+        // Escape burns and a post-burn ellipse beyond the sphere of influence: drawn up to it, never outside.
+        for (double prograde : {1200.0, 3000.0, 30000.0}) {
+            Snapshot escape = demo();
+            escape.maneuver_orbit = demo_maneuver(escape.semi_major_axis, escape.eccentricity, KERBIN_MU, .4, prograde);
+            s.fill(FILL);
+            s.display->orbit(panel, escape);
+            s.canvas->flush();
+            CHECK(s.untouched_outside(panel, FILL_PIXEL));
+            CHECK(maneuver_pixels(s, panel) > 20);
+            escape.maneuver_orbit->soi = 1.2e6;  // a small sphere of influence cuts the patch
+            s.display->orbit(panel, escape);
+        }
+        Snapshot broken = demo();
+        broken.maneuver_orbit->velocity = {NAN, 0, 0};
+        s.display->orbit(panel, broken);
+        CHECK(!s.display->last_node_marker);
+        broken.maneuver_orbit.reset();
+        s.display->orbit(panel, broken);
+        CHECK(!s.display->last_node_marker);
+        s.canvas->on_text = nullptr;
+    }
+}
+
+TEST(orbit_fills_the_panel_and_navball_stays_dominant) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        double u = s.canvas->u;
+        Rect panel = orbit_panel(s);
+        s.fill(FILL);
+        s.display->orbit(panel, demo());
+        s.canvas->flush();
+        int top = h, bottom = -1;
+        for (int y = panel.y; y < panel.bottom(); ++y)
+            for (int x = panel.x; x < panel.right(); ++x) {
+                uint32_t p = s.pixel(x, y);
+                bool curve = p == (uint32_t(theme::ACCENT.r) << 16 | theme::ACCENT.g << 8 | theme::ACCENT.b) ||
+                             p == (uint32_t(theme::MANEUVER.r) << 16 | theme::MANEUVER.g << 8 | theme::MANEUVER.b);
+                if (curve) top = std::min(top, y), bottom = std::max(bottom, y);
+            }
+        // The conics span most of the drawable height (panel minus title and label margins).
+        CHECK(bottom - top >= .85 * (panel.h - 9.3 * u));
+        // The NavBall panel keeps at least 90 % of the globe it had with the former 22u ORBIT panel.
+        double nav_h = (h - 2.5 * u) - 13 * u - panel.h - 1.6 * u, nav_w = panel.w;
+        double before = std::min((h - 2.5 * u) - 13 * u - 22 * u - 1.6 * u, nav_w);
+        CHECK(std::min(nav_h, nav_w) >= .9 * before);
+        CHECK(std::min(nav_h, nav_w) * .31 * 2 > panel.h);  // the globe stays taller than the whole ORBIT panel
     }
 }
 
@@ -300,7 +394,7 @@ TEST(full_frame_software_render_time) {
     double u = s.canvas->u;
     time("clear", [&] { s.canvas->clear(theme::BG); });
     time("navball", [&] { s.display->navball().draw(*s.canvas, Rect::f(2520 * .44 + 1.6 * u, 36.6 * u, 2520 * .56 - 4.1 * u, 60.9 * u), snap.nav); });
-    time("orbit", [&] { s.display->orbit(Rect::f(2520 * .44 + 1.6 * u, 13 * u, 2520 * .56 - 4.1 * u, 22 * u), snap); });
+    time("orbit", [&] { s.display->orbit(Rect::f(2520 * .44 + 1.6 * u, 13 * u, 2520 * .56 - 4.1 * u, 27 * u), snap); });
     time("header", [&] { s.display->header(snap, monotonic()); });
     time("tile", [&] { s.display->tile(Rect::f(40, 200, 500, 117), "ALTITUDE", "123.4 km", theme::VALUE); });
     time("panel", [&] { theme::panel(*s.canvas, Rect::f(40, 200, 500, 117)); });

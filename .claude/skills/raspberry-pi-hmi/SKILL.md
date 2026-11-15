@@ -75,6 +75,13 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   raises InvalidOperationException for the singular surface speed frame and for a stage without delta-v. Catch
   per value, retry after 0.5 s, never end the vessel session (`launch_pad_errors_drop_only_the_failing_values`).
 
+- Maneuver orbit (2026-11-14): kRPC 0.7 has `Orbit_PositionAt` / `Orbit_VelocityAt(orbit, ut, frame)`: read
+  `Node.orbit` at `Node.ut` in the body's non-rotating frame, so the dashed conic shares ORBIT's view axes. Stream
+  only the node key (UT, prograde/normal/radial), refetch on change or every 2 s; cache the dashes per state and
+  quantised scale. Not yet seen in the real game: check the log line `maneuver orbit: periapsis ... agrees`.
+- ORBIT's plot area is short (about 12 % of the screen height at 3:2): labels belong beside markers (side
+  margins are reserved for them); labels above/below a marker at the view's edge leave the clip.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the

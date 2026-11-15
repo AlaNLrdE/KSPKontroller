@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import subprocess
 import threading
 import time
@@ -43,6 +44,7 @@ class Simulator:
         self.sas_mode = 1               # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
         self._board_prev = physics.Controls()  # the plugin's VControlsOld
         self._board_seeded = False      # the plugin's StageSeeded: the first packet of a link only seeds the bits
+        self.node: dict = {}            # a maneuver node on the flight model (set_node), under manual values
         self.forced: dict = {}          # FORCEABLE key -> pinned value (window overrides)
         self._last_board = 0.0
         self._ksp_check = (0.0, False)
@@ -76,12 +78,51 @@ class Simulator:
                 self.vessel.liquid_fuel = physics.LIQUID_FUEL * f
                 self.vessel.oxidizer = physics.OXIDIZER * f
 
+    def set_node(self, prograde: float | None, seconds: float = 300.0, normal: float = 0.0,
+                 radial: float = 0.0) -> None:
+        """Create or replace the maneuver node, `seconds` from now (a fixed UT: it counts down as in KSP), with
+        its delta-v in m/s along KSP's node axes; prograde None deletes it."""
+        with self.lock:
+            had = bool(self.node)
+            if prograde is None:
+                self.node = {}
+            else:
+                self.node = dict(prograde=float(prograde), normal=float(normal), radial=float(radial),
+                                 ut=self.ut + float(seconds))
+        if prograde is None:
+            log.info("maneuver node deleted" if had else "maneuver node: none")
+        else:
+            log.info("maneuver node %s: prograde %.1f normal %.1f radial %.1f m/s, in %.0f s",
+                     "updated" if had else "created", prograde, normal, radial, seconds)
+
+    def node_preview(self) -> dict | None:
+        """The node as reported, with the orbit it results in (window line), or None."""
+        with self.lock:
+            r = self.reported()
+            if not r["node_enabled"]:
+                return None
+            ap, pe, e, _a = physics.extremes(*physics.maneuver_state(r))
+            return dict(dv=r["node_dv"], time=r["node_time"], apoapsis=ap, periapsis=pe, eccentricity=e)
+
     # -- manual values --------------------------------------------------------------------------------
     def reported(self) -> dict:
         """The values the board and the HMI receive: typed ones in manual mode, else the flight model's, plus the
         game state (action_groups, the VesselData bit field) and the window's forced values on top of both."""
         with self.lock:
             values = self.vessel.report()
+            if self.node:
+                n = self.node
+                dv = math.sqrt(n["prograde"] ** 2 + n["normal"] ** 2 + n["radial"] ** 2)
+                v = values["orbital_speed"] or 1.0
+                vs = values["vertical_speed"]
+                vh = math.sqrt(max(0.0, v * v - vs * vs))
+                # NavBall burn vector (up, north, east): prograde along the velocity, radial out perpendicular to
+                # it in the up/east plane, normal to the south (the window's planar orbits have northward
+                # anti-normal, as TransformDirection)
+                values.update(node_enabled=1.0, node_prograde=n["prograde"], node_normal=n["normal"],
+                              node_radial=n["radial"], node_dv=dv, node_remaining=dv, node_time=n["ut"] - self.ut,
+                              burn_up=(n["prograde"] * vs + n["radial"] * vh) / v, burn_north=-n["normal"],
+                              burn_east=(n["prograde"] * vh - n["radial"] * vs) / v)
             if self.manual_values is not None:
                 values.update(self.manual_values)
             values["stage_fuel"] = 100.0 * self.vessel.liquid_fuel / physics.LIQUID_FUEL

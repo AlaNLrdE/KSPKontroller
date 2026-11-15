@@ -23,6 +23,7 @@ Running it
    ./ci sim --port COM5          # a given serial port
    ./ci sim --no-board           # only the Pi        (--no-krpc: only the board)
    ./ci sim --headless           # no window, one status line every 2 s
+   ./ci sim --node 250,900       # a 250 m/s prograde maneuver node 900 s ahead (the HMI's dashed orbit)
    ./ci test_sim                 # tests, also part of ./ci verify
 
 The first time Python listens on the LAN, Windows asks whether to allow it: allow it on **private** networks,
@@ -43,6 +44,11 @@ The window
   (no vessel switch) and it keeps flying from there; impossible requests (Ap below Pe, a point under the
   surface, beyond the sphere of influence) are refused with the reason. *Read current* fills the fields
   from the vessel, to change one value and keep the rest.
+* **Maneuver node**: prograde, normal and radial-out delta-v (m/s) and the time to the node (s); *Create /
+  update node* and *Delete node* change what kRPC ``Node`` / ``Node.orbit`` answer at once (the HMI's dashed
+  orbit and NavBall node marker follow within about 2 s), and the tab shows the node's dV, T- and the
+  predicted Ap/Pe after the burn. ``--node DV,SECONDS`` creates one at start. Changes are logged to
+  ``build/kspsim.log`` (``maneuver node created / updated / deleted``).
 * **Manual values**: tick *Manual mode* and the physics freezes; every value the board and the HMI receive
   (altitude, vertical / orbital / surface speed, Ap, Pe, times to Ap / Pe, inclination, eccentricity, period,
   semi-major axis, true anomaly, G, situation) starts from its current value and is sent exactly as typed,
@@ -92,7 +98,9 @@ SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``Act
 (above), which is what the board's LEDs show.
 
 Not modelled: other bodies and sphere of influence changes, attitude (pitch/roll/yaw are shown, not
-applied), maneuver nodes and targets (sent as 0), electric charge use beyond a slow drain.
+applied), targets (sent as 0), electric charge use beyond a slow drain. A maneuver node has a fixed UT (it
+counts down) and prograde / normal / radial-out delta-v; its ``Node.orbit`` is the reported state coasted to
+the node by 3D Kepler propagation (``physics.propagate3``) plus that delta-v along KSP's node axes.
 
 Extending it
 ------------

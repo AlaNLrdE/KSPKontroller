@@ -247,7 +247,8 @@ void Display::flight(const Snapshot& s) {
     staging(Rect::f(x0, 80.6 * u, left_w - x0, bottom - 80.6 * u), s);
 
     const double right_x = left_w + gap, right_w = c_.w - left_w - gap - 2.5 * u;
-    const double orbit_h = 22 * u;
+    // ORBIT is short and wide; 27u keeps the NavBall globe within 10 % of its size with a 22u ORBIT panel.
+    const double orbit_h = 27 * u;
     orbit(Rect::f(right_x, top, right_w, orbit_h), s);
     navball_.draw(c_, Rect::f(right_x, top + orbit_h + gap, right_w, bottom - top - orbit_h - gap), s.nav);
 }
@@ -557,16 +558,58 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     if (!conic) reach = std::max(4 * atmo, std::sqrt(dot(state.position, state.position)));
     else if (conic->apoapsis()) reach = std::max(atmo, *conic->apoapsis());
     else reach = std::max(4 * atmo, 2.5 * conic->periapsis());
-    double margin = apsis_label_width() + 2.6 * u;
-    Rect area = rect.inflate(-2 * margin, -10 * u).move(0, 2 * u);
-    double scale = std::min(area.w, area.h) / (2 * reach);
-    double cx = area.centerx(), cy = area.centery();
+    const double base = reach;  // the current orbit alone
+    // The post-burn orbit shares the frame and the view axes; widen the view to show it, at most 20 times.
+    std::optional<Conic> next;
+    std::optional<ConicSpan> next_span;
+    if (s.maneuver_orbit && s.maneuver_orbit->position.finite() && s.maneuver_orbit->velocity.finite()) {
+        next = s.maneuver_orbit->conic(state);
+        if (next) next_span = conic_span(*next, anomaly_of(*next, s.maneuver_orbit->position), s.maneuver_orbit->soi);
+    }
+    if (next && next_span) {
+        double node = std::sqrt(dot(s.maneuver_orbit->position, s.maneuver_orbit->position));
+        double far = next_span->closed && next->apoapsis() ? *next->apoapsis()
+                                                            : std::max(2.5 * next->periapsis(), 3 * node);
+        if (s.maneuver_orbit->soi > 0 && std::isfinite(s.maneuver_orbit->soi)) far = std::min(far, s.maneuver_orbit->soi);
+        if (std::isfinite(far)) reach = std::max(reach, std::min(far, 20 * reach));
+    }
+    // Fit what is drawn (body and atmosphere, vessel, current conic, planned orbit) to the drawable area, using its
+    // full width and height. The view axes stay fixed: only the scale and the offset follow the conics.
+    double margin = apsis_label_width() + 2.6 * u;  // Ap/Pe labels sit beside their markers
+    Rect area = Rect::f(rect.x + margin, rect.y + 6.5 * u, rect.w - 2 * margin, rect.h - 9.3 * u);
+    double x0 = -atmo, x1 = atmo, y0 = -atmo, y1 = atmo;
+    auto include = [&](double x, double y, double rx, double ry) {
+        if (!std::isfinite(x + y + rx + ry)) return;
+        x0 = std::min(x0, x - rx), x1 = std::max(x1, x + rx), y0 = std::min(y0, y - ry), y1 = std::max(y1, y + ry);
+    };
+    // Projected ellipse: centre - a e P + a cos E P + b sin E T, so each axis spans +-hypot(a P_i, b T_i).
+    auto ellipse = [&](const Conic& c, double cap) {
+        double e = c.eccentricity, a = c.p / (1 - e * e), b = a * std::sqrt(1 - e * e);
+        if (!(a * (1 + e) <= cap)) return false;
+        auto [px, py] = state.project(c.peri_direction);
+        auto [tx, ty] = state.project(c.transverse);
+        include(-a * e * px, -a * e * py, std::hypot(a * px, b * tx), std::hypot(a * py, b * ty));
+        return true;
+    };
+    if (!(conic && conic->apoapsis() && ellipse(*conic, 1e300))) include(0, 0, base, base);
+    if (next && next_span) {
+        double cap = std::min(reach, 20 * base);  // the planned orbit widens the view at most 20 times
+        if (!(next_span->closed && ellipse(*next, cap))) include(0, 0, cap, cap);
+    }
+    auto [vx, vy] = state.vessel_point();
+    include(vx, vy, 0, 0);
+    reach = std::max({std::fabs(x0), std::fabs(x1), std::fabs(y0), std::fabs(y1)});
+    double scale = std::min(area.w / (x1 - x0), area.h / (y1 - y0));
+    // With a dashed orbit, quantise the scale (0.5 % steps) so its cached dashes survive small changes of reach.
+    if (next && next_span && scale > 0 && std::isfinite(scale)) scale = std::exp(std::round(std::log(scale) * 200) / 200);
+    double cx = area.x + area.w / 2.0 - (x0 + x1) / 2 * scale, cy = area.y + area.h / 2.0 + (y0 + y1) / 2 * scale;
     auto point = [&](const Vec3& v) {
         auto [x, y] = state.project(v);
         return Pt{static_cast<float>(cx + x * scale), static_cast<float>(cy - y * scale)};
     };
     if (s.atmosphere_depth > 0)
         c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), ATMOSPHERE);
+    const float orbit_width = static_cast<float>(std::max(1.5, .14 * u));  // as the dashed orbit
     if (conic) {
         std::vector<Pt> segment;
         for (int index = 0; index < 241; ++index) {
@@ -574,12 +617,14 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
             if (vector && dot(*vector, *vector) <= (12 * reach) * (12 * reach)) {
                 segment.push_back(point(*vector));
             } else {
-                if (segment.size() > 1) c_.polyline(segment, false, 1, ACCENT);
+                if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
                 segment.clear();
             }
         }
-        if (segment.size() > 1) c_.polyline(segment, false, 1, ACCENT);
+        if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
     }
+    last_node_marker.reset();
+    if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
     c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(2.0, radius * scale)), BODY);
     c_.text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
@@ -593,12 +638,74 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
         c_.circle(pe.x, pe.y, static_cast<float>(.8 * u), s.periapsis < s.atmosphere_depth ? WARN : ACCENT);
         c_.text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
     }
+    if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, true);
     // The white ring followed during docking: never from true anomaly, attitude, target velocity, or the changing
     // periapsis direction.
     Pt position = point(state.position);
     c_.circle(position.x, position.y, static_cast<float>(1.3 * u), VALUE);
     c_.circle(position.x, position.y, static_cast<float>(.6 * u), BG);
     last_vessel_marker = position;
+}
+
+void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSpan& span, double scale, double reach,
+                             double cx, double cy, const Rect& rect, bool markers) {
+    // KSP's map view: the planned orbit is an orange dashed line with its own Ap/Pe, the current one stays solid.
+    const double u = c_.u;
+    const ManeuverOrbit& m = *s.maneuver_orbit;
+    const OrbitState& state = *s.orbit_state;
+    auto screen = [&](const Point2& p) {
+        return Pt{static_cast<float>(cx + p.first * scale), static_cast<float>(cy - p.second * scale)};
+    };
+    auto point = [&](const Vec3& v) { return screen(state.project(v)); };
+    if (!markers) {
+        // Constant on-screen pattern: dash and gap in pixels, converted to metres at the (quantised) scale.
+        const double dash_px = std::max(3.0, .012 * rect.h);
+        ManeuverCache& k = maneuver_cache_;
+        if (!k.valid || k.position != m.position || k.velocity != m.velocity || k.mu != state.mu ||
+            k.axis_x != state.axes.x || k.axis_y != state.axes.y || k.soi != m.soi || k.scale != scale ||
+            k.dash != dash_px || k.w != rect.w || k.h != rect.h) {
+            k = ManeuverCache{true, m.position, m.velocity, state.axes.x, state.axes.y, state.mu, m.soi, scale,
+                              dash_px, rect.w, rect.h, {}};
+            ++maneuver_builds;
+            const double limit = 12 * reach;  // farther points are far outside the panel: split there
+            std::vector<Point2> piece;
+            auto flush = [&] {
+                for (auto& d : dash_polyline(piece, dash_px / scale, dash_px / scale)) k.dashes.push_back(std::move(d));
+                piece.clear();
+            };
+            for (const Point2& p : conic_track(next, span, state.axes, 480)) {
+                if (std::hypot(p.first, p.second) <= limit) piece.push_back(p);
+                else flush();
+            }
+            flush();
+        }
+        const float width = static_cast<float>(std::max(1.5, .14 * u));
+        std::vector<Pt> line;
+        for (const auto& d : k.dashes) {
+            line.clear();
+            for (const Point2& p : d) line.push_back(screen(p));
+            c_.polyline(line, false, width, MANEUVER);
+        }
+        return;
+    }
+    // Own Ap/Pe and the node. Labels sit beside the marker, away from the body (the side margins are reserved
+    // for apsis labels), so they never cover the body or the vessel.
+    const float marker = static_cast<float>(.6 * u);
+    auto apsis = [&](const char* label, const Vec3& where) {
+        Pt p = point(where);
+        c_.circle(p.x, p.y, marker, MANEUVER);
+        if (p.x >= cx) c_.text(label, 2.4, MANEUVER, p.x + 1.1 * u, p.y, Anchor::MidLeft);
+        else c_.text(label, 2.4, MANEUVER, p.x - 1.1 * u, p.y, Anchor::MidRight);
+    };
+    if (next.eccentricity > 1e-5) {
+        if (span.closed && next.apoapsis()) apsis("Ap", *next.position(PI));
+        if (span.closed || (span.from <= 0 && 0 <= span.to)) apsis("Pe", *next.position(0));
+    }
+    Pt node = point(m.position);
+    const float d = static_cast<float>(1.0 * u), inner = static_cast<float>(.45 * u);
+    c_.polygon({{node.x, node.y - d}, {node.x + d, node.y}, {node.x, node.y + d}, {node.x - d, node.y}}, MANEUVER);
+    c_.polygon({{node.x, node.y - inner}, {node.x + inner, node.y}, {node.x, node.y + inner}, {node.x - inner, node.y}}, BG);
+    last_node_marker = node;
 }
 
 }  // namespace ksphmi
