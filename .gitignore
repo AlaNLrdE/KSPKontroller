@@ -4,3 +4,4 @@ __pycache__/
 .claude/worktrees/
 .claude/settings.local.json
 hmi-cpp/config.local.toml
+tools/**/obj/
