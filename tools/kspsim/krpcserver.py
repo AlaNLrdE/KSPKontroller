@@ -373,6 +373,28 @@ class KrpcServer:
             raise RpcFailure("No such vessel %d" % want, "KRPC", "InvalidOperationException")
         return v
 
+    def _node_orbit(self, proc: str, args: dict) -> bytes:
+        """Node.orbit: the post-burn conic, as state vectors in Kerbin's non-rotating frame (any frame argument)."""
+        sim = self.sim
+        r = sim.reported()
+        if not r['node_enabled']:
+            raise RpcFailure('The maneuver node was removed', 'KRPC', 'InvalidOperationException')
+        x, y, vx, vy = physics.maneuver_state(r)
+        member = proc.partition('_')[2]
+        if member in ('PositionAt', 'VelocityAt'):
+            node_ut = sim.ut + r['node_time']
+            x, y, vx, vy = physics.propagate(x, y, vx, vy, struct.unpack('<d', args[1])[0] - node_ut)
+            return enc_tuple((x, 0.0, y) if member == 'PositionAt' else (vx, 0.0, vy))
+        el = physics.elements(x, y, vx, vy)
+        values = {'get_Periapsis': el.periapsis + physics.RADIUS, 'get_Apoapsis': el.apoapsis + physics.RADIUS,
+                  'get_PeriapsisAltitude': el.periapsis, 'get_ApoapsisAltitude': el.apoapsis,
+                  'get_Eccentricity': el.e, 'get_SemiMajorAxis': el.a}
+        if member in values:
+            return enc_double(values[member])
+        if member == 'get_Body':
+            return enc_object(BODY_KERBIN)
+        raise RpcFailure("kspsim does not implement SpaceCenter.%s for a node orbit" % proc)
+
     def _space_center(self, proc: str, args: dict) -> bytes | None:
         sim = self.sim
         if proc == "get_ActiveVessel":  # real kRPC 0.7: null outside flight (seen at the Space Center), not an error
@@ -434,6 +456,9 @@ class KrpcServer:
                     count = max(0, min(100, int(r['stage_parts'])))
                     return enc_list([sim.vessel_uid * 10000 + 3000 + number * 100 + i for i in range(count)])
 
+        if proc.startswith('Orbit_') and args.get(0) is not None and read_varint(args[0]) == sim.vessel_uid * 10000 + 6000:
+            return self._node_orbit(proc, args)
+
         cls, _, member = proc.partition("_")
         if cls in ("Vessel", "Orbit", "Flight", "Control", "Node"):
             self._vessel(args)  # a stale object id fails as in kRPC
@@ -487,6 +512,15 @@ class KrpcServer:
                 return enc_double(values[member])
             if member == 'BurnVector':
                 return enc_tuple(tuple(r['burn_' + a] for a in ('up', 'north', 'east')))
+            # The node's own delta-v (prograde only: the model is planar) and the orbit it results in
+            if member == 'get_UT':
+                return enc_double(sim.ut + r['node_time'])
+            if member in ('get_Prograde', 'get_Normal', 'get_Radial'):
+                return enc_double(r['node_dv'] if member == 'get_Prograde' else 0.0)
+            if member == 'get_Orbit':
+                if not r['node_enabled']:
+                    raise RpcFailure('No such node', 'KRPC', 'InvalidOperationException')
+                return enc_object(sim.vessel_uid * 10000 + 6000)
         elif cls == "Orbit":
             values = {
                 "get_ApoapsisAltitude": r["apoapsis"], "get_PeriapsisAltitude": r["periapsis"],
@@ -527,6 +561,7 @@ class KrpcServer:
                       "get_GravitationalParameter": enc_double(physics.MU),
                       "get_ReferenceFrame": enc_object(FRAME_KERBIN)}
             values['get_NonRotatingReferenceFrame'] = enc_object(3)
+            values['get_SphereOfInfluence'] = enc_double(physics.SOI_RADIUS)
             if member in values:
                 return values[member]
         raise RpcFailure("kspsim does not implement SpaceCenter.%s" % proc)

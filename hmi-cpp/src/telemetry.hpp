@@ -97,6 +97,12 @@ struct KeplerState {
 /// Elliptic orbit (0 <= e < 1) at a mean anomaly.
 KeplerState kepler_state(double a, double e, double mu, double mean_anomaly);
 
+constexpr double KERBIN_SOI = 84159286.0;
+
+/// The demo's maneuver node: a prograde burn of `prograde` m/s at true anomaly `anomaly` (radians) of the orbit
+/// (a, e), in the demo's frame (orbit in the x/z plane).
+ManeuverOrbit demo_maneuver(double a, double e, double mu, double anomaly = 2.3, double prograde = 150);
+
 /// A ship on an 80 x 250 km Kerbin orbit, time accelerated by `speed`. No game or network needed.
 class DemoSource : public Source {
 public:

@@ -7,7 +7,8 @@ namespace ksphmi::theme {
 
 constexpr Color BG{10, 14, 20}, PANEL{19, 26, 36}, GRID{34, 45, 60}, MUTED{88, 104, 128}, LABEL{122, 140, 164},
     VALUE{232, 238, 245}, ACCENT{70, 200, 255}, GOOD{96, 222, 140}, WARN{255, 186, 72}, BAD{255, 92, 92},
-    BODY{46, 96, 150}, ATMOSPHERE{24, 48, 78};
+    BODY{46, 96, 150}, ATMOSPHERE{24, 48, 78},
+    MANEUVER{224, 160, 48};  // planned (post-burn) orbit, as KSP's orange dashed patch
 
 // navball.py
 constexpr Color SKY{37, 133, 173}, GROUND{157, 91, 35}, INK{215, 226, 221}, GOLD{255, 194, 39}, WHITE{235, 242, 245},

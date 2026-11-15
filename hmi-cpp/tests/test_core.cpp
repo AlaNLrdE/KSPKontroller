@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstdlib>
 #include <map>
 #include <mutex>
@@ -207,6 +208,81 @@ TEST(circular_and_inclined_orbits_have_stable_axes) {
     OrbitState hyper{{280000, 0, 0}, {0, 0, std::sqrt(6.5e10 * 2.5 / 280000)}, 6.5e10, Axes{}};
     CHECK(!hyper.conic()->apoapsis());
     CHECK(!hyper.conic()->position(PI));  // beyond the asymptote
+}
+
+// ------------------------------------------------------------------------------------------- maneuver orbit
+TEST(maneuver_conic_passes_through_the_node_and_follows_the_burn) {
+    double rp = KERBIN_RADIUS + 80000, ra = KERBIN_RADIUS + 250000, a = (rp + ra) / 2, e = (ra - rp) / (ra + rp);
+    OrbitState frame{{rp, 0, 0}, {0, 0, std::sqrt(KERBIN_MU * (2 / rp - 1 / a))}, KERBIN_MU, Axes{}};
+    Conic current = *frame.conic();
+    // No burn: the same conic as the current orbit; the node lies on it at its own true anomaly.
+    ManeuverOrbit none = demo_maneuver(a, e, KERBIN_MU, 2.3, 0);
+    Conic same = *none.conic(frame);
+    CHECK_NEAR(same.eccentricity, current.eccentricity, 1e-9);
+    CHECK_NEAR(same.p, current.p, 1e-3);
+    CHECK_NEAR(anomaly_of(same, none.position), 2.3, 1e-9);
+    // Prograde raises the opposite apsis; the node stays on the new conic.
+    ManeuverOrbit burn = demo_maneuver(a, e, KERBIN_MU, 2.3, 300);
+    Conic next = *burn.conic(frame);
+    CHECK(*next.apoapsis() > ra + 100000);
+    auto on = next.position(anomaly_of(next, burn.position));
+    CHECK(on.has_value());
+    if (on) CHECK(std::sqrt(dot(*on - burn.position, *on - burn.position)) < 1e-3);
+    // An escape burn is open: no apoapsis.
+    CHECK(!demo_maneuver(a, e, KERBIN_MU, 0, 1200).conic(frame)->apoapsis());
+}
+
+TEST(conic_span_stops_at_the_sphere_of_influence) {
+    Conic ellipse{1e6 * (1 - .25), .5, {1, 0, 0}, {0, 1, 0}};  // a = 1e6: rp 5e5, ra 1.5e6
+    auto closed = conic_span(ellipse, 1.0, 2e6);
+    CHECK(closed && closed->closed);
+    CHECK(conic_span(ellipse, 1.0, 0)->closed);  // unknown sphere of influence: unbounded
+    auto open = conic_span(ellipse, 1.0, 1e6);   // apoapsis beyond the limit: from the node to the boundary
+    CHECK(open && !open->closed);
+    if (open) {
+        CHECK_NEAR(open->from, 1.0, 1e-12);
+        CHECK_NEAR(std::sqrt(dot(*ellipse.position(open->to), *ellipse.position(open->to))), 1e6, 1e-3);
+    }
+    CHECK(!conic_span(ellipse, 3.0, 1e6));  // the node itself outside the limit
+    CHECK(!conic_span(ellipse, 0, 4e5));    // periapsis beyond the limit
+
+    Conic hyperbola{1e6, 2, {1, 0, 0}, {0, 1, 0}};
+    auto free = conic_span(hyperbola, -0.5, 0);
+    CHECK(free && !free->closed && free->to < std::acos(-.5) && free->to > std::acos(-.5) - 1e-3);
+    auto soi = conic_span(hyperbola, -0.5, 5e6);
+    CHECK(soi && soi->to < free->to);
+    if (soi) CHECK_NEAR(std::sqrt(dot(*hyperbola.position(soi->to), *hyperbola.position(soi->to))), 5e6, 1e-2);
+    CHECK(!conic_span(Conic{0, 0, {1, 0, 0}, {0, 1, 0}}, 0, 0));  // degenerate
+
+    Axes axes;  // default x/z view plane: a conic in the x/y plane projects onto its x axis, still bounded
+    auto track = conic_track(ellipse, *closed, Axes{{1, 0, 0}, {0, 1, 0}}, 100);
+    CHECK_EQ(track.size(), size_t(101));
+    CHECK(track.front() == track.back());
+    for (const auto& p : conic_track(hyperbola, *soi, axes, 200)) CHECK(std::hypot(p.first, p.second) <= 5e6 + 1);
+}
+
+TEST(dashes_keep_their_length_along_corners) {
+    auto length = [](const std::vector<Point2>& d) {
+        double l = 0;
+        for (size_t i = 1; i < d.size(); ++i) l += std::hypot(d[i].first - d[i - 1].first, d[i].second - d[i - 1].second);
+        return l;
+    };
+    auto straight = dash_polyline({{0, 0}, {10, 0}}, 1, 1);
+    CHECK_EQ(straight.size(), size_t(5));
+    for (const auto& d : straight) CHECK_NEAR(length(d), 1, 1e-9);
+    CHECK_NEAR(straight[1].front().first, 2, 1e-9);
+    // A dash across a corner keeps the corner vertex and its full length.
+    auto corner = dash_polyline({{0, 0}, {2.5, 0}, {2.5, 10}}, 1, 1);
+    CHECK(corner.size() >= 6);
+    for (size_t i = 0; i + 1 < corner.size(); ++i) CHECK_NEAR(length(corner[i]), 1, 1e-9);
+    CHECK_EQ(corner[1].size(), size_t(3));
+    // The pattern phase and degenerate inputs.
+    auto shifted = dash_polyline({{0, 0}, {10, 0}}, 1, 1, 1.5);
+    CHECK(!shifted.empty() && std::fabs(shifted[0].front().first - .5) < 1e-9);
+    CHECK(dash_polyline({{0, 0}}, 1, 1).empty());
+    CHECK(dash_polyline({{0, 0}, {1, 1}}, 0, 1).empty());
+    CHECK(dash_polyline({{0, 0}, {0, 0}, {0, 0}}, 1, 1).empty());
+    CHECK_EQ(dash_polyline({{0, 0}, {5, 0}}, 1, 0).size(), size_t(5));  // no gap: abutting dashes, a solid line
 }
 
 // ------------------------------------------------------------------------------------------- resources
@@ -562,6 +638,82 @@ TEST(launch_pad_errors_drop_only_the_failing_values) {
     CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // the vessel session never restarted
     CHECK(pad.count("Stage_get_Number") <= 2);    // unknown delta-v does not force a stream rebuild
     CHECK(pad.count("Vessel_get_SurfaceSpeedReferenceFrame") <= 2 + static_cast<int>(elapsed / .5));  // retry 0.5 s
+}
+
+namespace {
+/// The pad vessel with one maneuver node; Node.orbit answers in the body's non-rotating frame (object 11).
+struct NodeServer : PadServer {
+    std::atomic<double> prograde{100};
+    std::atomic<bool> broken{false};  ///< Node.orbit raises, as for a node kRPC cannot resolve
+    std::atomic<int> frame_errors{0};
+    FakeResult node(const std::string& proc, const std::vector<std::string>& args) {
+        if (proc == "Control_get_Nodes") return {list({20})};
+        if (proc == "Node_get_UT") return {pb::enc_double(5000)};
+        if (proc == "Node_get_Prograde") return {pb::enc_double(prograde)};
+        if (proc == "Node_get_Normal" || proc == "Node_get_Radial") return {pb::enc_double(0)};
+        if (proc == "Node_get_Orbit") {
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                ++counts[proc];
+            }
+            if (broken) return {"", false, "Node has no orbit"};
+            return {pb::enc_object(21)};
+        }
+        if (proc == "CelestialBody_get_SphereOfInfluence") return {pb::enc_double(KERBIN_SOI)};
+        if (proc == "Orbit_PositionAt" || proc == "Orbit_VelocityAt") {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++counts[proc];
+            if (args.size() != 3 || pb::dec_object(args[2]) != 11 || pb::dec_double(args[1]) != 5000) ++frame_errors;
+            if (proc == "Orbit_PositionAt") return {pb::enc_tuple({700000, 0, 0})};
+            return {pb::enc_tuple({0, 0, 2245.0 + prograde})};
+        }
+        return answer(proc);
+    }
+};
+}  // namespace
+
+TEST(maneuver_orbit_is_read_once_per_node_change_and_fails_alone) {
+    NodeServer pad;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) { return pad.node(proc, args); });
+    KrpcSource::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    o.discovery = false;
+    o.retry_seconds = .1;
+    KrpcSource src(o);
+    src.start();
+    auto wait_for = [&](auto ready) {
+        double end = monotonic() + 5;
+        while (monotonic() < end && !ready()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return ready();
+    };
+    CHECK(wait_for([&] { return src.latest()->maneuver_orbit.has_value(); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));  // ~12 samples, the node unchanged
+    auto snap = src.latest();
+    CHECK(snap->maneuver_orbit.has_value());
+    if (snap->maneuver_orbit) {
+        CHECK_NEAR(snap->maneuver_orbit->position.x, 700000, 1e-9);
+        CHECK_NEAR(snap->maneuver_orbit->velocity.z, 2345, 1e-9);
+        CHECK_NEAR(snap->maneuver_orbit->ut, 5000, 1e-9);
+        CHECK_NEAR(snap->maneuver_orbit->soi, KERBIN_SOI, 1e-6);
+    }
+    CHECK(pad.count("Orbit_PositionAt") <= 2);  // not every sample (10 Hz), at most the 2 s refresh
+    CHECK_EQ(pad.frame_errors.load(), 0);       // at the node UT, in the non-rotating frame of the current orbit
+
+    pad.prograde = 300;  // the node was edited: read again
+    CHECK(wait_for([&] {
+        auto s = src.latest();
+        return s->maneuver_orbit && std::fabs(s->maneuver_orbit->velocity.z - 2545) < 1e-9;
+    }));
+
+    pad.broken = true;  // a failing node hides the dashed orbit only
+    CHECK(wait_for([&] { return !src.latest()->maneuver_orbit.has_value(); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    snap = src.latest();
+    src.stop();
+    CHECK(snap->state == State::Flight && snap->nav.has_value() && !snap->maneuver_orbit);
+    CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // the vessel session never restarted
 }
 
 TEST(gauge_angle_sweeps_the_fuel_gauge_arc_from_e_to_f) {

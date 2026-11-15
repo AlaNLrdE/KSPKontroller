@@ -143,6 +143,56 @@ def elements(x: float, y: float, vx: float, vy: float, mu: float = MU) -> Elemen
     return Elements(a, e, nu, a * (1 + e) - RADIUS, a * (1 - e) - RADIUS, inf, inf, t_pe)
 
 
+def _stumpff(z: float) -> tuple[float, float]:
+    """Stumpff functions (C, S) of the universal Kepler equation."""
+    if z > 1e-8:
+        s = math.sqrt(z)
+        return (1 - math.cos(s)) / z, (s - math.sin(s)) / s ** 3
+    if z < -1e-8:
+        s = math.sqrt(-z)
+        return (math.cosh(s) - 1) / -z, (math.sinh(s) - s) / s ** 3
+    return 0.5, 1 / 6
+
+
+def propagate(x: float, y: float, vx: float, vy: float, dt: float, mu: float = MU) -> tuple[float, float, float, float]:
+    """Kepler motion (any conic, universal variable) of a planar state over dt seconds; no drag or thrust."""
+    r0 = math.hypot(x, y)
+    if dt == 0 or r0 <= 0:
+        return x, y, vx, vy
+    vr0 = (x * vx + y * vy) / r0
+    alpha = 2 / r0 - (vx * vx + vy * vy) / mu
+    sq = math.sqrt(mu)
+    chi = sq * abs(alpha) * dt if abs(alpha) > 1e-12 else sq * dt / r0
+    for _ in range(60):
+        z = alpha * chi * chi
+        c, s = _stumpff(z)
+        f = r0 * vr0 / sq * chi * chi * c + (1 - alpha * r0) * chi ** 3 * s + r0 * chi - sq * dt
+        df = r0 * vr0 / sq * chi * (1 - z * s) + (1 - alpha * r0) * chi * chi * c + r0
+        step = f / df
+        chi -= step
+        if abs(step) < 1e-9 * max(1.0, abs(chi)):
+            break
+    z = alpha * chi * chi
+    c, s = _stumpff(z)
+    f = 1 - chi * chi / r0 * c
+    g = dt - chi ** 3 * s / sq
+    nx, ny = f * x + g * vx, f * y + g * vy
+    r = math.hypot(nx, ny)
+    fdot = sq / (r * r0) * (alpha * chi ** 3 * s - chi)
+    gdot = 1 - chi * chi / r * c
+    return nx, ny, fdot * x + gdot * vx, fdot * y + gdot * vy
+
+
+def maneuver_state(values: dict) -> tuple[float, float, float, float]:
+    """Planar state right after the simulated node: the reported state coasted node_time seconds, then node_dv
+    applied prograde (the model is planar: no normal or radial component)."""
+    x, y, vx, vy = propagate(values["position_x"], values["position_z"], values["velocity_x"], values["velocity_z"],
+                             values["node_time"])
+    speed = math.hypot(vx, vy) or 1.0
+    k = (speed + values["node_dv"]) / speed
+    return x, y, vx * k, vy * k
+
+
 def density(altitude: float) -> float:
     return 0.0 if altitude >= ATMOSPHERE else SEA_DENSITY * math.exp(-max(altitude, 0.0) / SCALE_HEIGHT)
 

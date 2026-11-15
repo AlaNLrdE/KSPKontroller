@@ -244,6 +244,7 @@ TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
         };
         for (double apoapsis : {90e3, 250e3, 2e6, 50e6, 1e12}) {
             Snapshot snap = DemoSource(20, 10, 80000, apoapsis).sample(0);
+            snap.maneuver_orbit.reset();  // the current orbit's labels (the dashed orbit has its own test)
             s.display->orbit(panel, snap);
             snap.orbit_state.reset();  // the fallback view without the inertial state
             s.display->orbit(panel, snap);
@@ -254,6 +255,73 @@ TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
         hyperbolic.orbit_state.reset();
         s.display->orbit(panel, hyperbolic);
         CHECK(!seen.empty() && seen.back() == "Pe");
+    }
+}
+
+namespace {
+int maneuver_pixels(const Screen& s, const Rect& r) {
+    int n = 0;
+    for (int y = r.y; y < r.bottom(); ++y)
+        for (int x = r.x; x < r.right(); ++x)
+            if (s.pixel(x, y) == (uint32_t(theme::MANEUVER.r) << 16 | theme::MANEUVER.g << 8 | theme::MANEUVER.b)) ++n;
+    return n;
+}
+}  // namespace
+
+TEST(maneuver_orbit_is_dashed_cached_and_clipped) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        double u = s.canvas->u;
+        Rect panel = orbit_panel(s);
+        std::vector<Rect> labels;
+        s.canvas->on_text = [&](const std::string& label, const Rect& r) {
+            if (label == "Ap" || label == "Pe") labels.push_back(r);
+        };
+        Snapshot snap = demo();
+        CHECK(snap.maneuver_orbit.has_value());
+        s.fill(FILL);
+        s.display->orbit(panel, snap);
+        s.canvas->flush();
+        CHECK(s.display->last_node_marker.has_value());
+        CHECK_EQ(s.display->maneuver_builds, 1);
+        CHECK(maneuver_pixels(s, panel) > 50);
+        CHECK(s.untouched_outside(panel, FILL_PIXEL));
+        CHECK_EQ(labels.size(), size_t(4));  // current Ap/Pe and the planned orbit's own Ap/Pe
+        for (const Rect& r : labels) CHECK(panel.inflate(-2 * u, -2 * u).contains(r));
+        if (s.display->last_node_marker) {  // the diamond sits on the burn point
+            Pt node = *s.display->last_node_marker;
+            CHECK(s.pixel(int(node.x + .7 * u), int(node.y)) != FILL_PIXEL);
+        }
+        Snapshot later = snap;
+        later.ut += 1, later.altitude += 1;  // a new sample, same node: no rebuild
+        s.display->orbit(panel, later);
+        s.display->orbit(panel, snap);
+        CHECK_EQ(s.display->maneuver_builds, 1);
+        snap.maneuver_orbit->velocity = snap.maneuver_orbit->velocity * 1.01;  // node edited: rebuilt once
+        s.display->orbit(panel, snap);
+        s.display->orbit(panel, snap);
+        CHECK_EQ(s.display->maneuver_builds, 2);
+
+        // Escape burns and a post-burn ellipse beyond the sphere of influence: drawn up to it, never outside.
+        for (double prograde : {1200.0, 3000.0, 30000.0}) {
+            Snapshot escape = demo();
+            escape.maneuver_orbit = demo_maneuver(escape.semi_major_axis, escape.eccentricity, KERBIN_MU, .4, prograde);
+            s.fill(FILL);
+            s.display->orbit(panel, escape);
+            s.canvas->flush();
+            CHECK(s.untouched_outside(panel, FILL_PIXEL));
+            CHECK(maneuver_pixels(s, panel) > 20);
+            escape.maneuver_orbit->soi = 1.2e6;  // a small sphere of influence cuts the patch
+            s.display->orbit(panel, escape);
+        }
+        Snapshot broken = demo();
+        broken.maneuver_orbit->velocity = {NAN, 0, 0};
+        s.display->orbit(panel, broken);
+        CHECK(!s.display->last_node_marker);
+        broken.maneuver_orbit.reset();
+        s.display->orbit(panel, broken);
+        CHECK(!s.display->last_node_marker);
+        s.canvas->on_text = nullptr;
     }
 }
 

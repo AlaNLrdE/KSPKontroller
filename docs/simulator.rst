@@ -23,6 +23,7 @@ Running it
    ./ci sim --port COM5          # a given serial port
    ./ci sim --no-board           # only the Pi        (--no-krpc: only the board)
    ./ci sim --headless           # no window, one status line every 2 s
+   ./ci sim --node 250,900       # a 250 m/s prograde maneuver node 900 s ahead (the HMI's dashed orbit)
    ./ci test_sim                 # tests, also part of ./ci verify
 
 The first time Python listens on the LAN, Windows asks whether to allow it: allow it on **private** networks,
@@ -92,7 +93,9 @@ SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``Act
 (above), which is what the board's LEDs show.
 
 Not modelled: other bodies and sphere of influence changes, attitude (pitch/roll/yaw are shown, not
-applied), maneuver nodes and targets (sent as 0), electric charge use beyond a slow drain.
+applied), targets (sent as 0), electric charge use beyond a slow drain. A maneuver node (``--node``, or
+*node_enabled* / *node_dv* / *node_time* in the manual values) is prograde only; its ``Node.orbit`` is the
+reported state coasted ``node_time`` seconds by Kepler propagation (``physics.propagate``), plus ``node_dv``.
 
 Extending it
 ------------

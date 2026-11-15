@@ -43,6 +43,7 @@ class Simulator:
         self.sas_mode = 1               # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
         self._board_prev = physics.Controls()  # the plugin's VControlsOld
         self._board_seeded = False      # the plugin's StageSeeded: the first packet of a link only seeds the bits
+        self.node: dict = {}            # a maneuver node on the flight model (set_node), under manual values
         self.forced: dict = {}          # FORCEABLE key -> pinned value (window overrides)
         self._last_board = 0.0
         self._ksp_check = (0.0, False)
@@ -76,12 +77,20 @@ class Simulator:
                 self.vessel.liquid_fuel = physics.LIQUID_FUEL * f
                 self.vessel.oxidizer = physics.OXIDIZER * f
 
+    def set_node(self, delta_v: float | None, seconds: float = 300.0) -> None:
+        """A prograde maneuver node `seconds` ahead of the vessel (kept ahead while it flies), or none."""
+        with self.lock:
+            self.node = {} if delta_v is None else dict(node_enabled=1.0, node_dv=float(delta_v),
+                                                        node_remaining=float(delta_v), node_time=float(seconds))
+        log.info("maneuver node: %s", "none" if delta_v is None else "%.0f m/s prograde in %.0f s" % (delta_v, seconds))
+
     # -- manual values --------------------------------------------------------------------------------
     def reported(self) -> dict:
         """The values the board and the HMI receive: typed ones in manual mode, else the flight model's, plus the
         game state (action_groups, the VesselData bit field) and the window's forced values on top of both."""
         with self.lock:
             values = self.vessel.report()
+            values.update(self.node)
             if self.manual_values is not None:
                 values.update(self.manual_values)
             values["stage_fuel"] = 100.0 * self.vessel.liquid_fuel / physics.LIQUID_FUEL

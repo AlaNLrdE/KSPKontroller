@@ -92,6 +92,21 @@ where true anomaly and the periapsis direction are ill-conditioned. Ap/Pe are hi
 orbits without a meaningful apsis direction. This is a 2D inertial projection, not a surface-longitude map;
 switching vessels or bodies initializes a new view. The clip still contains unbounded escape trajectories.
 
+With a maneuver node, ORBIT also draws the orbit that results from it, as KSP's map view does: an orange
+dashed line (dash and gap 1.2% of the panel height, constant on screen) with its own small orange Ap/Pe
+markers and a diamond at the burn point; the current orbit stays solid. The source reads the first node's
+``Node.orbit`` with ``Orbit.position_at`` / ``Orbit.velocity_at`` at the node's UT in the same
+``non_rotating_reference_frame``, so the dashed conic shares the fixed view axes. Only the node's identity, UT
+and prograde/normal/radial delta-v are streamed (2 Hz); the post-burn state is fetched again when they change,
+and every 2 s while the node exists (KSP re-plans it from the current orbit, e.g. during the burn). The dashed
+polyline is cached per node state and (0.5%-quantised) scale. A post-burn orbit that leaves the sphere of
+influence or escapes is drawn from the node to the SOI boundary (``CelestialBody.sphere_of_influence``) or
+towards the asymptote, inside the clip. The view widens to include the planned orbit, at most 20 times the
+current one. A node placed after an SOI change (another body), or any kRPC error, hides only the dashed orbit
+(retried after 1 s). On the first node of a session the log says ``maneuver orbit: periapsis ... agrees with
+kRPC``, or warns ``frame mismatch?`` when the state vectors disagree with kRPC's own periapsis.
+``./ci sim --node 250,900`` adds a 250 m/s prograde node 900 s ahead in the simulator; ``--demo`` has one.
+
 On the Pi there is no desktop: frames are drawn with SDL's software renderer and only the changed rows are
 copied to the Linux framebuffer ``/dev/fb0`` (RGB565 or XRGB8888; ``output = fbdev``, set by the service through
 ``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode but left the screen black on the Pi 4 (seen with
