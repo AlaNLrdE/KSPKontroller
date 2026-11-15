@@ -157,11 +157,11 @@ def check_no_direct_debug_log(ctx):
         report("PASS", "no direct Debug.Log", "all logging goes through KSPLogQueue")
 
 
-def check_firmware_receiver(ctx):
-    """Compile real firmware receive functions with fake serial, clock and indicators; never touch hardware."""
+def run_firmware_test(name, sanitize=False):
+    """Compile actual firmware functions with fake peripherals; never touch hardware."""
     compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not compiler:
-        report("WARN", "firmware receiver", "native C++ compiler missing")
+        report("WARN", "firmware " + name, "native C++ compiler missing")
         return
     sketch = os.path.join(SKETCH_DIR, "KSPIODemo9.ino")
     source = read(sketch)
@@ -171,13 +171,25 @@ def check_firmware_receiver(ctx):
     os.makedirs(build, exist_ok=True)
     with open(os.path.join(build, "firmware_packets.hpp"), "w", encoding="utf-8") as out:
         out.write(source[start:end])
-    binary = os.path.join(build, "test_receiver.exe" if os.name == "nt" else "test_receiver")
-    test = os.path.join(ROOT, "tools", "firmware-tests", "test_receiver.cpp")
-    result = subprocess.run([compiler, "-std=c++17", "-Wall", "-Wextra", "-I", build, test, "-o", binary],
+    binary = os.path.join(build, "test_" + name + (".exe" if os.name == "nt" else ""))
+    test = os.path.join(ROOT, "tools", "firmware-tests", "test_" + name + ".cpp")
+    flags = ["-std=c++17", "-Wall", "-Wextra", "-I", build, "-I", os.path.dirname(test)]
+    if sanitize:
+        flags += ["-fsanitize=undefined,float-cast-overflow", "-fno-sanitize-recover=all"]
+    result = subprocess.run([compiler] + flags + [test, "-o", binary],
                             capture_output=True, text=True, timeout=60)
     if result.returncode == 0:
         result = subprocess.run([binary], capture_output=True, text=True, timeout=10)
-    report("PASS" if result.returncode == 0 else "FAIL", "firmware receiver", (result.stdout + result.stderr).strip())
+    report("PASS" if result.returncode == 0 else "FAIL", "firmware " + name, (result.stdout + result.stderr).strip())
+
+
+
+def check_firmware_receiver(ctx):
+    run_firmware_test("receiver")
+
+
+def check_firmware_matrix(ctx):
+    run_firmware_test("matrix", sanitize=True)
 
 
 def check_button_events(ctx):
@@ -890,7 +902,7 @@ def check_board(ctx):
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
-CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_firmware_receiver, check_button_events, check_plugin_safety, check_no_direct_debug_log,
+CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_safety, check_no_direct_debug_log,
           check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
 
 
@@ -902,7 +914,7 @@ def main():
     ap.add_argument("--port", help="serial port for --board, for example COM5")
     ap.add_argument("--snapshot", action="store_true", help="record the GameData entries now present")
     ap.add_argument("--docs-only", action="store_true", help="check documentation guides, UML lifelines and API coverage without KSP or hardware")
-    ap.add_argument("--firmware-only", action="store_true", help="run native firmware receiver tests without KSP or hardware")
+    ap.add_argument("--firmware-only", action="store_true", help="run native firmware tests without KSP or hardware")
     args = ap.parse_args()
     if args.firmware_only and (args.docs_only or args.board or args.snapshot):
         ap.error("--firmware-only cannot be combined with --docs-only, --board or --snapshot")
@@ -913,7 +925,7 @@ def main():
     ctx["log"] = args.log or os.path.join(ctx["ksp"], "KSP.log")
     if not (args.docs_only or args.firmware_only):
         report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
-    for chk in ([check_firmware_receiver] if args.firmware_only else [check_documentation] if args.docs_only else CHECKS):
+    for chk in ([check_firmware_receiver, check_firmware_matrix] if args.firmware_only else [check_documentation] if args.docs_only else CHECKS):
         try:
             chk(ctx)
         except Exception as e:  # a broken check must never hide the others

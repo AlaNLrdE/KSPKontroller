@@ -180,7 +180,9 @@ Flight data pages. In flight the automatic mode rotates every 3 s through the fu
 fields. Three 3x5 digits are all that fit in 12 columns, so each field takes two steps: first a label for 1.2 s
 (a letter A, P, I, H or V and an icon: up arrow, down arrow, slope, stacked arrows, right arrow), then the value
 for the rest of the slot. The value has up to three digits, or one decimal below 10 (``1.2``), a minus sign when
-negative (two digits then), and dots on the bottom row for the unit: one dot is metres (or m/s), two dots
+negative (two digits then). Non-finite values (infinity or NaN, such as an escape-orbit apoapsis) show
+``---`` without unit dots. Finite magnitudes are capped before integer conversion at 999, or 99 after
+a minus sign. Dots on the bottom row give the unit: one dot is metres (or m/s), two dots
 kilometres (or km/s), three dots thousands of kilometres. Inclination is in degrees and has no dots. With the
 screen button the data screen cycles the same way by itself. ``tools/matrix_preview.py`` draws every label and
 value page with sample numbers.

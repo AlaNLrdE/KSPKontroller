@@ -13,6 +13,7 @@
  */
 
 #include "Arduino_LED_Matrix.h"
+#include <math.h>
 
 #define MX_W 12                 ///< Matrix width in pixels
 #define MX_H 8                  ///< Matrix height in pixels
@@ -238,6 +239,11 @@ static void drawDataLabel(uint8_t field) {
 static void drawDataValue(uint8_t field) {
   uint8_t dots;
   float v = dataValue(field, &dots);
+  if (!isfinite(v)) {
+    // Unavailable telemetry (e.g. apoapsis on escape): three dashes, without unit dots.
+    for (int x = 0; x < 11; x++) if ((x % 4) < 3) setPx(x, 3);
+    return;
+  }
   bool neg = v < 0;
   float a = neg ? -v : v;
   if (a < 9.95f) {                                   // d.d : digit, point, digit
@@ -248,10 +254,9 @@ static void drawDataValue(uint8_t field) {
     setPx(x0 + 4, 5);
     drawGlyph(t % 10, x0 + 6, 1);
   } else {
-    int n = (int)(a + 0.5f);
     int maxDigits = neg ? 2 : 3;
     int cap = neg ? 99 : 999;
-    if (n > cap) n = cap;
+    int n = a >= cap ? cap : (int)(a + 0.5f);  // clamp while still floating point, before conversion
     int digits = n >= 100 ? 3 : (n >= 10 ? 2 : 1);
     if (digits > maxDigits) digits = maxDigits;
     int width = digits * 4 - 1;

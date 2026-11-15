@@ -72,6 +72,11 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
   bytes intact. `python3 tools/verify.py --firmware-only` tests the actual receive/dispatch/handshake code
   with fake peripherals, including a handshake already queued when expiry is first observed.
 
+- Matrix data pages can receive infinity/NaN (escape apoapsis) or finite values beyond int range. Check
+  isfinite before numeric drawing and saturate finite magnitudes before casting, not afterwards. Missing
+  data shows three dashes without unit dots. `--firmware-only` runs the real matrix renderer with fake
+  peripherals under UBSan, including float-cast-overflow checks across all five data fields.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
