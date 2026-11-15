@@ -90,7 +90,11 @@ Reading the port safely
 only touched by one thread. The parser rejects zero-length packets, stops at the announced
 size, and any exception in the worker is logged and resets the parser instead of leaving it
 stuck. A completed packet is handed to the main thread through ``NewPacketBuffer`` guarded by
-``SerialMutex``.
+``SerialMutex``. Before replacing that latest-value buffer, the reader captures STAGE rising edges and
+both SAS/RCS transitions in ``ButtonEvents`` with their receive timestamps. The first packet after a
+reset establishes the baseline; pending presses are cleared on reconnect or flight initialization.
+Unity consumes every queued press in order, while analog axes and level switches use the latest packet.
+STAGE requests older than one second are discarded using their actual receive time.
 
 Port discovery and failures
 ---------------------------

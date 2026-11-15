@@ -1,0 +1,56 @@
+using System;
+using System.Threading;
+using KSPSerialIO;
+
+class Program
+{
+    static void Check(bool value, string name)
+    {
+        if (!value) throw new Exception(name);
+    }
+
+    static void Main()
+    {
+        var buttons = new ButtonEvents();
+        buttons.Capture(193, 10); // held STAGE and retained SAS/RCS bits only seed the baseline
+        Check(buttons.Take().Length == 0, "startup must not create presses");
+        buttons.Capture(192, 20);
+        buttons.Capture(193, 30);
+        buttons.Capture(192, 180); // complete 150 ms pulse before the main thread consumes anything
+        var presses = buttons.Take();
+        Check(presses.Length == 1 && presses[0].Bit == 0 && presses[0].Received == 30,
+            "stage pulse must survive release and keep its actual receipt timestamp");
+        Check(buttons.Take().Length == 0, "a press is consumed once");
+        buttons.Capture(0, 200);
+        buttons.Capture(192, 400); // two presses of both toggle buttons return bits to their initial state
+        presses = buttons.Take();
+        Check(presses.Length == 4 && presses[0].Bit == 6 && presses[1].Bit == 7 &&
+            presses[2].Bit == 6 && presses[3].Bit == 7, "both SAS/RCS transitions must survive");
+        buttons.Capture(193, 500);
+        buttons.Capture(193, 600);
+        Check(buttons.Take().Length == 1, "held stage must not repeat");
+        buttons.Capture(192, 700);
+        buttons.Capture(193, 800);
+        buttons.Reset();
+        buttons.Capture(193, 900);
+        Check(buttons.Take().Length == 0, "reconnect drops pending presses and reseeds held buttons");
+        buttons.Capture(192, int.MaxValue - 10);
+        buttons.Capture(193, int.MaxValue - 5);
+        presses = buttons.Take();
+        Check(unchecked((int.MinValue + 5) - presses[0].Received) == 11,
+            "receipt timestamp must support TickCount wraparound");
+        buttons.Reset();
+        buttons.Capture(0, 0);
+        const int count = 2000;
+        var producer = new Thread(() => {
+            for (int i = 1; i <= count; ++i) buttons.Capture((byte)((i % 2) * 128), i);
+        });
+        producer.Start();
+        int consumed = 0;
+        while (producer.IsAlive) consumed += buttons.Take().Length;
+        producer.Join();
+        consumed += buttons.Take().Length;
+        Check(consumed == count, "concurrent consumption must preserve every edge");
+        Console.WriteLine("PASS button events: stage pulse, SAS/RCS transitions, baseline, timestamps, reset, concurrency");
+    }
+}

@@ -10,14 +10,14 @@ if (active vessel and LinkReady?) then (yes)
     :TrySendPacket(VData)\nreplace pending frame for SenderWorker;
   endif
   if (ControlReceived?) then (yes)
-    :toggle SAS/RCS on changed button bits\napply changed level switches;
-    if (latched stage request?) then (yes)
+    :drain queued button events in receive order\ntoggle SAS/RCS for each transition\napply changed level switches;
+    if (queued STAGE rising edge?) then (yes)
       if (request age in 0..1000 ms?) then (yes)
         :StageManager.ActivateNextStage();
       else (no)
         :log stale request;
       endif
-      :consume stage request;
+      :consume each stage event;
     endif
     :apply changed custom groups, SAS mode and speed mode;
     :ControlReceived = false;

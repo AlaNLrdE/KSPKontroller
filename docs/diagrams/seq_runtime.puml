@@ -42,19 +42,19 @@ deactivate FW
 Port ->> RX : read completion with bytes
 activate RX
 RX -> RX : parse frame and validate
-RX -> SP : store packet under SerialMutex
+RX -> SP : capture button edges + receive time\nstore latest packet under SerialMutex
 activate SP
 SP --> RX : packet available
 deactivate SP
 deactivate RX
 == Main-thread dispatch and control application ==
 activate SP
-SP -> SP : Update() / InboundPacketHandler()\ndecode controls; latch stage edge
+SP -> SP : Update() / InboundPacketHandler()\ndecode latest controls
 deactivate SP
 activate IO
-IO -> SP : consume controls and fresh stage request
+IO -> SP : consume latest controls and queued button events
 activate SP
-SP --> IO : VControls / stage timestamp
+SP --> IO : VControls / ordered button events
 deactivate SP
 IO -> IO : apply level changes / SAS-RCS transitions\nconsume fresh stage request
 deactivate IO

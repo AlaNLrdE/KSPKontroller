@@ -58,6 +58,15 @@ Verification matrix
      - Interactive test app and actual HMI together through noVNC.
      - Hardware performance or real KSP execution.
 
+Button event regression tests
+-----------------------------
+
+``./ci verify`` runs the standalone C# tests in ``tools/button-events-tests`` when the .NET 8 SDK is
+available. They compile the production ``ButtonEvents`` source without Unity and cover a complete
+STAGE pulse before consumption, repeated SAS/RCS presses, held-button baselines, reconnect reset,
+receive timestamps and concurrent capture/consumption. Artifacts stay under ``build/button-events-tests``.
+They do not validate Unity action group behavior or the physical serial link.
+
 HMI test layers
 ---------------
 

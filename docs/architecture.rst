@@ -98,8 +98,8 @@ Execution and synchronization
      - Game API access, control application, received-packet dispatch, UDP context replies.
      - Background logs are marshalled through ``KSPLogQueue``.
    * - Serial reader worker
-     - One outstanding read and parser progression; discovery handshake handling.
-     - ``SerialMutex`` protects packet handoff.
+     - One outstanding read, parser progression, receive-time button edges and discovery handshake handling.
+     - ``SerialMutex`` protects packet handoff; ``ButtonEvents`` locks its event queue.
    * - Serial sender worker
      - Blocking serial writes and write-failure accounting.
      - Latest pending telemetry frame, protected by ``sendLock``.
@@ -120,8 +120,9 @@ Execution and synchronization
      - Owns rendering resources; no RPC calls in the frame loop.
 
 Latest-value slots bound backlog: an obsolete telemetry frame or display snapshot is less useful than
-the newest state. They are not durable event queues. The stage receive-time edge latch is a specific
-exception for a short-lived control event; it is not a general command acknowledgement mechanism.
+the newest state. They are not durable event queues. STAGE rising edges and SAS/RCS bit transitions
+use a separate receive-time event queue so replacing the latest controls cannot erase presses.
+STAGE events expire after one second; this is not a general command acknowledgement mechanism.
 
 Failure domains
 ---------------

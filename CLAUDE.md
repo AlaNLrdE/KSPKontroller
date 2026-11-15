@@ -120,3 +120,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   fixed view axes per vessel/body. Never anchor the camera or live marker to periapsis/true anomaly:
   near-circular RCS impulses can flip apsis direction without moving the vessel's position.
 
+
+- Control packets use a latest-value buffer, but STAGE/SAS/RCS presses are events: capture their edges and
+  receipt times on the serial reader before replacing that buffer. Decode/apply game controls only on Unity's
+  thread; a latch in the main-thread decoder cannot recover packets already overwritten by the reader.

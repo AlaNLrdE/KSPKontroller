@@ -16,9 +16,12 @@ queue "NewPacketBuffer\nSerialMutex" as RX
 queue "Newest pending frame\nsendLock" as TX
 queue "KSPLogQueue" as Logs
 component "Serial port" as Port
-Reader --> RX : valid received payload
+queue "ButtonEvents\nreceive timestamps / private lock" as Buttons
+Reader --> Buttons : STAGE rises; SAS/RCS transitions
+Buttons --> IO : drain in receive order
+Reader --> RX : latest valid payload
 RX --> Dispatch : consume
-Dispatch --> IO : decoded controls / edge latch
+Dispatch --> IO : latest decoded controls
 IO --> TX : TrySendPacket
 TX --> Writer : replaceable telemetry
 Writer --> Port : blocking write

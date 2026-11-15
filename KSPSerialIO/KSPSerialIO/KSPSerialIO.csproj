@@ -62,6 +62,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="KSPIO.cs" />
+    <Compile Include="ButtonEvents.cs" />
     <Compile Include="HmiContext.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

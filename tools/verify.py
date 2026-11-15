@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -154,6 +155,23 @@ def check_no_direct_debug_log(ctx):
         report("FAIL", "no direct Debug.Log", "Debug.Log outside KSPLogQueue (unsafe from worker threads), lines %s" % hits[:10])
     else:
         report("PASS", "no direct Debug.Log", "all logging goes through KSPLogQueue")
+
+
+def check_button_events(ctx):
+    """Exercise the actual C# receive-time event queue without Unity or a serial device."""
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        report("WARN", "button events", "dotnet SDK missing; cannot run the standalone C# regression tests")
+        return
+    project = os.path.join(ROOT, "tools", "button-events-tests", "ButtonEvents.Tests.csproj")
+    artifacts = os.path.join(ROOT, "build", "button-events-tests")
+    cmd = [dotnet, "build", project, "--configuration", "Release", "--artifacts-path", artifacts, "--nologo"]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode == 0:
+        dll = os.path.join(artifacts, "bin", "ButtonEvents.Tests", "release", "ButtonEvents.Tests.dll")
+        result = subprocess.run([dotnet, dll], capture_output=True, text=True, timeout=30)
+    detail = (result.stdout + result.stderr).strip()
+    report("PASS" if result.returncode == 0 else "FAIL", "button events", detail)
 
 
 def check_plugin_safety(ctx):
@@ -849,7 +867,7 @@ def check_board(ctx):
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
-CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
+CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_button_events, check_plugin_safety, check_no_direct_debug_log,
           check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
 
 

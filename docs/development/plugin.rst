@@ -74,10 +74,12 @@ thread compares current and prior values before applying changes. SAS/RCS are ev
 lights, gear and other level switches use their new state. The initial control packet establishes a
 baseline, so entering flight or reconnecting does not manufacture a button press.
 
-Stage is special: receive-time edge detection latches a timestamp, and main-thread application consumes
-only a fresh request. The baseline prevents a held startup button from staging, and the timestamp
-avoids applying an obsolete request after a delay. Do not turn it into an unconditional stage action
-on every packet whose bit is set.
+The reader captures STAGE rising edges and both SAS/RCS bit transitions in ``ButtonEvents`` before
+replacing ``NewPacketBuffer``. Its synchronized queue preserves multiple presses during a stalled frame;
+Unity drains the events in order, independently of the latest analog values. STAGE events retain their
+receive timestamp, and only requests up to one second old activate the next stage. Reconnect and flight
+initialization clear pending events and reset the receive baseline, preventing a held startup button
+from staging. Do not turn STAGE into an unconditional action on every packet whose bit is set.
 
 ``AxisInput`` runs through ``OnPostAutopilotUpdate`` and merges controller axes into ``FlightCtrlState``
 using the per-axis enable mode. Mode zero preserves KSP input; modes one to three choose or combine
