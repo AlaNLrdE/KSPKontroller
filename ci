@@ -24,7 +24,8 @@
 #   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
 #   ./ci hmi_desktop        Open both HMI and simulator windows in a browser desktop at localhost:6080
 #   ./ci test_hmi_desktop   Exercise the real simulator GUI controls and their connection to the C++ HMI
-#   ./ci deploy_hmi          Copy hmi-cpp/ to the Pi over SSH, build and test it there, install ksphmi.service, restart
+#   ./ci deploy_hmi          Copy hmi-cpp/ to the Pi over SSH, build and test it there, install ksphmi.service, restart;
+#                            then apply the kiosk boot (setup-kiosk.sh, asks for the sudo password) when it changed
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
@@ -45,6 +46,7 @@
 #   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
 #   HMI_HOST      SSH destination of the Raspberry Pi (default: ksphmi, a Host entry in ~/.ssh/config)
 #   HMI_KRPC_ADDRESS  kRPC server address the Pi uses (default: this PC's address as the Pi sees it)
+#   NO_KIOSK      Set to 1 to make deploy_hmi only report an outdated kiosk boot instead of applying it
 
 set -euo pipefail
 
@@ -534,7 +536,7 @@ HMI_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 font
   libasound2t64 libdecor-0-0 libpulse0 libsamplerate0 libsndfile1 libasyncns0 libflac12t64 libvorbisenc2
   libvorbis0a libogg0 libopus0 libmpg123-0t64 libmp3lame0"
 
-hmi_ssh() {
+hmi_ssh_client() {
   local client=ssh
   # Git Bash's MSYS SSH can abort long builds with "poll: No error".
   # Prefer Windows OpenSSH when installed; preserve stdin for tar transfers.
@@ -543,7 +545,16 @@ hmi_ssh() {
     native="$(cygpath -u "${SYSTEMROOT:-C:/Windows}")/System32/OpenSSH/ssh.exe"
     [ ! -x "$native" ] || client="$native"
   fi
-  "$client" -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
+  printf '%s\n' "$client"
+}
+
+hmi_ssh() {
+  "$(hmi_ssh_client)" -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
+}
+
+# With a terminal, for commands that prompt on the Pi (sudo's password).
+hmi_ssh_tty() {
+  "$(hmi_ssh_client)" -tt -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
 }
 
 # Windows has no C++ toolchain here: run the same ./ci target inside WSL when it is installed.
@@ -690,12 +701,6 @@ run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-lin
 deploy_hmi() {
   hmi_preflight
   local pc_ip
-  # The text console's blinking cursor is drawn over the HMI frames; only root can stop it (not fatal)
-  # (the live cursor_blink value is not enough: it reads 0 whenever fbcon's timer happens to be stopped)
-  if ! hmi_ssh 'test -f /etc/tmpfiles.d/ksphmi-cursor.conf'; then
-    log "WARNING: the console cursor blinks over the HMI. Once, on the Pi:"
-    log "  echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
-  fi
   pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
 
   log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
@@ -733,7 +738,29 @@ deploy_hmi() {
   state="$(hmi_ssh 'echo "$(systemctl --user is-active ksphmi.service)/$(systemctl --user show ksphmi.service -p NRestarts --value)"' || true)"
   hmi_logs 15
   [ "$state" = "active/0" ] || die "the HMI service is not running cleanly on $HMI_HOST (state/restarts: $state, log above)"
+  hmi_kiosk
   log "Done: HMI running on $HMI_HOST"
+}
+
+# Kiosk boot (no console text, loading screen, cursor off, persistent journal): setup-kiosk.sh needs root, so it
+# runs only when the deployed script differs from the one last applied (/etc/ksphmi-kiosk.applied holds its sha256).
+# Without a terminal (or with NO_KIOSK=1) it only prints the command; it never reboots the Pi by itself.
+hmi_kiosk() {
+  local want have cmd='sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh'
+  want="$(hmi_ssh "sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh | cut -d' ' -f1")"
+  have="$(hmi_ssh 'cat /etc/ksphmi-kiosk.applied 2>/dev/null' || true)"
+  if [ -n "$want" ] && [ "$want" = "$have" ]; then
+    log "Kiosk boot up to date on $HMI_HOST"
+    return
+  fi
+  if [ "${NO_KIOSK:-0}" = "1" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
+    log "WARNING: the kiosk boot on $HMI_HOST is not the deployed version. Run it (sudo password), then reboot:"
+    log "  ssh -t $HMI_HOST '$cmd && sudo reboot'"
+    return
+  fi
+  log "Applying the kiosk boot on $HMI_HOST: sudo asks for the Pi user's password"
+  hmi_ssh_tty "$cmd" || die "setup-kiosk.sh failed on $HMI_HOST (the HMI itself is deployed and running)"
+  log "Kiosk boot applied; it takes effect at the next reboot: ssh -t $HMI_HOST sudo reboot"
 }
 
 hmi_logs() {
@@ -746,7 +773,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,44p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;

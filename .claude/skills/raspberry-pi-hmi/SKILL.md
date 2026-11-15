@@ -49,11 +49,17 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - Kiosk boot (2026-11-14, `hmi-cpp/systemd/setup-kiosk.sh`, run by the user with sudo, `--undo` reverts): a
   system oneshot `ksphmi-splash.service` runs `ksphmi --splash` after `dev-fb0.device` (needs the udev rule
   `TAG+="systemd"` on fb0, else the device unit never appears) and before `systemd-user-sessions.service`, so the
-  HMI's first frame always comes after it. Removing `console=tty1` alone is not enough: with no `console=` left the
-  kernel falls back to tty0 (the screen), and on a Pi 4 without `enable_uart=1` `serial0` may not exist; so
-  `console=ttynull` goes **first** (the last `console=` becomes `/dev/console`). Never add `fbcon=map:`/`nodefer`:
-  with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies it with
-  `FBIOPUT_VSCREENINFO` + `FB_ACTIVATE_FORCE`. Unverified until the first reboot: ask the user what they saw.
+  HMI's first frame always comes after it. **Never `console=ttynull`** (2026-11-15): it hung the Pi 4 early in boot
+  (black screen with backlight on, no ping, nothing in the journal); keep `console=tty1` and silence it with
+  `quiet loglevel=3 systemd.show_status=false` (verified: splash at ~7 s, HMI at ~12 s, no text). Never add
+  `fbcon=map:`/`nodefer`: with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies
+  it with `FBIOPUT_VSCREENINFO` + `FB_ACTIVATE_FORCE`. `./ci deploy_hmi` reruns the script (ssh -t, user types the
+  sudo password) when its sha256 differs from `/etc/ksphmi-kiosk.applied`; it never reboots.
+- Pi that boots to black and no ping: bisect `cmdline.txt` on the SD from Windows (FAT `bootfs` drive); keep the
+  known-good line as a backup file next to it. Change one variable per boot; `systemd.mask=UNIT` in cmdline.txt
+  disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means
+  the HDMI cable/monitor was not detected, not a software fault. `/dev/fb0` first appears as `simplefb` (~4.5 s)
+  and is replaced by `vc4drmfb` (~6.5 s).
 - Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (in WSL; the
   path is relative to the repo), then look at the PNG.
 - Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per

@@ -5,14 +5,18 @@
 # Idempotent: run it again after any change to this script. SSH, Wi-Fi/LAN and the serial console stay as they are.
 #
 # What it changes (each step is reverted by --undo):
-#  - cmdline.txt: no kernel/systemd/cloud-init text on the screen (console only on serial0 or nowhere), no logo, no
-#    console cursor, no console blanking (backup: cmdline.txt.ksphmi-backup);
+#  - cmdline.txt: kernel/systemd text silenced (quiet, loglevel=3, no status), no logo, no console cursor, no
+#    console blanking (backup: cmdline.txt.ksphmi-backup). console=tty1 stays: console=ttynull hung the Pi 4 early
+#    in boot (black screen, no network, nothing in the journal; 2026-11-15), so it is removed if present;
 #  - config.txt: no firmware rainbow splash, no under-voltage/warning overlays (backup: config.txt.ksphmi-backup);
 #  - /etc/tmpfiles.d/ksphmi-cursor.conf: fbcon cursor blinking off at every boot;
 #  - getty@tty1 masked: no login prompt on the screen (SSH logins are unaffected);
 #  - /etc/udev/rules.d/99-ksphmi-fb.rules + /etc/systemd/system/ksphmi-splash.service: `ksphmi --splash` paints
 #    the loading screen as soon as /dev/fb0 exists;
-#  - lingering for the HMI user, so the user unit ksphmi.service starts at boot without a login.
+#  - /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf: the journal survives reboots (Raspberry Pi OS keeps it
+#    in RAM), so a failed boot can be read with journalctl -b -1;
+#  - lingering for the HMI user, so the user unit ksphmi.service starts at boot without a login;
+#  - /etc/ksphmi-kiosk.applied: sha256 of this script, so ./ci deploy_hmi knows when to run it again.
 set -eu
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run with sudo: sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh [--undo]" >&2
@@ -43,6 +47,8 @@ config="$(dirname "$cmdline")/config.txt"
 unit=/etc/systemd/system/ksphmi-splash.service
 rule=/etc/udev/rules.d/99-ksphmi-fb.rules
 cursor=/etc/tmpfiles.d/ksphmi-cursor.conf
+journal=/etc/systemd/journald.conf.d/50-ksphmi-persistent.conf
+stamp=/etc/ksphmi-kiosk.applied
 
 if [ "$undo" = yes ]; then
     for f in "$cmdline" "$config"; do
@@ -52,8 +58,9 @@ if [ "$undo" = yes ]; then
         fi
     done
     systemctl disable ksphmi-splash.service 2>/dev/null || true
-    rm -f "$unit" "$rule" "$cursor"
+    rm -f "$unit" "$rule" "$cursor" "$journal" "$stamp"
     systemctl daemon-reload
+    systemctl restart systemd-journald 2>/dev/null || true
     udevadm control --reload 2>/dev/null || true
     systemctl unmask getty@tty1.service
     systemctl enable getty@tty1.service 2>/dev/null || true
@@ -71,14 +78,15 @@ original = path.read_text()
 backup = path.with_name(path.name + '.ksphmi-backup')
 if not backup.exists():
     backup.write_text(original)
-# console=ttynull first: when serial0 is not enabled the kernel would otherwise fall back to the screen (tty0)
-# for its messages; with serial0 present it stays the last console, so /dev/console remains the serial port.
-first = ['console=ttynull']
-add = ['quiet', 'loglevel=3', 'logo.nologo', 'vt.global_cursor_default=0', 'consoleblank=0',
+# Keep console=tty1 (and serial0): quiet + loglevel=3 + no systemd status already keep the screen clean, and
+# console=ttynull hung the Pi 4 before the journal was written (black screen, no network). Drop it if an older
+# version of this script added it.
+first = []
+add =['quiet', 'loglevel=3', 'logo.nologo', 'vt.global_cursor_default=0', 'consoleblank=0',
        'systemd.show_status=false', 'rd.systemd.show_status=false', 'plymouth.enable=0']
 keys = {a.split('=', 1)[0] for a in add if '=' in a}
 args = [a for a in original.split()
-        if not re.fullmatch(r'console=tty(\d+|null)', a) and a not in add and a.split('=', 1)[0] not in keys]
+        if a != 'console=ttynull' and a not in add and a.split('=', 1)[0] not in keys]
 path.write_text(' '.join(first + args + add) + '\n')
 config = path.with_name('config.txt')
 if config.exists():
@@ -109,7 +117,13 @@ sed -e "s|@USER@|$user|g" -e "s|@HOME@|$home|g" "$here/ksphmi-splash.service" > 
 systemctl daemon-reload
 systemctl enable ksphmi-splash.service
 
+# Keep the journal on disk: a boot that fails before SSH comes up can then be read after the next good boot.
+mkdir -p "$(dirname "$journal")"
+printf '%s\n' '[Journal]' 'Storage=persistent' > "$journal"
+systemctl restart systemd-journald || true
+
 loginctl enable-linger "$user"
+sha256sum "$here/$(basename "$0")" | cut -d' ' -f1 > "$stamp"
 if [ ! -e "$home/.config/systemd/user/default.target.wants/ksphmi.service" ]; then
     echo "WARNING: ksphmi.service is not enabled for $user: run ./ci deploy_hmi from the PC" >&2
 fi

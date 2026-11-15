@@ -612,9 +612,14 @@ def kiosk_problems(env):
     missing = []
     if not args:
         return ["cmdline.txt unreadable"]
-    if any(re.fullmatch(r"console=tty\d+", a) for a in args):
-        missing.append("console=tty* removed")
+    # console=ttynull hung the Pi 4 early in boot (black screen, no network, no journal; 2026-11-15)
+    if "console=ttynull" in args:
+        missing.append("console=ttynull removed (it hangs the boot)")
     missing += [flag for flag in KIOSK_CMDLINE if flag not in args]
+    if env.get("journal") != "yes":
+        missing.append("persistent journal")
+    if env.get("kioskwant") and env.get("kioskwant") != env.get("kioskhave"):
+        missing.append("setup-kiosk.sh applied in its deployed version")
     if env.get("nosplash") != "yes":
         missing.append("disable_splash=1")
     if env.get("tty1") != "masked":
@@ -653,7 +658,10 @@ def check_hmi(ctx):
              "echo \"nosplash=$(grep -qsx '[[:space:]]*disable_splash=1[[:space:]]*' $(dirname $bootfile)/config.txt "
              "&& echo yes || echo no)\"; "
              "echo \"splashunit=$(systemctl is-enabled ksphmi-splash.service 2>/dev/null || true)\"; "
-             "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"")
+             "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"; "
+             "echo \"journal=$(test -f /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf && echo yes || echo no)\"; "
+             "echo \"kioskwant=$(sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
+             "echo \"kioskhave=$(cat /etc/ksphmi-kiosk.applied 2>/dev/null)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
                            capture_output=True, text=True, timeout=15)
@@ -697,7 +705,8 @@ def check_hmi(ctx):
            "service enabled with lingering" if autostart else "enable service and loginctl lingering")
     missing = kiosk_problems(env)
     report("WARN" if missing else "PASS", "hmi: kiosk boot",
-           "missing: %s; run sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi, then reboot" % ", ".join(missing)
+           "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi), "
+           "then reboot" % ", ".join(missing)
            if missing else "splash unit, quiet console, no firmware splash, login prompt masked")
     cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
     report("PASS" if cpp else "WARN", "hmi: C++ unit",
