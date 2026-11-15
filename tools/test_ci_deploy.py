@@ -86,6 +86,65 @@ unzip() { mkdir -p "$REFASM_DIR/build/.NETFramework/v3.5"; touch "$REFASM_DIR/bu
                     self.assertNotIn('==>', path)
                     self.assertEqual('Downloading .NET 3.5' in result.stderr, cold)
 
+    def test_hmi_reference_assembly_path_is_clean_with_empty_and_warm_cache(self):
+        ci = (ROOT / 'ci').read_text(encoding='utf-8')
+        helper = re.search(r'^ensure_hmi_refassemblies\(\) \{\n.*?^\}', ci, re.M | re.S)
+        self.assertIsNotNone(helper)
+        with tempfile.TemporaryDirectory(prefix='ksp refs ') as directory:
+            script = '''set -euo pipefail
+log() { printf '==> %s\\n' "$*"; }
+is_windows() { return 1; }
+curl() { printf 'fake archive' > "$3"; }
+unzip() { mkdir -p "$HMI_REFASM_DIR/build/.NETFramework/v4.7.1"; touch "$HMI_REFASM_DIR/build/.NETFramework/v4.7.1/mscorlib.dll"; }
+'''
+            script += helper.group() + '\nrefs="$(ensure_hmi_refassemblies)"\nprintf "%s\\n" "$refs"\n'
+            env = dict(os.environ, HMI_REFASM_DIR=Path(directory).as_posix(), REFASM_VERSION='test')
+            for cold in (True, False):
+                result = subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(result.stdout.splitlines()), 1, result.stdout)
+                self.assertTrue(result.stdout.strip().endswith('v4.7.1'), result.stdout)
+                self.assertEqual('Downloading .NET 4.7.1' in result.stderr, cold)
+
+    def test_hmi_plugin_builds_only_with_krpc_and_against_the_install(self):
+        ci = (ROOT / 'ci').read_text(encoding='utf-8')
+        helper = re.search(r'^build_KSPSerialIO_Hmi\(\) \{\n.*?^\}', ci, re.M | re.S)
+        self.assertIsNotNone(helper)
+        # The plugin build always runs it; KSPSerialIO.dll itself never references kRPC.
+        build = re.search(r'^build_KSPSerialIO\(\) \{\n.*?^\}', ci, re.M | re.S)
+        self.assertIn('build_KSPSerialIO_Hmi', build.group())
+        with tempfile.TemporaryDirectory(prefix='ksp install ') as directory:
+            ksp = Path(directory)
+            script = '''set -euo pipefail
+log() { printf '==> %s\\n' "$*"; }
+find_kspdir() { [ -n "$FAKE_KSP" ] && printf '%s\\n' "$FAKE_KSP"; }
+ensure_hmi_refassemblies() { printf '%s\\n' 'REFS 4.7.1'; }
+msbuild() { printf '%s\\n' "$@" > "$TRACE"; }
+xbuild() { msbuild "$@"; }
+dotnet() { msbuild "$@"; }
+'''
+            script += helper.group() + '\nbuild_KSPSerialIO_Hmi\n'
+            trace = ksp / 'trace.txt'
+            base = dict(os.environ, TRACE=trace.as_posix(), CONFIG='Release', HMI_PLUGIN_PROJ='proj.csproj',
+                        HMI_PLUGIN_OUT='out')
+            for name, fake_ksp, krpc, built in (('no install', '', False, False), ('no kRPC', ksp.as_posix(), False, False),
+                                                 ('kRPC installed', ksp.as_posix(), True, True)):
+                with self.subTest(name):
+                    if krpc:
+                        (ksp / 'GameData/kRPC').mkdir(parents=True, exist_ok=True)
+                        (ksp / 'GameData/kRPC/KRPC.Core.dll').write_bytes(b'')
+                    result = subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script],
+                                            env=dict(base, FAKE_KSP=fake_ksp), capture_output=True, text=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(trace.exists(), built, result.stderr)
+                    if built:
+                        args = trace.read_text().splitlines()
+                        self.assertIn('-p:KSPDIR=' + ksp.as_posix(), args)
+                        self.assertIn('-p:FrameworkPathOverride=REFS 4.7.1', args)
+                    else:
+                        self.assertIn('KSPSerialIO.Hmi.dll not built', result.stderr)
+
     def run_flow(self, **settings):
         bash = find_bash()
         self.assertIsNotNone(bash, 'Bash is required to validate the deployment command')

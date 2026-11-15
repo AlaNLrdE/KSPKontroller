@@ -32,6 +32,9 @@ CHANGELOG = os.path.join(ROOT, "KSPSerialIO", "CHANGELOG.md")
 REPO_CONFIG = os.path.join(ROOT, "KSPSerialIO", "config.xml")
 BUILT_DLL = os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "bin", "Release", "KSPSerialIO.dll")
 SNAPSHOT = os.path.join(ROOT, "build", "gamedata_snapshot.json")
+HMI_PLUGIN_DIR = os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO.Hmi")
+HMI_ASSEMBLY_INFO = os.path.join(HMI_PLUGIN_DIR, "Properties", "AssemblyInfo.cs")
+HMI_BUILT_DLL = os.path.join(HMI_PLUGIN_DIR, "bin", "Release", "KSPSerialIO.Hmi.dll")
 
 results = []  # (status, name, detail)
 
@@ -124,8 +127,12 @@ def check_versions(ctx):
         report("FAIL", "version", "could not read AssemblyInfo or CHANGELOG")
         return
     ctx["version"] = asm.group(1)
+    # KSPSerialIO.Hmi.dll is deployed with the plugin and carries the same version.
+    hmi = re.findall(r'Assembly(?:File)?Version\("([\d.]+)"\)', read(HMI_ASSEMBLY_INFO))
     if not (asm.group(1) == fileasm.group(1) == log.group(1)):
         report("FAIL", "version", "AssemblyVersion %s, FileVersion %s, CHANGELOG top %s" % (asm.group(1), fileasm.group(1), log.group(1)))
+    elif len(hmi) != 2 or set(hmi) != {asm.group(1)}:
+        report("FAIL", "version", "KSPSerialIO %s but KSPSerialIO.Hmi AssemblyInfo %s" % (asm.group(1), ", ".join(hmi) or "?"))
     else:
         report("PASS", "version", asm.group(1))
 
@@ -820,6 +827,88 @@ def check_sim(ctx):
     report("PASS" if p.returncode == 0 else "FAIL", "sim: tests", " ".join(tail) if p.returncode == 0 else p.stderr.strip()[-300:])
 
 
+def check_ship_report_contract(ctx):
+    """The VAB ship report (kRPC service KSPHMI, docs/hmi.rst): plugin, Pi HMI and kspsim agree on the service, its
+    procedures, the Editor scene and text format version 1; KSPSerialIO.dll itself never depends on kRPC; and the
+    plugin's formatter writes exactly hmi-cpp/tests/data/ship_report_v1.txt (the Pi parser's and kspsim's fixture)."""
+    service = read(os.path.join(HMI_PLUGIN_DIR, "HmiService.cs"))
+    fmt = read(os.path.join(HMI_PLUGIN_DIR, "ShipReportFormat.cs"))
+    addon = read(os.path.join(HMI_PLUGIN_DIR, "EditorShipReport.cs"))
+    project = read(os.path.join(HMI_PLUGIN_DIR, "KSPSerialIO.Hmi.csproj"))
+    hpp = read(os.path.join(HMI_DIR, "include", "shipreport.hpp"))
+    telemetry = read(os.path.join(HMI_DIR, "src", "telemetry.cpp"))
+    server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
+    ships = read(os.path.join(ROOT, "tools", "kspsim", "ships.py"))
+    problems = []
+    for what, ok in (
+            ("service KSPHMI in the Editor scene", re.search(r'KRPCService\(Name = "KSPHMI", GameScene = GameScene\.Editor\)', service)),
+            ("Revision() -> uint", "public static uint Revision()" in service),
+            ("ShipReport() -> string", "public static string ShipReport()" in service),
+            ("plugin format version 1", "public const int Version = 1;" in fmt),
+            ("HMI format version 1", "SHIP_REPORT_VERSION = 1;" in hpp),
+            ("kspsim format version 1", re.search(r"^VERSION = 1$", ships, re.M)),
+            ("HMI calls KSPHMI.Revision / ShipReport", all('"%s"' % n in telemetry for n in ("KSPHMI", "Revision", "ShipReport"))),
+            ("kspsim serves KSPHMI", 'name="KSPHMI"' in server and '"Revision"' in server and '"ShipReport"' in server),
+            ("only HmiService.cs references kRPC", "KRPC" not in addon and "KRPC" not in fmt),
+            ("project builds all sources against KRPC.Core",
+             all('Compile Include="%s"' % f in project for f in ("ShipReportFormat.cs", "EditorShipReport.cs", "HmiService.cs"))
+             and 'Include="KRPC.Core"' in project)):
+        if not ok:
+            problems.append(what)
+    plugin_project = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "KSPSerialIO.csproj"))
+    plugin_sources = "".join(read(os.path.join(os.path.dirname(CS), f)) for f in ("KSPIO.cs", "ButtonEvents.cs", "HmiContext.cs"))
+    if "KRPC" in plugin_project or "KRPC" in plugin_sources:
+        problems.append("KSPSerialIO.dll must not reference kRPC (only KSPSerialIO.Hmi.dll does)")
+    if os.path.isfile(BUILT_DLL):
+        with open(BUILT_DLL, "rb") as f:
+            if b"KRPC" in f.read():
+                problems.append("built KSPSerialIO.dll references kRPC")
+    if problems:
+        report("FAIL", "ship report: contract", "; ".join(problems))
+    else:
+        report("PASS", "ship report: contract", "KSPHMI Revision/ShipReport (Editor), format v1 in plugin, HMI and kspsim")
+    dotnet = shutil.which("dotnet")
+    if not dotnet:
+        report("WARN", "ship report: plugin format", "requires the .NET 8 SDK (tools/plugin-shipreport-tests)")
+        return
+    project_name = "PluginShipReport.Tests"
+    artifacts = os.path.join(ROOT, "build", "plugin-shipreport-tests")
+    result = subprocess.run([dotnet, "build", os.path.join(ROOT, "tools", "plugin-shipreport-tests", project_name + ".csproj"),
+                             "--configuration", "Release", "--artifacts-path", artifacts, "--nologo", "-p:NuGetAudit=false",
+                             "--ignore-failed-sources"], capture_output=True, text=True, timeout=120)
+    if result.returncode == 0:
+        dll = os.path.join(artifacts, "bin", project_name, "release", project_name + ".dll")
+        result = subprocess.run([dotnet, dll, ROOT], capture_output=True, text=True, timeout=30)
+    report("PASS" if result.returncode == 0 else "FAIL", "ship report: plugin format", (result.stdout + result.stderr).strip()[-600:])
+
+
+def check_install_hmi_service(ctx):
+    """KSPSerialIO.Hmi.dll (the Pi's VAB report) installed in GameData/KSPSerialIO/Plugins and identical to the build.
+    It needs kRPC in the game; without it only that DLL fails to load and the Pi keeps its static VAB cards."""
+    gd = os.path.join(ctx["ksp"], "GameData")
+    installed = os.path.join(gd, "KSPSerialIO", "Plugins", "KSPSerialIO.Hmi.dll")
+    krpc = os.path.isfile(os.path.join(gd, "kRPC", "KRPC.Core.dll"))
+    built = os.path.isfile(HMI_BUILT_DLL)
+    if os.path.isfile(os.path.join(gd, "KSPSerialIO", "KSPSerialIO.Hmi.dll")):
+        report("WARN", "ship report: installed", "stray GameData/KSPSerialIO/KSPSerialIO.Hmi.dll (it belongs in Plugins/): KSP loads both")
+    if not os.path.isfile(installed):
+        if built:
+            report("FAIL", "ship report: installed", "built but not installed: ./ci deploy (KSP closed, peer informed)")
+        elif krpc:
+            report("WARN", "ship report: installed", "not built: ./ci build_KSPSerialIO, then ./ci deploy")
+        else:
+            report("WARN", "ship report: installed", "kRPC not installed: no VAB ship report on the Pi")
+        return
+    if not krpc:
+        report("WARN", "ship report: installed", "installed, but kRPC is missing: the DLL cannot load")
+    elif not built:
+        report("WARN", "ship report: installed", "installed; no build output to compare (./ci build_KSPSerialIO)")
+    elif sha(installed) != sha(HMI_BUILT_DLL):
+        report("FAIL", "ship report: installed", "installed KSPSerialIO.Hmi.dll differs from the build (./ci deploy, KSP closed)")
+    else:
+        report("PASS", "ship report: installed", "Plugins/KSPSerialIO.Hmi.dll identical to the build, kRPC present")
+
+
 # --------------------------------------------------------------------------------------------- hardware
 def check_documentation(ctx):
     """Keep narrative guides, editable UML and generated API coverage aligned with all three projects."""
@@ -871,7 +960,7 @@ def check_documentation(ctx):
     doxygen = read(os.path.join(ROOT, "Doxyfile"))
     inputs = re.search(r"^INPUT\s*=([^\r\n]*)", doxygen, re.M)
     api = inputs.group(1).split() if inputs else []
-    for path in ("KSPSerialIO/KSPSerialIO/KSPIO.cs", "KSPSerialIO/KSPSerialIO/HmiContext.cs",
+    for path in ("KSPSerialIO/KSPSerialIO/KSPIO.cs", "KSPSerialIO/KSPSerialIO/HmiContext.cs", "KSPSerialIO/KSPSerialIO.Hmi",
                  "arduino-sketch/KSPIODemo9", "hmi-cpp/include", "hmi-cpp/src"):
         if path not in api:
             errors.append("Doxygen omits " + path)
@@ -941,7 +1030,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_documentation, check_hmi_desktop, check_git]
 
 
 def main():

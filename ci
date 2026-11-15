@@ -3,9 +3,11 @@
 #
 #   ./ci build_sketch        Compile the Arduino sketch (arduino-cli)
 #   ./ci build_sketch_debug  Compile the sketch with symbols and -Og into build/sketch-debug (for the SWD debugger)
-#   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild)
+#   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild), then KSPSerialIO.Hmi.dll (kRPC service
+#                            for the Pi's VAB report; needs a KSP install with kRPC, skipped with a warning without one)
 #   ./ci build_all           Both of the above
-#   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO)
+#   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO, and
+#                            KSPSerialIO.Hmi.dll into GameData/KSPSerialIO/Plugins when built)
 #   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
 #   ./ci ksp_list            List the KSP installs found on this machine
 #   ./ci disable_mod         Move the plugin out of GameData (to compare performance); enable_mod puts it back
@@ -58,6 +60,10 @@ CONFIG="${CONFIG:-Release}"
 
 REFASM_VERSION="1.0.3"
 REFASM_DIR="$BUILD/refasm"
+# KSPSerialIO.Hmi.dll (kRPC service KSPHMI): .NET 4.7.1 like KSP 1.12's Mono, because kRPC 0.7 is a .NET 4 assembly.
+HMI_PLUGIN_PROJ="$ROOT/KSPSerialIO/KSPSerialIO.Hmi/KSPSerialIO.Hmi.csproj"
+HMI_PLUGIN_OUT="$ROOT/KSPSerialIO/KSPSerialIO.Hmi/bin"
+HMI_REFASM_DIR="$BUILD/refasm-net471"
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -161,6 +167,45 @@ ensure_refassemblies() {
   if is_windows; then (cd "$dir" && pwd -W); else (cd "$dir" && pwd); fi
 }
 
+# Same contract as ensure_refassemblies, for the .NET 4.7.1 reference assemblies of KSPSerialIO.Hmi.
+ensure_hmi_refassemblies() {
+  local dir="$HMI_REFASM_DIR/build/.NETFramework/v4.7.1"
+  if [ ! -f "$dir/mscorlib.dll" ]; then
+    log "Downloading .NET 4.7.1 reference assemblies" >&2
+    mkdir -p "$HMI_REFASM_DIR"
+    curl -fsSL -o "$HMI_REFASM_DIR/ref.nupkg" \
+      "https://www.nuget.org/api/v2/package/Microsoft.NETFramework.ReferenceAssemblies.net471/$REFASM_VERSION"
+    unzip -q -o "$HMI_REFASM_DIR/ref.nupkg" -d "$HMI_REFASM_DIR"
+    rm -f "$HMI_REFASM_DIR/ref.nupkg"
+  fi
+  if is_windows; then (cd "$dir" && pwd -W); else (cd "$dir" && pwd); fi
+}
+
+# KSPSerialIO.Hmi.dll compiles against the game's own assemblies (KSP_x64_Data/Managed) and GameData/kRPC/KRPC.Core.dll,
+# read-only from the install find_kspdir picks. Without an install or kRPC it is skipped: KSPSerialIO.dll never needs it.
+build_KSPSerialIO_Hmi() {
+  local ksp refs
+  if ! ksp="$(find_kspdir 2>/dev/null)"; then
+    log "WARNING: no KSP install found (set KSPDIR): KSPSerialIO.Hmi.dll not built" >&2
+    return 0
+  fi
+  if [ ! -f "$ksp/GameData/kRPC/KRPC.Core.dll" ]; then
+    log "WARNING: $ksp has no GameData/kRPC/KRPC.Core.dll: KSPSerialIO.Hmi.dll not built (docs/hmi.rst, kRPC)" >&2
+    return 0
+  fi
+  refs="$(ensure_hmi_refassemblies)"
+  log "Building KSPSerialIO.Hmi ($CONFIG) against $ksp"
+  if command -v msbuild >/dev/null 2>&1; then
+    msbuild "$HMI_PLUGIN_PROJ" -p:Configuration="$CONFIG" -p:KSPDIR="$ksp" -p:FrameworkPathOverride="$refs" -v:minimal
+  elif command -v xbuild >/dev/null 2>&1; then
+    xbuild "$HMI_PLUGIN_PROJ" /p:Configuration="$CONFIG" /p:KSPDIR="$ksp" /p:FrameworkPathOverride="$refs"
+  else
+    dotnet build "$HMI_PLUGIN_PROJ" -c "$CONFIG" -v:minimal -nologo \
+      -p:KSPDIR="$ksp" -p:FrameworkPathOverride="$refs" -nowarn:MSB3258
+  fi
+  log "Output: $HMI_PLUGIN_OUT/$CONFIG/KSPSerialIO.Hmi.dll"
+}
+
 build_KSPSerialIO() {
   if command -v msbuild >/dev/null 2>&1; then
     log "Building plugin with msbuild ($CONFIG)"
@@ -178,6 +223,7 @@ build_KSPSerialIO() {
     die "no msbuild, xbuild or dotnet found"
   fi
   log "Output: $PLUGIN_OUT/$CONFIG/KSPSerialIO.dll"
+  build_KSPSerialIO_Hmi
 }
 
 # A KSP install has a GameData folder next to the game executable
@@ -293,6 +339,14 @@ install_plugin() {
   mkdir -p "$dest/PluginData/KSPSerialIO"
   cp "$dll" "$dest/"
   cp "$ROOT/KSPSerialIO/Includes/PsimaxSerial.dll" "$dest/"
+  # The Pi's VAB ship report (kRPC service KSPHMI); without kRPC in the game only this DLL fails to load.
+  local hmi_dll="$HMI_PLUGIN_OUT/$CONFIG/KSPSerialIO.Hmi.dll"
+  if [ -f "$hmi_dll" ]; then
+    mkdir -p "$dest/Plugins"
+    cp "$hmi_dll" "$dest/Plugins/"
+  else
+    log "KSPSerialIO.Hmi.dll not built: the Pi keeps its static VAB cards (./ci build_KSPSerialIO with kRPC installed)"
+  fi
   # Never overwrite a config the user has already edited, unless RESET_CONFIG=1 (the old one is kept as .bak)
   local cfg="$dest/PluginData/KSPSerialIO/config.xml"
   if [ ! -f "$cfg" ]; then
@@ -746,7 +800,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n "2,44p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n "2,49p" "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
