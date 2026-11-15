@@ -154,3 +154,14 @@ Extending it
   in the krpc client stubs, ``krpc/services/spacecenter.py``) and to ``test_hmi_client_end_to_end``.
 * A new ``VesselData`` field or packet change: ``VESSEL_DATA`` / ``VESSEL_FIELDS`` in ``arduino.py`` mirror the
   firmware struct; ``test_sizes_match_the_firmware`` fails when they drift.
+
+
+Editor modes
+------------
+
+``./ci sim --scene vab --editor-mode construction|actions|crew|cargo`` serves the selected VAB mode through the
+existing KSPHMI report. The window's editor-mode and action-group selectors update its revision. In the editor
+the board still receives a neutral 5 Hz heartbeat: SAS advances and RCS reverses the four modes, while stage,
+axes and action-group levels leave simulated flight controls unchanged. A new serial link seeds retained bits
+instead of treating them as presses. Reports include sample named stage components, actions, seats and inventory
+data shared with ``hmi-cpp/tests/data/editor_report_v1.txt``. The scene switch resets the input baseline.

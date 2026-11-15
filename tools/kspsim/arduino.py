@@ -446,7 +446,9 @@ class BoardLink:
                 if vessel is not None:
                     dt = 0.0 if last_mission is None else vessel.mission_time - last_mission
                     last_mission = vessel.mission_time
-                    ser.write(frame(encode_vessel(vessel, dt, self.sim.reported())))
+                    payload = (bytes([ID_VESSEL_DATA]) + bytes(VESSEL_DATA.size - 1) if self.sim.scene in ("vab", "sph")
+                               else encode_vessel(vessel, dt, self.sim.reported()))
+                    ser.write(frame(payload))
                     st.sent += 1
                 next_send = now + self.refresh
             bad_before = parser.bad

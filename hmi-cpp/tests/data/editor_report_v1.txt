@@ -1,0 +1,21 @@
+v=1 rev=57 facility=vab name=Kerbal%20X sit=kerbin_asl
+mass=18.40 dry=6.10 cost=23400 funds=41200 parts=42 crew=1 seats=3 size=11.2,3.8 engines=5
+editor=actions,custom1
+ac=custom1,Communotron%2016,Toggle%20antenna
+seat=1,Mk1-3%20Pod,0,Valentina%20Kerman,Pilot,1
+seat=1,Mk1-3%20Pod,1,,,0
+seat=1,Mk1-3%20Pod,2,,,0
+inv=1%3A0,Mk1-3%20Pod,3,0.022000,0.050000,84.000,120.000
+cargo=1%3A0,0,Repair%20kit,2,0.010000,20.000
+cargo=1%3A0,1,EVA%20cylinder,1,0.012000,64.000
+st=2,1720,1960,1.63,48,engines:3,clamps:1
+st=1,1890,2010,1.41,71,engines:1,decouplers:1
+st=0,1210,1340,0.62,52,engines:1,decouplers:1,chutes:1
+sp=2,engines,Engine,3
+sp=2,clamps,Launch%20clamp,1
+sp=1,engines,Engine,1
+sp=1,decouplers,Decoupler,1
+sp=0,engines,Engine,1
+sp=0,decouplers,Decoupler,1
+sp=0,chutes,Parachute,1
+kasl=2:1720,1:1890,0:1210
