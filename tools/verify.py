@@ -157,6 +157,15 @@ def check_no_direct_debug_log(ctx):
         report("PASS", "no direct Debug.Log", "all logging goes through KSPLogQueue")
 
 
+def check_ci_deploy(ctx):
+    """Exercise deployment ordering and failure guards with stubbed hardware operations."""
+    result = subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tools', '-p', 'test_ci_deploy.py'],
+                            cwd=ROOT, capture_output=True, text=True, timeout=30)
+    report('PASS' if result.returncode == 0 else 'FAIL', 'ci: deploy all projects',
+           'plugin, firmware and Pi orchestration; preflight/failure guards and NO_TEST' if result.returncode == 0
+           else (result.stdout + result.stderr)[-1000:])
+
+
 def run_firmware_test(name, sanitize=False):
     """Compile actual firmware functions with fake peripherals; never touch hardware."""
     compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
@@ -931,7 +940,7 @@ def check_board(ctx):
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
-CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
+CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
           check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
 
 

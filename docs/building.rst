@@ -25,7 +25,7 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
    * - ``./ci disable_mod`` / ``./ci enable_mod``
      - Move the plugin out of GameData and back, to compare performance with and without it. KSP must be closed.
    * - ``./ci deploy_all [PORT]``
-     - Build the plugin and the sketch, install the plugin into a local KSP and flash the board, then run the board test (``NO_TEST=1`` skips it). Everything that can fail is checked first: the KSP install, that KSP is closed and that a board is connected.
+     - Build the plugin and sketch, build/test/deploy the C++ HMI on the Pi, install the plugin and flash the board, then test the board. Requires KSP closed, a connected board and a reachable Pi with its dependencies and lingering configured. ``NO_TEST=1`` skips only the board test; Pi tests still run.
    * - ``./ci ksp_list``
      - List the KSP installs found on this machine.
    * - ``./ci install``
@@ -76,6 +76,13 @@ IDE's serial monitor and KSP first, since only one program can hold the port.
 
 Deploying to KSP
 ----------------
+
+``./ci deploy_all`` covers all three production projects. It checks KSP, the board and Pi SSH/package/linger
+prerequisites before building. After the local plugin/sketch builds, it runs ``deploy_hmi``, which copies
+``hmi-cpp/`` and builds/tests it natively on the Pi before restarting ``ksphmi.service``. Only then does it
+install the plugin and flash the Arduino, so an unreachable Pi, missing Pi prerequisite or failed HMI build/test
+stops the command before those hardware writes. This is not a transactional deployment: a later plugin or board
+failure does not roll back a successful Pi deployment. See :doc:`hmi` for the Pi's one-time setup and SSH alias.
 
 ``./ci deploy`` builds the plugin and copies ``KSPSerialIO.dll``, ``PsimaxSerial.dll`` and, the first
 time, ``config.xml`` to ``GameData/KSPSerialIO`` of a local KSP install. An existing ``config.xml`` is

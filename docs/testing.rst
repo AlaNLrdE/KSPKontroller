@@ -33,6 +33,10 @@ Verification matrix
      - Python and simulator dependencies
      - Simulated physics/state, serial codecs and stand-in kRPC procedures.
      - Running the actual mod inside KSP.
+   * - ``python -m unittest discover -s tools -p test_ci_deploy.py``
+     - Python and Bash; no hardware or network
+     - Three-project deployment ordering, Pi preflight failures, HMI build failure and ``NO_TEST`` behavior.
+     - Actual compilation, SSH availability, service restart or flashing. All such operations are stubbed.
    * - ``./ci test_hmi``
      - Native/WSL C++ toolchain, SDL, fonts
      - Core, off-screen render and kiosk transformation tests.

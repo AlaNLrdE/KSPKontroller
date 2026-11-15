@@ -10,7 +10,7 @@
 #   ./ci ksp_list            List the KSP installs found on this machine
 #   ./ci disable_mod         Move the plugin out of GameData (to compare performance); enable_mod puts it back
 #   ./ci save_log [LABEL]    Copy KSP.log and Player.log of the last run to build/perf/LABEL/ (KSP overwrites them)
-#   ./ci deploy_all [PORT]   Build everything, install the plugin into a local KSP and flash the board, then test it
+#   ./ci deploy_all [PORT]   Build/deploy all three projects: plugin, Arduino and Pi HMI (including Pi tests)
 #   ./ci docs                Generate the Doxygen documentation into build/docs
 #   ./ci diagrams            Render the PlantUML diagrams in docs/diagrams to SVG (build/diagrams)
 #   ./ci sphinx              Build the Sphinx site into build/sphinx (needs Python, Java; Doxygen optional)
@@ -126,7 +126,7 @@ build_sketch_debug() {
 ensure_refassemblies() {
   local dir="$REFASM_DIR/build/.NETFramework/v3.5"
   if [ ! -f "$dir/mscorlib.dll" ]; then
-    log "Downloading .NET 3.5 reference assemblies"
+    log "Downloading .NET 3.5 reference assemblies" >&2
     mkdir -p "$REFASM_DIR"
     curl -fsSL -o "$REFASM_DIR/ref.nupkg" \
       "https://www.nuget.org/api/v2/package/Microsoft.NETFramework.ReferenceAssemblies.net35/$REFASM_VERSION"
@@ -457,8 +457,8 @@ test_arduino() {
   run_board_test "$port"
 }
 
-# Build everything, install the plugin into a local KSP and flash the board. Everything that can
-# fail (which KSP, KSP running, board missing) is checked first, so nothing is half done.
+# Check prerequisites first. Build the plugin/sketch and build, test and deploy the Pi HMI
+# before installing the plugin or flashing the board; a Pi failure must not flash the Arduino.
 deploy_all() {
   local port="${1:-${ARDUINO_PORT:-}}"
 
@@ -469,9 +469,11 @@ deploy_all() {
   [ -n "$port" ] || die "no $FQBN board found; plug it in or pass the port (./ci deploy_all COM5)"
   log "KSP: $KSPDIR"
   log "Board: $port ($FQBN)"
+  hmi_preflight
 
   build_KSPSerialIO
   build_sketch
+  deploy_hmi
   install_plugin
   upload_sketch "$port"
 
@@ -481,7 +483,7 @@ deploy_all() {
     sleep 4
     run_board_test "$port"
   fi
-  log "Done: plugin installed in $KSPDIR, board flashed"
+  log "Done: plugin installed in $KSPDIR, board flashed, Pi HMI built/tested and deployed to $HMI_HOST"
 }
 
 sim() {
@@ -507,7 +509,17 @@ HMI_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 font
   libasound2t64 libdecor-0-0 libpulse0 libsamplerate0 libsndfile1 libasyncns0 libflac12t64 libvorbisenc2
   libvorbis0a libogg0 libopus0 libmpg123-0t64 libmp3lame0"
 
-hmi_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"; }
+hmi_ssh() {
+  local client=ssh
+  # Git Bash's MSYS SSH can abort long builds with "poll: No error".
+  # Prefer Windows OpenSSH when installed; preserve stdin for tar transfers.
+  if is_windows; then
+    local native
+    native="$(cygpath -u "${SYSTEMROOT:-C:/Windows}")/System32/OpenSSH/ssh.exe"
+    [ ! -x "$native" ] || client="$native"
+  fi
+  "$client" -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
+}
 
 # Windows has no C++ toolchain here: run the same ./ci target inside WSL when it is installed.
 hmi_in_wsl() {
@@ -640,19 +652,24 @@ test_hmi() {
 
 # Layout on the Pi: ~/ksphmi/cpp (hmi-cpp sources and config.toml, replaced on every deploy; its build/ directory is
 # kept so CMake rebuilds incrementally), ~/ksphmi/env (kRPC address), ~/ksphmi/config.local.toml (yours, never touched).
-deploy_hmi() {
+hmi_preflight() {
   hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
-  local missing pc_ip
+  local missing
   missing="$(hmi_ssh "for p in $HMI_APT_PACKAGES; do dpkg -s \$p >/dev/null 2>&1 || echo \"  \$p not installed\"; done
     [ -e /var/lib/systemd/linger/\$USER ] || echo '  lingering off'")"
   [ -z "$missing" ] || die "the Pi needs its one-time setup:
 $missing
 run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
+}
+
+deploy_hmi() {
+  hmi_preflight
+  local pc_ip
   # The text console's blinking cursor is drawn over the HMI frames; only root can stop it (not fatal)
   # (the live cursor_blink value is not enough: it reads 0 whenever fbcon's timer happens to be stopped)
   if ! hmi_ssh 'test -f /etc/tmpfiles.d/ksphmi-cursor.conf'; then
     log "WARNING: the console cursor blinks over the HMI. Once, on the Pi:"
-    log "  %s" "echo '\''w /sys/class/graphics/fbcon/cursor_blink - - - - 0'\'' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
+    log "  echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
   fi
   pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
 
