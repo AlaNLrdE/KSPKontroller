@@ -7,8 +7,9 @@
 // screen points flip y.
 #pragma once
 
-#include <utility>
 #include <vector>
+
+#include "vec.hpp"
 
 namespace ksphmi::gauges {
 
@@ -32,17 +33,17 @@ double clamp01(double fraction);
 /// 1 -> 35.
 double angle(double fraction);
 /// Screen position of the needle hub of a dial centred at (cx, cy).
-std::pair<double, double> pivot(double cx, double cy, double radius);
+Point2 pivot(double cx, double cy, double radius);
 /// Screen point (y down) at `radius` from (px, py) (normally the hub) for a fraction of the scale.
-std::pair<double, double> point(double px, double py, double radius, double fraction);
+Point2 point(double px, double py, double radius, double fraction);
 /// Tapered needle (convex hexagon) from a short tail behind the hub to a narrow tip at NEEDLE radii.
-std::vector<std::pair<double, double>> needle(double px, double py, double radius, double fraction);
+std::vector<Point2> needle(double px, double py, double radius, double fraction);
 /// Fractions splitting [f0, f1] into steps of at most `step_degrees` (both ends included).
 std::vector<double> steps(double f0, double f1, double step_degrees = 4.0);
 /// Ring between two radii around (cx, cy) from fraction f0 to f1: the outer edge forward, then the inner edge back
 /// (points i and size-1-i are on the same ray, so consecutive pairs form convex quads).
-std::vector<std::pair<double, double>> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
-                                              double step_degrees = 4.0);
+std::vector<Point2> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
+                           double step_degrees = 4.0);
 
 struct Cell {
     double cx, cy, cell_x, cell_w;

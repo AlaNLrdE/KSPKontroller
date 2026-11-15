@@ -13,14 +13,14 @@ double clamp01(double fraction) { return fraction < 0 ? 0.0 : fraction > 1 ? 1.0
 
 double angle(double fraction) { return (START - SWEEP * clamp01(fraction)) * PI / 180.0; }
 
-std::pair<double, double> pivot(double cx, double cy, double radius) { return {cx, cy + PIVOT * radius}; }
+Point2 pivot(double cx, double cy, double radius) { return {cx, cy + PIVOT * radius}; }
 
-std::pair<double, double> point(double px, double py, double radius, double fraction) {
+Point2 point(double px, double py, double radius, double fraction) {
     double a = angle(fraction);
     return {px + radius * std::cos(a), py - radius * std::sin(a)};
 }
 
-std::vector<std::pair<double, double>> needle(double px, double py, double radius, double fraction) {
+std::vector<Point2> needle(double px, double py, double radius, double fraction) {
     double a = angle(fraction), dx = std::cos(a), dy = -std::sin(a), nx = -dy, ny = dx;
     double tail = -.10 * radius, tip = NEEDLE * radius;
     double base = .048 * radius, point_w = .012 * radius, tail_w = .032 * radius;
@@ -41,10 +41,10 @@ std::vector<double> steps(double f0, double f1, double step_degrees) {
     return out;
 }
 
-std::vector<std::pair<double, double>> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
-                                              double step_degrees) {
+std::vector<Point2> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
+                           double step_degrees) {
     auto fs = steps(f0, f1, step_degrees);
-    std::vector<std::pair<double, double>> out;
+    std::vector<Point2> out;
     out.reserve(2 * fs.size());
     for (double f : fs) out.push_back(point(cx, cy, r_out, f));
     for (auto it = fs.rbegin(); it != fs.rend(); ++it) out.push_back(point(cx, cy, r_in, *it));

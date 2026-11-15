@@ -71,6 +71,16 @@ Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 
 }  // namespace
 
+TEST(out_of_range_clock_telemetry_renders_in_both_skins) {
+    for (const char* skin : {"classic", "apollo"}) {
+        Screen s(1260, 840, skin);
+        Snapshot snap = demo();
+        snap.ut = 1e100;
+        s.display->draw(snap, monotonic());
+        s.canvas->flush();
+    }
+}
+
 TEST(compact_metrics_leave_space_for_resources_and_staging) {
     for (const auto& size : SIZES) {
         const int w = size.first, h = size.second;

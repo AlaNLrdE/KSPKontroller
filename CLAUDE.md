@@ -122,6 +122,12 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   major ticks and 5-degree minor ticks, with stroke widths scaled to display height.
 - The +/-45 degree NavBall parallels use thin, long horizontal segments interrupted at the compass-bearing
   columns; keep these bands in addition to the local five-degree pitch ladder ticks.
+- HMI geometry uses the plain `Point2` coordinate type in `vec.hpp` instead of returning
+  `std::pair<double, double>`: GCC on ARM emits historical C++14/C++17 ABI notes for the latter.
+  Rebuild all HMI targets after coordinate type changes; do not disable `-Wpsabi` globally.
+- HMI numeric casts must validate before conversion: all integer configuration fields require finite, integral
+  values within int range; clock UT must be below 2^63. `double(LLONG_MAX)` rounds to 2^63, so use an
+  exclusive power-of-two bound and test the adjacent representable double with float-cast-overflow enabled.
 - Keep the ten flight metric tiles in the upper-left block below 40% of screen height. Resources are vessel
   totals in KSP units (0 capacity = absent, 0 amount = empty, missing data = unknown); staging is read-only.
   Rebuild resource/stage collections after stage or parts changes, including docking and decoupling.

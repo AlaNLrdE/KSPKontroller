@@ -86,7 +86,7 @@ std::vector<Point2> conic_track(const Conic& conic, const ConicSpan& span, const
         if (span.closed && i == samples) anomaly = span.from;  // bit-identical closing point
         auto v = conic.position(anomaly);
         if (!v || !v->finite()) continue;
-        points.emplace_back(dot(*v, axes.x), dot(*v, axes.y));
+        points.push_back({dot(*v, axes.x), dot(*v, axes.y)});
     }
     return points;
 }

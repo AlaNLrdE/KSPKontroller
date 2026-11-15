@@ -12,6 +12,7 @@
 #include <cstring>
 #include <sstream>
 #include <fstream>
+#include <limits>
 #include <thread>
 
 #include "check.hpp"
@@ -63,6 +64,16 @@ TEST(format_clock_and_situation) {
     CHECK_EQ(fmt::situation("orbiting"), "Orbiting");
     CHECK_EQ(fmt::situation("pre_launch"), "Pre-launch");
     CHECK_EQ(fmt::degrees(2.5), "2.50\xC2\xB0");
+}
+
+TEST(format_clock_rejects_unrepresentable_times) {
+    const double limit = std::ldexp(1.0, std::numeric_limits<long long>::digits);
+    for (double ut : {1e100, std::numeric_limits<double>::max(), limit,
+                      std::nextafter(limit, INFINITY), static_cast<double>(std::numeric_limits<long long>::max()),
+                      double(INFINITY), double(-INFINITY), double(NAN), -1.0})
+        CHECK_EQ(fmt::clock(ut), "--");
+    CHECK(fmt::clock(std::nextafter(limit, 0.0)) != "--");
+    CHECK_EQ(fmt::clock(61.9), "Y1 D001 00:01:01");
 }
 
 // ------------------------------------------------------------------------------------------- Kepler / demo
@@ -463,6 +474,45 @@ TEST(config_layers_and_environment) {
     CHECK_EQ(only.krpc.address, "localhost");
     std::remove((app + "/config.toml").c_str());
     std::remove(local.c_str());
+    rmdir(dir);
+}
+
+TEST(config_integer_fields_reject_invalid_conversions) {
+    for (const char* key : {"display.fps", "display.width", "display.height", "krpc.rpc_port", "krpc.stream_port"}) {
+        for (const char* value : {"1e100", "-1e100", "inf", "-inf", "nan", "1.5", "-0.5",
+                                 "2147483648", "-2147483649"}) {
+            Config cfg;
+            bool rejected = false;
+            try {
+                const std::string name(key);
+                const size_t dot = name.find('.');
+                apply_toml(cfg, parse_toml("[" + name.substr(0, dot) + "]\n" + name.substr(dot + 1) + " = " + value));
+            } catch (const std::runtime_error& e) {
+                rejected = std::string(e.what()).find(std::string(key) + " must be an integer within the int range") == 0;
+            }
+            CHECK(rejected);
+        }
+    }
+    for (int value : {std::numeric_limits<int>::min(), -1, 0, 60, std::numeric_limits<int>::max()}) {
+        Config cfg;
+        apply_toml(cfg, parse_toml("[display]\nwidth = " + std::to_string(value)));
+        CHECK_EQ(cfg.display.width, value);
+    }
+    Config cfg;
+    apply_toml(cfg, parse_toml("[display]\nfps = 60.0"));
+    CHECK_EQ(cfg.display.fps, 60);
+    char dir[] = "/tmp/ksphmi-int-XXXXXX";
+    CHECK(mkdtemp(dir) != nullptr);
+    const std::string path = std::string(dir) + "/invalid.toml";
+    std::ofstream(path) << "[display]\nfps = 1e100\n";
+    bool descriptive = false;
+    try {
+        load_config(path);
+    } catch (const std::runtime_error& e) {
+        descriptive = std::string(e.what()).find(path + ": display.fps must be an integer within the int range") == 0;
+    }
+    CHECK(descriptive);
+    std::remove(path.c_str());
     rmdir(dir);
 }
 

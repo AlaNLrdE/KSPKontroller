@@ -82,15 +82,12 @@ struct OrbitState {
     Vec3 position, velocity;
     double mu = 0;
     Axes axes;
-    std::pair<double, double> project(const Vec3& v) const { return {dot(v, axes.x), dot(v, axes.y)}; }
+    Point2 project(const Vec3& v) const { return {dot(v, axes.x), dot(v, axes.y)}; }
     /// The marker is always the measured Cartesian position. Never reconstruct it from true anomaly:
     /// periapsis is ill-conditioned in circular orbits (RCS impulses flip it).
-    std::pair<double, double> vessel_point() const { return project(position); }
+    Point2 vessel_point() const { return project(position); }
     std::optional<Conic> conic() const;
 };
-
-/// A point of the ORBIT diagram in metres, in the fixed view plane (OrbitState::project).
-using Point2 = std::pair<double, double>;
 
 /// The orbit that results from the next maneuver node (kRPC Node.orbit), as the post-burn state at the node's UT
 /// in the same body non-rotating frame as OrbitState, so it shares the view axes. Recomputed only when the node

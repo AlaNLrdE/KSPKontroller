@@ -109,7 +109,11 @@ double to_double(const TomlValues& m, const std::string& key, double current) {
 }
 
 int to_int(const TomlValues& m, const std::string& key, int current) {
-    return static_cast<int>(to_double(m, key, current));
+    const double v = to_double(m, key, current);
+    if (!std::isfinite(v) || std::trunc(v) != v ||
+        v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max())
+        throw std::runtime_error(key + " must be an integer within the int range");
+    return static_cast<int>(v);
 }
 
 std::string to_string(const TomlValues& m, const std::string& key, const std::string& current) {

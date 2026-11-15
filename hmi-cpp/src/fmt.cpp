@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <limits>
 
 namespace ksphmi::fmt {
 
@@ -63,7 +64,9 @@ std::string duration(double s, int day_hours) {
 }
 
 std::string clock(double ut, int day_hours, int year_days) {
-    if (!std::isfinite(ut) || ut < 0) return "--";
+    // Use the exclusive power-of-two bound: double(LLONG_MAX) rounds up to 2^63.
+    const double limit = std::ldexp(1.0, std::numeric_limits<long long>::digits);
+    if (!std::isfinite(ut) || ut < 0 || ut >= limit) return "--";
     long long t = static_cast<long long>(ut);
     long long day = static_cast<long long>(day_hours) * 3600;
     long long y = t / (day * year_days);

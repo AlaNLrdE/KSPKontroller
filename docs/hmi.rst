@@ -403,6 +403,23 @@ of the height, text inside its tile, dials inside the resources panel, ORBIT and
 their panels, apsis labels, facility views, the boot splash, the software frame time) and ``kiosk`` (the boot
 file edit of ``setup-kiosk.sh`` and the unit files, when ``python3`` is found).
 
+Orbit projection, orbit tracks and gauge geometry share the plain ``Point2`` coordinate type
+from ``vec.hpp``. This avoids GCC ARM ABI compatibility notes for returned
+``std::pair<double, double>`` values without disabling compiler diagnostics. Rebuild all
+HMI targets together when changing this internal coordinate type.
+
+Integer configuration fields reject non-finite, fractional and out-of-int-range values before
+conversion; load errors identify the file and key. Clock telemetry outside the signed 64-bit
+range displays ``--``. The core suite checks the exclusive 2^63 boundary and its previous
+representable double; the render suite exercises extreme UT in both skins. To check casts
+with GCC or Clang on a Linux host with the SDL development packages installed::
+
+   cmake -S hmi-cpp -B build/hmi-ubsan -DCMAKE_BUILD_TYPE=Debug \
+     -DCMAKE_CXX_FLAGS="-fsanitize=undefined,float-cast-overflow -fno-sanitize-recover=all" \
+     -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined,float-cast-overflow"
+   cmake --build build/hmi-ubsan -j4
+   ctest --test-dir build/hmi-ubsan --output-on-failure
+
 Measured: about 9 ms per 2520x1680 flight frame on the PC (x86-64, WSL, software renderer).
 ``ksphmi --bench 20 --offscreen --size 2520x1680`` prints ``HMI_RENDER_MS`` without touching the screen;
 ``./ci verify`` runs it on the Pi (``hmi: Pi render budget``).

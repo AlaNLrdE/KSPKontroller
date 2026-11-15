@@ -7,6 +7,13 @@
 
 namespace ksphmi {
 
+/// Plain projected coordinates avoid std::pair's historical C++14/C++17 ARM ABI difference.
+struct Point2 {
+    double first = 0, second = 0;
+    bool operator==(const Point2& other) const { return first == other.first && second == other.second; }
+    bool operator!=(const Point2& other) const { return !(*this == other); }
+};
+
 struct Vec3 {
     double x = 0, y = 0, z = 0;
     Vec3() = default;
