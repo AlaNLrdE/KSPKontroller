@@ -1,0 +1,26 @@
+@startuml testing_boundaries
+!pragma layout smetana
+title Validation boundaries
+rectangle "Local / CI checks" {
+  component "Static consistency + docs build" as Static
+  component "Firmware / mod / HMI compilation" as Build
+  component "C++ core / off-screen render / kiosk file tests" as Unit
+}
+rectangle "Protocol simulation" {
+  component "kspsim + real C++ client" as Protocol
+  component "Tk controls + noVNC desktop smoke" as GUI
+}
+rectangle "Physical integration" {
+  component "Real Arduino: wiring, USB, watchdog" as Board
+  component "Real Pi: boot, GPU/fbdev, display, timing" as Pi
+  component "Real KSP: Unity lifecycle, mods, controls" as Game
+}
+Static --> Build
+Build --> Unit
+Unit --> Protocol
+Protocol --> GUI
+Protocol --> Board : when board behavior changes
+GUI --> Pi : when target output/performance changes
+Protocol --> Game : when real API / mod behavior is needed
+note bottom of Game : Simulation success does not imply hardware or Unity success.
+@enduml

@@ -730,6 +730,85 @@ def check_sim(ctx):
 
 
 # --------------------------------------------------------------------------------------------- hardware
+def check_documentation(ctx):
+    """Keep narrative guides, editable UML and generated API coverage aligned with all three projects."""
+    docs = os.path.join(ROOT, "docs")
+    required = ("index.rst", "architecture.rst", "communication.rst", "protocol.rst", "vesseldata.rst",
+                "development/arduino.rst", "development/plugin.rst", "development/raspberry-pi.rst",
+                "testing.rst", "documentation.rst")
+    missing = [p for p in required if not os.path.isfile(os.path.join(docs, p))]
+    referenced = set()
+    errors = []
+    for folder, _, files in os.walk(docs):
+        for name in files:
+            if not name.endswith(".rst"):
+                continue
+            for target in re.findall(r"^\.\. uml::\s+(\S+)\s*$", read(os.path.join(folder, name)), re.M):
+                path = os.path.normpath(os.path.join(folder, target))
+                referenced.add(path)
+                if not os.path.isfile(path):
+                    errors.append("missing UML " + target)
+    diagrams = os.path.join(docs, "diagrams")
+    count = 0
+    for name in os.listdir(diagrams) if os.path.isdir(diagrams) else ():
+        if not name.endswith(".puml"):
+            continue
+        count += 1
+        path = os.path.normpath(os.path.join(diagrams, name))
+        source = read(path)
+        if source.count("@startuml") != 1 or source.count("@enduml") != 1:
+            errors.append("invalid UML delimiters " + name)
+        if path not in referenced:
+            errors.append("unreferenced UML " + name)
+        if name.startswith("seq_"):
+            participants = set(re.findall(r'^participant .* as (\w+)\s*$', source, re.M))
+            balance = dict.fromkeys(participants, 0)
+            activated = set()
+            for operation, participant in re.findall(r'^\s*(activate|deactivate) (\w+)\s*$', source, re.M):
+                if participant not in balance:
+                    errors.append("undeclared activation " + participant + " in " + name)
+                    continue
+                if operation == "activate":
+                    activated.add(participant)
+                    balance[participant] += 1
+                else:
+                    balance[participant] -= 1
+                    if balance[participant] < 0:
+                        errors.append("activation ends before start in " + name)
+            if not participants or participants != activated or any(balance.values()):
+                errors.append("missing/unbalanced lifeline activations in " + name)
+    doxygen = read(os.path.join(ROOT, "Doxyfile"))
+    inputs = re.search(r"^INPUT\s*=([^\r\n]*)", doxygen, re.M)
+    api = inputs.group(1).split() if inputs else []
+    for path in ("KSPSerialIO/KSPSerialIO/KSPIO.cs", "KSPSerialIO/KSPSerialIO/HmiContext.cs",
+                 "arduino-sketch/KSPIODemo9", "hmi-cpp/include", "hmi-cpp/src"):
+        if path not in api:
+            errors.append("Doxygen omits " + path)
+    patterns = re.search(r"^FILE_PATTERNS\s*=([^\r\n]*)", doxygen, re.M)
+    if not patterns or not {"*.cs", "*.ino", "*.hpp", "*.cpp"}.issubset(patterns.group(1).split()):
+        errors.append("Doxygen file patterns omit a project language")
+    readme = read(os.path.join(ROOT, "README.md"))
+    for target in re.findall(r"!?\[[^\]]*\]\(([^)\s]+)\)", readme):
+        if "://" not in target and not target.startswith("#"):
+            relative = target.split("#", 1)[0]
+            if not os.path.exists(os.path.join(ROOT, relative)):
+                errors.append("missing README link target " + target)
+    for target in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", readme):
+        if "://" in target:
+            continue
+        path = os.path.join(ROOT, target)
+        if not os.path.isfile(path):
+            errors.append("missing README screenshot " + target)
+        elif target.lower().endswith(".png"):
+            with open(path, "rb") as stream:
+                header = stream.read(24)
+            if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or not all(int.from_bytes(header[i:i + 4], "big") > 0 for i in (16, 20)):
+                errors.append("invalid README PNG " + target)
+    errors.extend("missing guide " + p for p in missing)
+    report("FAIL" if errors else "PASS", "docs: architecture, UML and API coverage",
+           "; ".join(errors) if errors else "%d required guides, %d referenced PUML sources, three-project API inputs" % (len(required), count))
+
+
 def check_hmi_desktop(ctx):
     """Record the interactive simulator GUI -> real C++ HMI smoke check, without needing Docker here."""
     base = os.path.join(ROOT, "build", "hmi-container")
@@ -771,7 +850,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
 
 
 def main():
@@ -781,12 +860,16 @@ def main():
     ap.add_argument("--board", action="store_true", help="also test the Arduino over serial (KSP must be closed)")
     ap.add_argument("--port", help="serial port for --board, for example COM5")
     ap.add_argument("--snapshot", action="store_true", help="record the GameData entries now present")
+    ap.add_argument("--docs-only", action="store_true", help="check documentation guides, UML lifelines and API coverage without KSP or hardware")
     args = ap.parse_args()
+    if args.docs_only and (args.board or args.snapshot):
+        ap.error("--docs-only cannot be combined with --board or --snapshot")
 
     ctx = {"ksp": os.path.normpath(args.ksp), "args": args}
     ctx["log"] = args.log or os.path.join(ctx["ksp"], "KSP.log")
-    report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
-    for chk in CHECKS:
+    if not args.docs_only:
+        report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
+    for chk in ([check_documentation] if args.docs_only else CHECKS):
         try:
             chk(ctx)
         except Exception as e:  # a broken check must never hide the others

@@ -1,0 +1,17 @@
+@startuml state_hmi
+title HMI source states and transport recovery
+[*] --> Connecting
+Connecting --> Connecting : connect failure / retry + optional discovery
+Connecting --> NoVessel : paired kRPC session, active vessel null
+Connecting --> Flight : paired session, active vessel available
+NoVessel --> Flight : active vessel becomes available
+Flight --> NoVessel : vessel disappears / scene changes
+Flight --> Flight : optional field error / omit value and retry
+Flight --> Connecting : connection error / close session
+NoVessel --> Connecting : connection error
+Connecting --> [*] : stop
+NoVessel --> [*] : stop
+Flight --> [*] : stop
+note right of Flight : Snapshot age >3 seconds is stale data,\nnot a separate State enum value.
+note right of NoVessel : Known UDP context selects facility view.\nNo context leaves a generic waiting view.
+@enduml

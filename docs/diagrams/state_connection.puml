@@ -1,12 +1,11 @@
 @startuml state_connection
-title Firmware link state (Connected flag)
-
-[*] --> Disconnected : setup(): all LEDs off
-
-state Disconnected : Connected = false\nLEDs off\nno ControlPacket is sent
-state Connected : Connected = true\ngreen LED on\nControlPacket sent every 25 ms
-
-Disconnected --> Connected : valid packet received\n(handshake or telemetry)
-Connected --> Connected : valid packet received\n(deadtimeOld = now)
-Connected --> Disconnected : no valid packet for\nmore than 2000 ms (IDLETIMER)
+title Firmware connected flag (not the hardware watchdog)
+[*] --> Disconnected : setup
+state Disconnected : Connected=false\nno controls or debug traffic\nwaiting/lost matrix state
+state Connected : Connected=true\ncontrols sampled every 25 ms\nsend on change or 200 ms keepalive
+Disconnected --> Connected : valid known packet
+Connected --> Connected : valid packet / refresh receive time
+Connected --> Disconnected : >2000 ms without valid packet
+Disconnected --> [*] : after a previous connection, >30 s silence\nNVIC_SystemReset
+note right of Disconnected : If the foreground loop itself stalls,\nthe hardware watchdog resets the board after ~2 s.
 @enduml

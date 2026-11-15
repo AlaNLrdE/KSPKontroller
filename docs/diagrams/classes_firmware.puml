@@ -40,6 +40,21 @@ class "utilities.ino" as Util <<sketch file>> {
   +InitTxPackets()
 }
 
+class "matrix.ino" as Matrix <<sketch file>> {
+  +matrixInit()
+  +matrixUpdate()
+}
+class "debug.ino" as Debug <<sketch file>> {
+  +debugReport()
+}
+struct DebugPacket <<packed, 52 bytes>>
+struct DisplayCommand <<packed, 2 bytes>>
+Main --> Matrix : init/update
+Main --> Debug : loop calls
+Debug ..> Serial : sends diagnostics
+Debug ..> DebugPacket
+Input ..> DisplayCommand : forced screen
+
 struct VesselData <<packed, 214 bytes>>
 struct ControlPacket <<packed, 25 bytes>>
 struct HandShakePacket <<packed, 4 bytes>>

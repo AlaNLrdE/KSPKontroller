@@ -125,6 +125,7 @@ orbit is planar. The rule for what points the vessel and its engine:
   ``MNTime`` / ``MNDeltaV`` (node) and ``TargetPitch/Heading`` / ``TargetDist`` / ``TargetV`` as the plugin
   fills them. SAS on/off, mode changes, "on target" (within 1 degree) and the switch from guidance to
   steering are logged to ``build/kspsim.log``.
+
 SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``ActionGroups`` from the game state
 (above), which is what the board's LEDs show.
 

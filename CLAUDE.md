@@ -1,7 +1,8 @@
 # KSPKontroller: shared contract for every Claude session and agent
 
-Arduino UNO R4 WiFi hardware controller for Kerbal Space Program. Two projects in one repo:
-`KSPSerialIO/` (C# KSP plugin, .NET 3.5 / Mono in Unity) and `arduino-sketch/KSPIODemo9/` (firmware).
+Arduino UNO R4 WiFi hardware controller and Raspberry Pi flight display for Kerbal Space Program.
+Three production projects: `KSPSerialIO/` (C# mod, .NET 3.5 / Mono in Unity),
+`arduino-sketch/KSPIODemo9/` (UNO R4 firmware) and `hmi-cpp/` (C++17/SDL2 HMI).
 Docs: `docs/*.rst` (Sphinx + Doxygen + PlantUML, published to GitHub Pages). Build/test tool: `./ci help`.
 
 Read only what the task needs (grep + offsets, not whole files or logs). Docs are not imported here:
@@ -14,6 +15,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 | Raspberry Pi HMI (`hmi-cpp/`, C++, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
 | Testing board/HMI without KSP (`./ci sim`) | `docs/simulator.rst` |
 | Build, deploy, flash | `docs/building.rst`, `./ci help` |
+| Architecture, channels, per-project internals | `docs/architecture.rst`, `docs/communication.rst`, `docs/development/*.rst` |
+| Test coverage and documentation authoring | `docs/testing.rst`, `docs/documentation.rst` |
 | Past decisions | `KSPSerialIO/CHANGELOG.md` (top entries), `git log -10` |
 
 ## Non-negotiable rules
@@ -51,6 +54,21 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Every lesson learned goes into a skill (`.claude/skills/*/SKILL.md`) or this file before the task is finished.
   Session handoffs (what is deployed, what is pending) go in commit messages or the docs, not in this file.
 - `AGENTS.md` (Codex) only points here: keep a single contract in this file.
+
+## Documentation maintenance
+
+- Sphinx/reStructuredText is the narrative source; UML lives in `docs/diagrams/*.puml`, included with `.. uml::`.
+  Update affected architecture, channel and project guides with implementation changes. Use English.
+  Sequence UML must declare lifelines and show explicit, balanced activations, returns and async messages;
+  distinguish method execution from worker lifetime.
+- README screenshots must be captured from the actual apps, labelled with demo/simulator provenance, and
+  stored under `docs/images/` with regeneration notes. Lossless recompression may preserve pixels; never
+  present mockups as runtime evidence. `check_documentation` validates local README image references.
+- Validate `./ci diagrams` and `./ci sphinx` (warnings are errors). Doxygen inputs must cover both mod sources,
+  the firmware and C++ HMI headers/sources. Keep generated SVG/HTML under `build/`, out of commits.
+- `python3 tools/verify.py --docs-only` runs `check_documentation` for guide/UML/API coverage and balanced
+  sequence activations without a game install. The documentation CI runs it and renders all PUML before Sphinx.
+  On macOS a Java stub can exist without a working runtime; `ensure_plantuml` detects Homebrew's keg-only JDK.
 
 ## Tool gotchas (Windows, Git Bash)
 

@@ -2,7 +2,8 @@ Firmware
 ========
 
 Target: Arduino UNO R4 (Renesas RA4M1, 32-bit, native USB serial). Sources are in
-``arduino-sketch/KSPIODemo9``.
+``arduino-sketch/KSPIODemo9``. For scheduler/module ownership and a development workflow, see
+:doc:`development/arduino`; for channel semantics, see :doc:`communication`.
 
 Files
 -----

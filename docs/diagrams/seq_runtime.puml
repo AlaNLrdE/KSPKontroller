@@ -1,74 +1,66 @@
 @startuml seq_runtime
-title Steady-state exchange during flight
-
-skinparam style strictuml
+title Flight exchange: call activations and asynchronous transport
 skinparam sequenceMessageAlign left
-skinparam responseMessageBelowArrow true
-
-participant "KSP autopilot\n(physics step)" as AP
-participant "KSPSerialIO\n(main thread)" as IO
-participant "KSPSerialPort\n(main thread)" as SP
-participant "Serial port" as Port
-participant "SerialWorker\n(reader thread)" as Worker
-participant "Arduino firmware\n(loop)" as FW
-
-note over FW : loop() runs continuously
+participant "KSPSerialIO\nUnity main thread" as IO
+participant "KSPSerialPort\nqueue / dispatch methods" as SP
+participant "SenderWorker" as TX
+participant "Serial transport" as Port
+participant "SerialWorker" as RX
+participant "Arduino loop" as FW
+== Telemetry at configured refresh ==
+activate IO
+IO -> IO : sample active vessel into VData
+IO -> SP : TrySendPacket(VData)
+activate SP
+SP -> SP : build frame; replace pending under sendLock
+SP --> IO : queued (no serial write wait)
+deactivate SP
+deactivate IO
+activate TX
+TX -> SP : take newest pending frame under sendLock
+activate SP
+SP --> TX : frame
+deactivate SP
+TX -> Port : Write(BE EF 214 payload checksum)
+activate Port
+Port --> TX : write completed or failed
+deactivate Port
+deactivate TX
+Port ->> FW : received serial bytes
 activate FW
-note over Worker : thread alive since Awake
-activate Worker
-
-== Telemetry: KSP to controller (every refresh interval) ==
-IO -> IO ++ : Update()
-IO -> IO ++ : sample the active vessel into VData
-return
-IO -> SP ++ : sendPacket(VData)
-SP -> Port ++ : Write([BE][EF][214][VData][checksum])
-return
-return
-return
-
-Port ->> FW : bytes over USB
-FW -> FW ++ : input()
-FW -> FW ++ : KSPBoardReceiveData()
-return true, id = 1
-FW -> FW ++ : Indicators()
-return
-note right of FW : Connected = true\ndeadtimeOld = now
-return
-
-== Controls: controller to KSP (every 25 ms while Connected) ==
-FW -> FW ++ : output()
-FW -> FW ++ : controls(): read switches and throttle
-return
-FW -> Port ++ : KSPBoardSendData(CPacket)
-return
-return
-
-Port ->> Worker : bytes (EndRead returns)
-Worker -> Worker ++ : ReceivedDataEvent(bytes)
-Worker -> Worker ++ : parse frame and verify checksum
-return valid packet
-Worker -> Worker ++ : copy payload to NewPacketBuffer\nunder SerialMutex
-return NewPacketFlag = true
-return
-
-... next frame on the main thread ...
-
-SP -> SP ++ : Update()
-SP -> SP ++ : InboundPacketHandler()
-SP -> SP ++ : VesselControls()
-return VControls decoded,\nControlReceived = true
-return
-return
-
-IO -> IO ++ : Update()
-IO -> IO ++ : apply the changed toggles, groups,\nSAS and navball modes to the vessel
-return ControlReceived = false
-return
-
-== Axes (every physics step) ==
-AP -> IO ++ : AxisInput(FlightCtrlState s)
-IO -> IO ++ : merge pitch, roll, yaw, translation,\nwheels and throttle into s\n(per-axis mode from config.xml)
-return
-return s
+FW -> FW : input(): assemble / validate / copy VData
+FW -> FW : Indicators(); Connected=true
+deactivate FW
+== Sample every 25 ms; transmit on change or 200 ms keepalive ==
+activate FW
+FW -> FW : output(): read enabled pins / debounce
+FW -> Port : KSPBoardSendData(ControlPacket)
+activate Port
+Port --> FW : frame written
+deactivate Port
+deactivate FW
+Port ->> RX : read completion with bytes
+activate RX
+RX -> RX : parse frame and validate
+RX -> SP : store packet under SerialMutex
+activate SP
+SP --> RX : packet available
+deactivate SP
+deactivate RX
+== Main-thread dispatch and control application ==
+activate SP
+SP -> SP : Update() / InboundPacketHandler()\ndecode controls; latch stage edge
+deactivate SP
+activate IO
+IO -> SP : consume controls and fresh stage request
+activate SP
+SP --> IO : VControls / stage timestamp
+deactivate SP
+IO -> IO : apply level changes / SAS-RCS transitions\nconsume fresh stage request
+deactivate IO
+== Physics callback ==
+activate IO
+IO -> IO : AxisInput(FlightCtrlState)\nmerge configured analog axes
+deactivate IO
+note over TX, RX : Worker lifelines continue between illustrated calls.\nSerial arrival is asynchronous; Unity callbacks run on the main thread.
 @enduml

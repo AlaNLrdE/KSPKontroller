@@ -1,28 +1,42 @@
 @startuml deployment
-title Deployment view
-
-node "Gaming PC (Windows)" as PC {
-  component "Kerbal Space Program" as KSP
-  component "KSPSerialIO.dll\n(plugin)" as Plugin
-  component "PsimaxSerial.dll\n(serial port library)" as Psimax
-  artifact "config.xml" as Cfg
+!pragma layout smetana
+title Physical deployment
+node "Game PC" {
+  node "KSP / Unity process" {
+    artifact "KSPSerialIO.dll" as Mod
+    artifact "PsimaxSerial.dll" as Serial
+    component "HmiContext" as Context
+    component "kRPC mod" as RPC
+  }
+  artifact "config.xml" as Config
 }
-
-node "Arduino UNO R4" as MCU {
-  component "KSPIODemo9\n(firmware)" as FW
+node "Arduino UNO R4 WiFi / RA4M1" {
+  artifact "KSPIODemo9 firmware" as FW
+  component "12x8 matrix" as Matrix
 }
-
-node "Control panel" as Panel {
-  component "Switches\nSAS, RCS, action group 1" as Switches
-  component "Throttle potentiometer" as Pot
-  component "LEDs\ngreen, yellow, red, SAS, RCS, group 1" as Leds
+node "Control panel" {
+  component "SAS / RCS / screen buttons" as Buttons
+  component "Status LEDs" as LEDs
 }
-
-KSP --> Plugin : loads at startup
-Plugin --> Psimax : uses
-Plugin ..> Cfg : reads settings
-Plugin <--> FW : USB serial (CDC)\nframed binary packets
-Switches --> FW : digital inputs
-Pot --> FW : analog input
-FW --> Leds : digital outputs
+node "Raspberry Pi / Linux" {
+  component "systemd user service" as Service
+  artifact "ksphmi (C++17)" as HMI
+  artifact "config.toml + local overrides" as PiCfg
+  component "SDL kmsdrm / fbdev fallback" as Output
+}
+node "Physical monitor" as Monitor
+Mod ..> Serial : serial I/O library
+Mod ..> Config : reads
+Mod *-- Context : same assembly
+Mod <--> FW : USB CDC / 115200\nframed binary packets
+Buttons --> FW : pull-up GPIO
+FW --> LEDs : GPIO
+FW --> Matrix : matrix library
+Service --> HMI : launches / restarts
+HMI ..> PiCfg : reads
+HMI --> RPC : TCP 50000 / 50001
+HMI <--> Context : UDP 50002
+HMI --> Output : frames
+Output --> Monitor : scanout
+note bottom of FW : Stage, CG1 and throttle pins are disabled by default.\nWi-Fi is not the application's transport.
 @enduml

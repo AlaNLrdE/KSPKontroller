@@ -1,0 +1,37 @@
+@startuml components_hmi
+!pragma layout smetana
+title C++ HMI build and module dependencies
+skinparam componentStyle rectangle
+component "ksphmi executable\nmain.cpp / Output" as Main
+package "ksphmi_core" {
+  component "Config" as Config
+  component "Source / KrpcSource / DemoSource" as Source
+  component "Snapshot / navigation / systems" as Model
+  component "krpc::Client" as Client
+  component "pb / POSIX network / context" as Wire
+  component "Vector / quaternion / conic math" as Math
+}
+package "ksphmi_ui" {
+  component "Display / ApolloSkin" as Display
+  component "Navball / gauges / segments" as Instruments
+  component "Canvas / fonts / textures" as Canvas
+  component "Framebuffer / PNG / splash" as Output
+}
+component "SDL2 + SDL2_ttf" as SDL
+Main --> Config
+Main --> Source
+Main --> Display
+Main --> Output
+Source --> Client
+Client --> Wire
+Source --> Model
+Source --> Math
+Display --> Model
+Display --> Instruments
+Instruments --> Math
+Display --> Canvas
+Instruments --> Canvas
+Canvas --> SDL
+Output --> SDL
+note bottom of Source : Source and stream workers perform network I/O.\nMain/render thread owns SDL resources.
+@enduml

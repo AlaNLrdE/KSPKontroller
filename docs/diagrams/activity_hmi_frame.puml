@@ -1,0 +1,25 @@
+@startuml activity_hmi_frame
+title HMI rendering (main thread)
+start
+:Load config and CLI overrides;
+:Start source worker;
+:Create output, Canvas and Display;
+while (window open and no stop signal?) is (yes)
+  :Process SDL events;
+  :Read latest immutable Snapshot;
+  if (new data or screen/skin change?) then (yes)
+    :Display.draw(snapshot, now)\nfull frame / refresh cached layer if enabled;
+  else (no)
+    if (layer cache available?) then (yes)
+      :Display.animate()\nrestore layer, redraw NavBall square;
+    else (no)
+      :Draw full frame with current interpolation;
+    endif
+  endif
+  :Present SDL / write changed fbdev rows / capture PNG;
+  :Observe frame deadline and performance counters;
+endwhile (no)
+:Stop source and join workers;
+:Destroy rendering resources;
+stop
+@enduml

@@ -1,0 +1,40 @@
+@startuml seq_hmi_context
+title UDP context: independent lifelines and bounded work
+skinparam sequenceMessageAlign left
+participant "GameEvents / scene" as Game
+participant "HmiContext\nUnity main thread" as Mod
+participant "KrpcSource worker" as HMI
+participant "Display thread" as UI
+participant "kspsim context server\n(alternative endpoint)" as Sim
+activate Game
+Game -> Mod : facility spawn/despawn callback
+activate Mod
+Mod -> Mod : update remembered facility
+Mod --> Game : callback complete
+deactivate Mod
+deactivate Game
+activate HMI
+HMI ->> Mod : UDP 50002: KSPHMI/1
+activate Mod
+Mod -> Mod : Update(): process at most 4 requests
+Mod -->> HMI : UDP: KSPHMI/1 mission_control
+deactivate Mod
+HMI -> HMI : parse context and publish Snapshot
+deactivate HMI
+activate UI
+UI -> UI : read latest Snapshot\ndraw facility view
+deactivate UI
+note over HMI : Receive timeout 150 ms on source worker.\nContext refreshed about once per second.
+== Simulator replaces the production endpoint ==
+activate HMI
+HMI ->> Sim : UDP 50002: KSPHMI/1
+activate Sim
+Sim -->> HMI : UDP: KSPHMI/1 flight skin=apollo
+deactivate Sim
+HMI -> HMI : publish Snapshot.skin=apollo
+deactivate HMI
+activate UI
+UI -> UI : draw Snapshot\napply known skin override
+deactivate UI
+note over Mod : Production replies do not override skins.
+@enduml

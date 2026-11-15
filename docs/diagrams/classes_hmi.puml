@@ -1,0 +1,56 @@
+@startuml classes_hmi
+!pragma layout smetana
+hide empty members
+title HMI sources, snapshots and display interfaces
+abstract class Source {
+  +start()
+  +stop()
+  +latest() : shared_ptr<const Snapshot>
+  #run()
+  #publish(Snapshot)
+  #on_stop()
+}
+class KrpcSource {
+  +address() : string
+  #connect()
+  #session(Client)
+  #follow(Client, vessel)
+  #discover_server()
+}
+class DemoSource {
+  +sample(ut) : Snapshot
+}
+class "krpc::Client" as Client {
+  +invoke(Call) : Value
+  +add_stream(Call, rate) : id
+  +stream(id, wait) : Value
+  +remove_stream(id)
+  +close()
+  -stream_loop()
+}
+class Snapshot <<immutable after publish>> {
+  state : Connecting / NoVessel / Flight
+  scene, server, skin : string
+  received : monotonic time
+  nav : optional Navigation
+  systems : optional Systems
+  orbit_state : optional OrbitState
+}
+class Display {
+  +draw(Snapshot, now)
+  +animate() : bool
+  +set_skin(name, reason)
+  +set_layer_cache(enabled) : bool
+}
+class Canvas
+class Navball
+class ApolloSkin
+Source <|-- KrpcSource
+Source <|-- DemoSource
+Source o-- Snapshot : latest slot
+KrpcSource --> Client : connection lifetime
+Display --> Snapshot : observes
+Display --> Canvas : draws through
+Display *-- Navball
+Display *-- ApolloSkin : lazily constructed
+@enduml

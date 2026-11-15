@@ -1,0 +1,27 @@
+@startuml deployment_desktop
+!pragma layout smetana
+title Interactive development without the Pi
+node "Development host (Docker)" {
+  component "Browser" as Browser
+  artifact "Repository sources (read-only mount)" as Sources
+  artifact "build/hmi-container/<platform> (writable)" as Build
+  node "Debian Bookworm container" {
+    component "noVNC + websockify :6080" as Web
+    component "x11vnc 127.0.0.1:5900" as VNC
+    component "Xvfb :1 + Openbox" as X11
+    component "Tk kspsim test app" as Sim
+    component "Actual C++ HMI / SDL X11" as HMI
+  }
+}
+Browser <--> Web : host loopback :6080\nHTTP / WebSocket
+Web <--> VNC : container loopback\nVNC protocol
+VNC <--> X11 : pixels / user input
+Sim --> X11 : GUI window
+HMI --> X11 : GUI window
+HMI <--> Sim : container loopback\nTCP 50300/50301 + UDP 50002
+Sources --> HMI : copied sources / CMake build
+Sources --> Sim : Python tools
+HMI --> Build : binaries / logs / artifacts
+Sim --> Build : logs / smoke result
+note bottom of Sim : Arduino disabled (--no-board).\nNo Unity process or real KSP required.
+@enduml

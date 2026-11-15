@@ -5,6 +5,9 @@ The Arduino panel keeps KSPSerialIO and its serial port for buttons, LEDs and po
 with a monitor shows the flight data next to it: apoapsis, periapsis, altitude, speeds, orbital elements and a
 drawing of the orbit. The code lives in ``hmi-cpp/`` (C++17, SDL2); the Pi builds it from source.
 
+For module boundaries, threads, telemetry models and extension guidance, see
+:doc:`development/raspberry-pi`. The complete TCP/UDP contracts are in :doc:`communication`.
+
 Why kRPC and not KSPSerialIO
 ----------------------------
 
@@ -21,7 +24,8 @@ also send commands, so touch controls can be added later without touching the pl
 How it works
 ------------
 
-``ksphmi`` runs two threads:
+``ksphmi`` separates source and display execution; a live kRPC client also owns a stream-reader thread.
+The two application roles are:
 
 * a **source** (``src/telemetry.cpp``) publishes immutable ``Snapshot`` objects. ``KrpcSource`` connects to
   kRPC, opens streams on the active vessel and re-opens them when the vessel or the sphere of influence changes;
@@ -48,6 +52,8 @@ tests require the composed frame to equal a full redraw pixel for pixel in both 
 (``fbdev``, software) every frame is a full redraw, as before. The ``perf:`` log line (every 60 s) splits the
 frames: ``full N at X ms, navball-only M at Y ms``, and gives the CPU time spent inside ``present`` next to its
 wall time (a long present with little CPU is the wait for the page flip, not work).
+The shipped ``config.toml`` sets ``layer_cache = "off"``: on the Pi GPU, copying the cached layer
+cost more than a full redraw. ``auto`` describes an available selection mode, not the shipped setting.
 
 The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
 leaving resource gauges and a read-only staging queue below them. Each resource is a classic car fuel gauge:
@@ -121,11 +127,14 @@ current one. A node placed after an SOI change (another body), or any kRPC error
 kRPC``, or warns ``frame mismatch?`` when the state vectors disagree with kRPC's own periapsis.
 ``./ci sim --node 250,900`` adds a 250 m/s prograde node 900 s ahead in the simulator; ``--demo`` has one.
 
-On the Pi there is no desktop: frames are drawn with SDL's software renderer and only the changed rows are
-copied to the Linux framebuffer ``/dev/fb0`` (RGB565 or XRGB8888; ``output = fbdev``, set by the service through
-``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode but left the screen black on the Pi 4 (seen with
-the old pygame build); fbdev needs no EGL and no DRM master, and when the HMI stops the text console shows again.
-``KSPHMI_OUTPUT=sdl SDL_VIDEODRIVER=kmsdrm`` tries the GPU renderer instead (needs Mesa EGL/GLES and DRM master).
+On the Pi there is no desktop. The current service sets ``KSPHMI_OUTPUT=auto`` and
+``SDL_VIDEODRIVER=kmsdrm``: it first tries an accelerated SDL renderer and falls back to Linux fbdev when
+that path cannot open. The GPU path needs the working Mesa EGL/GLES stack and DRM access. The old
+pygame attempt left the screen black; that historical result does not describe the current C++ GPU path.
+
+With fbdev selected, SDL draws into an ARGB8888 software surface and only changed rows are copied to
+``/dev/fb0`` (RGB565 or XRGB8888). This fallback needs neither EGL nor DRM master. Explicit
+``KSPHMI_OUTPUT=fbdev`` forces it; ``KSPHMI_OUTPUT=sdl SDL_VIDEODRIVER=kmsdrm`` selects SDL output.
 The framebuffer can be left *blanked* (``/sys/class/graphics/fb0/blank`` = 4, powered down; it happened after
 the kmsdrm attempts): frames are then written but nothing shows, while the HMI log looks healthy. The HMI
 unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./ci verify`` checks the value.
@@ -286,7 +295,7 @@ Deploy
    ``active``) and prints the last 15 log lines.
 
 Interactive HMI and test app without the Pi
-------------------------------------------
+-------------------------------------------
 
 Run both application windows on a Linux desktop, viewed in your browser::
 

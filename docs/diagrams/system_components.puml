@@ -1,0 +1,27 @@
+@startuml system_components
+!pragma layout smetana
+title Production component boundaries
+skinparam componentStyle rectangle
+actor Pilot
+package "Game host / Unity" {
+  component "KSP vessel and scenes" as Game
+  component "KSPSerialIO" as Mod
+  component "HmiContext" as Context
+  component "kRPC mod (separate dependency)" as RPC
+}
+component "UNO R4 firmware" as Board
+component "Pi C++ HMI" as HMI
+Pilot --> Board : buttons / optional axes
+Mod --> Game : apply controls
+Game --> Mod : sample vessel
+Board --> Mod : serial controls / diagnostics
+Mod --> Board : serial telemetry / handshake
+Game --> RPC : expose vessel API
+Game --> Context : scene / facility events
+HMI --> RPC : TCP calls + stream registration
+RPC --> HMI : TCP stream results
+HMI --> Context : UDP KSPHMI/1 request
+Context --> HMI : UDP scene reply
+HMI --> Pilot : instruments / flight data
+Board --> Pilot : LEDs / matrix
+@enduml

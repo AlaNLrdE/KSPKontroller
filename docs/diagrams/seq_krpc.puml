@@ -1,0 +1,73 @@
+@startuml seq_krpc
+title kRPC protocol 1: connections, workers and display publication
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+participant "KrpcSource worker" as Source
+participant "krpc::Client" as Client
+participant "kRPC server" as Server
+participant "Client stream reader" as Reader
+participant "Source latest slot" as Latest
+participant "Display thread" as UI
+activate Source
+Source -> Client : construct(options)
+activate Client
+Client -> Server : RPC connect + ConnectionRequest\nname, protocol_version=1
+activate Server
+Server --> Client : ConnectionResponse\nstatus, identifier, protocol version
+deactivate Server
+Client -> Server : stream connect + ConnectionRequest\ntype=stream, identifier
+activate Server
+Server --> Client : stream connection accepted
+deactivate Server
+Client ->> Reader : start stream_loop thread
+Client --> Source : connected
+deactivate Client
+Source -> Client : invoke(SpaceCenter.get_ActiveVessel)
+activate Client
+Client -> Server : length-prefixed protobuf Request
+activate Server
+Server --> Client : Response / ProcedureResult
+deactivate Server
+Client --> Source : vessel ID or null
+deactivate Client
+alt active vessel
+  Source -> Client : add_stream(procedure, rate)
+  activate Client
+  Client -> Server : KRPC.AddStream / SetStreamRate
+  activate Server
+  Server --> Client : stream ID / success
+deactivate Server
+  Client --> Source : stream ID
+  deactivate Client
+  loop asynchronous stream updates
+    activate Server
+    Server ->> Reader : StreamUpdate / ProcedureResult
+    deactivate Server
+    activate Reader
+    Reader -> Reader : replace latest[id], notify waiters
+    deactivate Reader
+  end
+  Source -> Client : stream(id)
+  activate Client
+  Client --> Source : latest value / procedure error
+  deactivate Client
+  Source -> Latest : publish immutable Flight Snapshot
+  activate Latest
+  Latest --> Source : publication complete
+  deactivate Latest
+else null vessel
+  Source -> Latest : publish NoVessel Snapshot + context
+  activate Latest
+  Latest --> Source : publication complete
+  deactivate Latest
+end
+deactivate Source
+UI -> Latest : latest()
+activate UI
+activate Latest
+Latest --> UI : shared_ptr<const Snapshot>
+deactivate Latest
+UI -> UI : Display.draw() / Output.present()
+deactivate UI
+note over Source, Reader : Workers continue for subsequent samples.\nActivations show illustrated work, not CPU residency while waiting.
+@enduml

@@ -343,7 +343,13 @@ PLANTUML_JAR="${PLANTUML_JAR:-$BUILD/tools/plantuml.jar}"
 PLANTUML_URL="https://github.com/plantuml/plantuml/releases/latest/download/plantuml.jar"
 
 ensure_plantuml() {
-  command -v java >/dev/null 2>&1 || die "java not found; PlantUML needs a Java runtime"
+  # On macOS /usr/bin/java may be a stub, while Homebrew's JDK is installed but keg-only.
+  if ! java -version >/dev/null 2>&1 && command -v brew >/dev/null 2>&1; then
+    local jdk
+    jdk="$(brew --prefix openjdk 2>/dev/null || true)"
+    [ ! -x "$jdk/bin/java" ] || export PATH="$jdk/bin:$PATH"
+  fi
+  java -version >/dev/null 2>&1 || die "working Java runtime missing; PlantUML needs Java"
   if [ ! -f "$PLANTUML_JAR" ]; then
     log "Downloading plantuml.jar"
     mkdir -p "$(dirname "$PLANTUML_JAR")"
@@ -397,7 +403,7 @@ sphinx() {
   venv_bin="$(ensure_venv "$ROOT/docs/requirements.txt")"
 
   log "Building Sphinx site"
-  "$venv_bin/python" -m sphinx -b html "$ROOT/docs" "$BUILD/sphinx"
+  "$venv_bin/python" -m sphinx -n -W --keep-going -b html "$ROOT/docs" "$BUILD/sphinx"
 
   # Embed the Doxygen API reference next to the Sphinx pages when Doxygen is available
   if command -v doxygen >/dev/null 2>&1; then

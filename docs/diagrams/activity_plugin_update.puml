@@ -1,34 +1,30 @@
 @startuml activity_plugin_update
-title KSPSerialIO.Update (runs every frame in the flight scene)
-
+title KSPSerialIO.Update (Unity main thread)
 start
-if (active vessel exists and port is open?) then (yes)
-  if (active vessel changed?) then (yes)
-    :move the AxisInput hook to the new vessel;
-    :sync RCS and SAS from VControls;
+if (active vessel and LinkReady?) then (yes)
+  if (new link or active vessel changed?) then (yes)
+    :attach/move AxisInput hook idempotently\nreset control baseline where required;
   endif
-  if (more than refreshrate seconds since the last packet?) then (yes)
-    :sample orbit, altitude, speeds,\nresources, attitude, action groups,\nstage, target and navball mode into VData;
-    :KSPSerialPort.sendPacket(VData);
+  if (refresh interval elapsed?) then (yes)
+    :sample orbit, speeds, resources, attitude, groups and stage into VData;
+    :TrySendPacket(VData)\nreplace pending frame for SenderWorker;
   endif
   if (ControlReceived?) then (yes)
-    :apply changed toggles: RCS, SAS, lights,\ngear, brakes, abort;
-    if (stage button pressed?) then (yes)
-      :StageManager.ActivateNextStage();
-    endif
-    :apply changed custom groups 1-10;
-    :apply SAS mode and navball speed mode\nif they changed;
-    if (pitch, roll or yaw above SASTol?) then (yes)
-      :temporarily switch SAS off;
-    else (no)
-      if (SAS switch on?) then (yes)
-        :switch SAS on;
+    :toggle SAS/RCS on changed button bits\napply changed level switches;
+    if (latched stage request?) then (yes)
+      if (request age in 0..1000 ms?) then (yes)
+        :StageManager.ActivateNextStage();
+      else (no)
+        :log stale request;
       endif
+      :consume stage request;
     endif
+    :apply changed custom groups, SAS mode and speed mode;
     :ControlReceived = false;
   endif
 else (no)
-  :do nothing;
+  :skip serial telemetry and control application;
 endif
+:record enabled performance counters;
 stop
 @enduml

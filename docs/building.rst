@@ -108,7 +108,8 @@ Requirements for the documentation
 * **Python 3** with ``pip`` (a virtual environment is created in ``build/venv``).
 * **Java** to run PlantUML. ``plantuml.jar`` is downloaded to ``build/tools`` unless the
   ``PLANTUML_JAR`` environment variable points to one.
-* **Doxygen** for the API reference.
+* **Doxygen** for the mod, firmware and HMI API reference.
+* **Graphviz** for graph layouts used by PlantUML and Doxygen.
 * Python packages are listed in ``docs/requirements.txt``.
 
 Diagram conventions
@@ -117,4 +118,13 @@ Diagram conventions
 Diagrams are PlantUML sources in ``docs/diagrams``, one per file, and use standard UML notation:
 class, sequence, state machine, activity and deployment diagrams. They are included with the
 ``uml`` directive, so editing a ``.puml`` file and rebuilding is all that is needed. Class
-diagrams use PlantUML's built-in layout engine, so Graphviz is not required.
+diagrams can use PlantUML's built-in layout engine; Graphviz is installed for other graph layouts.
+The authoring and strict validation workflow is documented in :doc:`documentation`.
+
+HMI and simulator development
+-----------------------------
+
+Use ``./ci build_hmi``, ``./ci test_hmi`` and ``./ci hmi --demo`` for a supported native/WSL toolchain.
+``./ci test_hmi_container`` builds and tests in Docker; ``./ci hmi_desktop`` runs the real HMI and
+kspsim GUI together. ``./ci test_hmi_desktop`` validates their GUI/protocol/browser path. See
+:doc:`testing` for prerequisites, architecture selection, artifact paths and coverage limits.

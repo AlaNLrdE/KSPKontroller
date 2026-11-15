@@ -1,92 +1,68 @@
 @startuml seq_discovery
-title Controller discovery when the flight scene loads
-
-skinparam style strictuml
+title Discovery: startup call stack and later supervisor work
 skinparam sequenceMessageAlign left
-skinparam responseMessageBelowArrow true
-
-participant "KSPSerialPort.Awake\n(main thread)" as Awake
-participant "Serial port" as Port
-participant "SerialWorker\n(reader thread)" as Worker
-participant "Arduino firmware\n(loop)" as FW
-participant "KSPSerialIO.Start\n(main thread)" as Start
-
-note over FW : loop() runs continuously
-activate FW
-
-== KSPSerialPort.Awake: controller not found yet ==
+participant "KSPSerialPort.Awake\nUnity main thread" as Awake
+participant "TryConnect\ncalled by startup or supervisor" as Connect
+participant "Serial transport / reader" as Port
+participant "Arduino loop" as FW
+participant "SupervisorWorker" as Supervisor
 activate Awake
-Awake -> Awake ++ : initializeDataPackets()
-return HPacket = 1, 2, 3
-
-Awake -> Awake ++ : Begin()
-Awake ->> Worker : Thread.Start(SerialWorker)
-activate Worker
-note right of Worker
-  Lives until PortCleanup().
-  Sleeps 500 ms while the port is closed.
-end note
-deactivate Awake
-
-loop for each candidate port (DefaultPort first, then the registry list)
-  Awake -> Port ++ : Open()
-  return opened, or an exception
-
-  alt opened and HandshakeDisable = 0
-    Awake -> Awake ++ : Thread.Sleep(HandshakeDelay)
-    return
-
-    Awake -> Awake ++ : sendPacket(HandShakePacket 1, 2, 3)
-    Awake -> Port ++ : Write(frame)
-    return
-    return
-
-    Port ->> FW : bytes over USB
-    FW -> FW ++ : input()
-    FW -> FW ++ : KSPBoardReceiveData()
-    return true, id = 0
-    FW -> FW ++ : Handshake()
-    FW -> Port ++ : KSPBoardSendData(HPacket 3, 1, 4)
-    return
-    return
-    return
-
-    Port ->> Worker : bytes (EndRead returns)
-    Worker -> Worker ++ : ReceivedDataEvent(bytes)
-    Worker -> Worker ++ : InboundPacketHandler()
-    note right of Worker : Runs on this thread because\nDisplayFound is still false
-    Worker -> Worker ++ : HandShake()
-    return
-    note right of Worker : M1, M2, M3 = 3, 1, 4\nDisplayFound = true
-    return
-    return
-
-    Awake -> Awake ++ : wait for DisplayFound\n(up to 15 x 100 ms)
-    return DisplayFound
-
-    Awake -> Port ++ : Close()
-    return
-
-    opt DisplayFound
-      note over Awake : stop scanning ports
+Awake -> Awake : stop obsolete supervisor; reset link flags
+alt compatible controller remembered
+  Awake -> Port : recreate port/reader (Begin)
+  activate Port
+  Port --> Awake : initialized; Start opens if needed
+  deactivate Port
+else initial discovery required
+  Awake -> Connect : TryConnect(BuildCandidates(), delay, reply wait)
+  activate Connect
+  loop eligible present ports, last/default first
+    Connect -> Port : open, assert DTR, settle
+    activate Port
+    Port --> Connect : opened or error
+    deactivate Port
+    opt port opened
+      Connect -> Port : send framed id=0 probe 1,2,3
+      activate Port
+      Port --> Connect : written
+      deactivate Port
+      Port ->> FW : serial probe bytes
+      activate FW
+      FW -> FW : input() / Handshake()
+      FW -->> Port : framed id=0 reply 3,1,4
+      deactivate FW
+      activate Port
+      Port --> Connect : validated reply or timeout
+      deactivate Port
     end
-  else opened and HandshakeDisable = 1
-    note over Awake : DisplayFound = true\nport stays open
-  else open failed
-    note over Awake : log the error,\ntry the next port
+    alt valid reply
+      Connect -> Connect : mark link up; stop scanning
+    else no valid reply
+      Connect -> Port : close failed candidate
+      activate Port
+      Port --> Connect : closed
+      deactivate Port
+    end
+  end
+  Connect --> Awake : connected or no controller
+  deactivate Connect
+end
+Awake ->> Supervisor : start supervisor thread
+deactivate Awake
+activate Supervisor
+loop while flight component lives
+  Supervisor -> Supervisor : monitor failures/silence
+  opt link down
+    Supervisor -> Connect : rebuild candidates and TryConnect()
+    activate Connect
+    ref over Connect, FW : Same framed probe/reply exchange as above
+    Connect --> Supervisor : connected or no reply
+    deactivate Connect
+    opt not connected
+      Supervisor -> Supervisor : wait 2000 ms or stop signal
+    end
   end
 end
-deactivate Awake
-
-== KSPSerialIO.Start ==
-activate Start
-Start -> Port ++ : Open() if it is closed
-return
-Start -> Start ++ : Thread.Sleep(HandshakeDelay + 200 ms)
-return
-Start -> Start ++ : hook AxisInput on the active vessel
-return
-Start -> Start ++ : sync RCS, SAS, lights, gear, brakes,\nabort, stage and groups from VControls
-return
-deactivate Start
+deactivate Supervisor
+note over Awake : Initial discovery can block scene loading.\nLater retries execute on the supervisor, not Unity's frame loop.
 @enduml

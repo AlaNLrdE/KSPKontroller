@@ -6,7 +6,10 @@ on:
     branches: [main]
     paths:
       - "docs/**"
-      - "KSPSerialIO/KSPSerialIO/KSPIO.cs"
+      - "KSPSerialIO/KSPSerialIO/**"
+      - "hmi-cpp/**"
+      - "tools/kspsim/**"
+      - "tools/hmi-container/**"
       - "arduino-sketch/**"
       - "Doxyfile"
       - "README.md"
@@ -34,7 +37,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install Doxygen and Java
-        run: sudo apt-get update && sudo apt-get install -y doxygen default-jre-headless
+        run: sudo apt-get update && sudo apt-get install -y doxygen default-jre-headless graphviz
+
+      - name: Check documentation structure and render UML
+        run: |
+          python tools/verify.py --docs-only
+          ./ci diagrams
 
       - name: Build the site
         run: ./ci sphinx

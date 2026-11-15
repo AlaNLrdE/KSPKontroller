@@ -8,8 +8,11 @@ What it does
   action group state ...) to the controller several times per second.
 * **Controls**: the controller sends the state of its switches and throttle back, and the plugin
   applies them to the active vessel (SAS, RCS, action groups, throttle, staging ...).
-* **Indicators**: the firmware turns the received telemetry into LEDs (caution, warning, SAS,
-  RCS, action group 1).
+* **Indicators**: the firmware turns received telemetry into external LEDs and the UNO R4's 12x8 matrix.
+* **Flight display**: the Raspberry Pi C++ HMI shows navigation, orbit, resources and staging using
+  kRPC telemetry, plus scene/facility context from KSPSerialIO.
+* **Development without hardware**: kspsim stands in for the game; a Docker desktop can run the
+  test app and real C++ HMI together in a browser. See :doc:`testing`.
 
 Repository layout
 -----------------
@@ -28,6 +31,14 @@ Repository layout
      - Reference DLLs from KSP/Unity and ``PsimaxSerial.dll``
    * - ``arduino-sketch/KSPIODemo9/``
      - Arduino firmware, split across several ``.ino`` files
+   * - ``hmi-cpp/``
+     - C++17 HMI, CMake targets, headers, source, tests and Pi service/boot files
+   * - ``KSPSerialIO/KSPSerialIO/HmiContext.cs``
+     - Persistent read-only UDP scene/facility context responder
+   * - ``tools/kspsim/``
+     - Test GUI, simulated vessel and both host-protocol stand-ins
+   * - ``tools/hmi-container/``
+     - Debian HMI tests, graphical desktop launcher and GUI/transport smoke check
    * - ``ci`` / ``ci.cmd``
      - Build, documentation and install helper
    * - ``docs/``
@@ -38,8 +49,9 @@ Deployment
 
 .. uml:: diagrams/deployment.puml
 
-The plugin and the firmware only share the serial link. Both sides define the same packed binary
-structs, so any change to a packet layout must be made on both sides (see :doc:`protocol`).
+The mod and firmware share a packed serial contract that the simulator also implements. The HMI
+uses an independent TCP kRPC path and UDP context, as described in :doc:`communication`. A serial
+layout change must update all serializers; it does not automatically add a value to the Pi display.
 
 Hardware used by the demo sketch
 --------------------------------

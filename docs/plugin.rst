@@ -1,6 +1,9 @@
 KSP plugin
 ==========
 
+For component ownership, synchronization and extension guidance, see :doc:`development/plugin`.
+The channel inventory and UDP scene-context contract are in :doc:`communication`.
+
 Lifecycle
 ---------
 
@@ -98,9 +101,9 @@ on to the next one. Bluetooth modem ports (``\Device\BthModem*``) are skipped be
 never answer, and a port equal to ``DefaultPort`` is not probed twice.
 
 Telemetry is only sent while a controller was found (``DisplayFound``). If sending fails three times in
-a row, the port is closed, ``LinkFailed`` stops further attempts for the rest of the flight and a single
-line per failure is logged, instead of blocking the main thread and logging a stack trace on every
-packet. The write timeout is 250 ms.
+a row, ``LinkFailed`` stops main-thread send/application until the background supervisor restores
+connectivity. It closes/reprobes the link and retries during the same flight, logging transitions
+rather than blocking and throwing on every frame. The write timeout is 250 ms.
 
 Measuring the plugin's cost
 ---------------------------

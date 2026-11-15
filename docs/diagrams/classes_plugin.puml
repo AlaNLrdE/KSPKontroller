@@ -19,6 +19,8 @@ class SettingsNStuff <<KSPAddon: MainMenu>> {
 
 class KSPSerialPort <<KSPAddon: Flight>> {
   +{static} Port : SerialPort
+  +{static} LinkReady : bool
+  +{static} LinkUp : bool
   +{static} DisplayFound : bool
   +{static} ControlReceived : bool
   +{static} VData : VesselData
@@ -35,6 +37,9 @@ class KSPSerialPort <<KSPAddon: Flight>> {
   -ReceivedDataEvent(bytes, length)
   +{static} InboundPacketHandler()
   +{static} sendPacket(packet)
+  +{static} TrySendPacket(packet)
+  -SenderWorker()
+  -SupervisorWorker()
   +{static} ControlStatus(bit, state)
   +{static} PortCleanup()
 }
@@ -52,6 +57,18 @@ class KSPSerialIO <<KSPAddon: Flight>> {
   +{static} ProspectForResource(...)
   +{static} ProspectForResourceMax(...)
   ~OnDestroy()
+}
+
+class HmiContext <<KSPAddon: MainMenu, persistent>> {
+  ~Awake()
+  +Update()
+  +OnDestroy()
+  -facility : string
+}
+
+class KSPLogQueue {
+  +{static} Log(message)
+  +{static} Flush()
 }
 
 enum ReceiveStates {
@@ -86,7 +103,6 @@ struct ControlPacket <<packed, 25 bytes>> {
   MainControls : byte
   ControlGroup : ushort
   NavballSASMode : byte
-  ProgradePitch ... NormalHeading : short (degrees x 50)
   Pitch, Roll, Yaw, TX, TY, TZ : short
   WheelSteer, Throttle, WheelThrottle : short
 }
@@ -107,6 +123,8 @@ struct IOResource {
   Current : float
 }
 
+MonoBehaviour <|-- HmiContext
+KSPSerialPort ..> KSPLogQueue : worker logging
 MonoBehaviour <|-- SettingsNStuff
 MonoBehaviour <|-- KSPSerialPort
 MonoBehaviour <|-- KSPSerialIO

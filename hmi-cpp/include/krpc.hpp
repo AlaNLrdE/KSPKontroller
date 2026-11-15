@@ -38,7 +38,7 @@ struct Call {
     std::vector<std::string> args;
 };
 
-/// SpaceCenter.<procedure>(args...)
+/// SpaceCenter procedure with its encoded arguments, in position order.
 inline Call sc(std::string procedure, std::vector<std::string> args = {}) {
     return {"SpaceCenter", std::move(procedure), std::move(args)};
 }

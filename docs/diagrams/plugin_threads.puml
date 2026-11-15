@@ -1,0 +1,32 @@
+@startuml plugin_threads
+!pragma layout smetana
+title Mod execution contexts and handoff
+rectangle "Unity main thread" {
+  component "KSPSerialIO.Update / AxisInput" as IO
+  component "KSPSerialPort.Update\nInboundPacketHandler" as Dispatch
+  component "HmiContext.Update" as Context
+  component "KSPLogQueue.Flush" as Flush
+}
+rectangle "Background workers" {
+  component "SerialWorker / parser" as Reader
+  component "SenderWorker" as Writer
+  component "SupervisorWorker" as Supervisor
+}
+queue "NewPacketBuffer\nSerialMutex" as RX
+queue "Newest pending frame\nsendLock" as TX
+queue "KSPLogQueue" as Logs
+component "Serial port" as Port
+Reader --> RX : valid received payload
+RX --> Dispatch : consume
+Dispatch --> IO : decoded controls / edge latch
+IO --> TX : TrySendPacket
+TX --> Writer : replaceable telemetry
+Writer --> Port : blocking write
+Port --> Reader : one read at a time
+Supervisor --> Port : close / probe / reconnect\nwhile link down
+Reader --> Logs
+Writer --> Logs
+Supervisor --> Logs
+Logs --> Flush : Unity logging
+note bottom of Context : UDP context is independent of serial workers.\nInitial discovery can run synchronously during Awake.
+@enduml

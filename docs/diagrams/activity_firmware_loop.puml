@@ -1,33 +1,31 @@
 @startuml activity_firmware_loop
-title Firmware main loop
-
+title Firmware foreground scheduler
 start
-:setup(): Serial.begin(115200),\ninitLEDS(), InitTxPackets(),\ncontrolsInit(), LEDSAllOff();
+:setup: serial at 115200, reset cause, WDT,\nLEDs, packet IDs, inputs and matrix;
 repeat
+  :record loop interval and count\nWDT.refresh();
   partition "input()" {
-    :now = millis();
-    if (KSPBoardReceiveData() returned a packet?) then (yes)
-      :deadtimeOld = now;
-      if (packet id) then (0 handshake)
-        :Handshake(): reply 3, 1, 4;
-      else (1 telemetry)
-        :Indicators(): update LEDs;
-      endif
+    if (complete valid packet?) then (yes)
+      :update receive time\ndispatch handshake / telemetry / display command;
       :green LED on, Connected = true;
     else (no)
-      if (now - deadtimeOld > 2000 ms?) then (yes)
-        :Connected = false;
-        :LEDSAllOff();
+      if (ever connected and no valid packet >30 s?) then (yes)
+        :NVIC_SystemReset();
+      endif
+      if (idle >2 s?) then (yes)
+        :Connected = false, LEDs off;
       endif
     endif
   }
   partition "output()" {
-    if (now - controlTimeOld > 25 ms?) then (yes)
-      if (Connected?) then (yes)
-        :read SAS, RCS, group 1 switches\nand the throttle potentiometer;
-        :KSPBoardSendData(CPacket);
+    if (sample due and connected?) then (yes)
+      :read enabled pins / debounce / update CPacket;
+      if (relevant change or 200 ms keepalive due?) then (yes)
+        :send one framed ControlPacket;
       endif
     endif
   }
-repeat while (forever)
+  :debugReport() when due and connected;
+  :matrixUpdate();
+repeat while (foreground running)
 @enduml

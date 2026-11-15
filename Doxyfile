@@ -1,10 +1,12 @@
 # Doxygen configuration for KSPKontroller. Generate with: ./ci docs
 PROJECT_NAME           = "KSPKontroller"
-PROJECT_BRIEF          = "Physical Kerbal Space Program controller: KSP plugin and Arduino firmware"
+PROJECT_BRIEF          = "KSP control panel and flight display: mod, Arduino firmware and C++ Raspberry Pi HMI"
 OUTPUT_DIRECTORY       = build/docs
-INPUT                  = KSPSerialIO/KSPSerialIO/KSPIO.cs arduino-sketch/KSPIODemo9 README.md
-FILE_PATTERNS          = *.cs *.ino *.md
+INPUT                  = KSPSerialIO/KSPSerialIO/KSPIO.cs KSPSerialIO/KSPSerialIO/HmiContext.cs arduino-sketch/KSPIODemo9 hmi-cpp/include hmi-cpp/src README.md
+RECURSIVE              = YES
+FILE_PATTERNS          = *.cs *.ino *.hpp *.cpp *.md
 USE_MDFILE_AS_MAINPAGE = README.md
+IMAGE_PATH             = docs/images
 # .ino sketches are C++ once the Arduino IDE concatenates them
 EXTENSION_MAPPING      = ino=C++
 OPTIMIZE_OUTPUT_JAVA   = YES
