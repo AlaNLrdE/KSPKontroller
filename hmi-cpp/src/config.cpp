@@ -5,7 +5,9 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -166,7 +168,11 @@ void apply_toml(Config& c, const TomlValues& m) {
     c.display.fullscreen = to_bool(m, "display.fullscreen", c.display.fullscreen);
     c.display.width = to_int(m, "display.width", c.display.width);
     c.display.height = to_int(m, "display.height", c.display.height);
-    c.format.day_hours = to_int(m, "format.day_hours", c.format.day_hours);
+    const double day_hours = to_double(m, "format.day_hours", c.format.day_hours);
+    if (!std::isfinite(day_hours) || day_hours <= 0 || std::floor(day_hours) != day_hours ||
+        day_hours > std::numeric_limits<int>::max())
+        throw std::runtime_error("format.day_hours must be a positive integer within the int range");
+    c.format.day_hours = static_cast<int>(day_hours);
 }
 
 std::string find_app_dir() {

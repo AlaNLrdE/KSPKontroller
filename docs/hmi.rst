@@ -161,7 +161,10 @@ Settings
 --------
 
 ``hmi-cpp/config.toml`` (deployed to ``~/ksphmi/cpp``) holds the defaults: kRPC ports and sample rate, ``fps``,
-screen size (0 = the monitor's own) and ``day_hours`` (6 for the KSP calendar). The binary finds it through
+screen size (0 = the monitor's own) and ``day_hours`` (6 for the KSP calendar, 24 for Earth time).
+``format.day_hours`` must be a finite positive integer within the C++ ``int`` range; zero, negative,
+fractional and out-of-range values are rejected with the configuration filename before the display starts.
+The binary finds it through
 ``KSPHMI_APP_DIR`` (the unit sets ``~/ksphmi/cpp``), else next to or one level above itself, so a build tree
 under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds

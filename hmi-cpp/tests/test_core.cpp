@@ -466,6 +466,40 @@ TEST(config_layers_and_environment) {
     rmdir(dir);
 }
 
+TEST(config_day_hours_requires_a_positive_representable_integer) {
+    for (const char* value : {"0", "-1", "0.5", "6.5", "inf", "-inf", "nan", "2147483648", "1e300"}) {
+        Config cfg;
+        bool rejected = false;
+        try {
+            apply_toml(cfg, parse_toml(std::string("[format]\nday_hours = ") + value));
+        } catch (const std::runtime_error& e) {
+            rejected = std::string(e.what()).find("format.day_hours must be a positive integer") != std::string::npos;
+        }
+        CHECK(rejected);
+        CHECK_EQ(cfg.format.day_hours, 6);  // invalid input never reaches the integer conversion
+    }
+    for (int hours : {1, 6, 24, 2147483647}) {
+        Config cfg;
+        apply_toml(cfg, parse_toml("[format]\nday_hours = " + std::to_string(hours)));
+        CHECK_EQ(cfg.format.day_hours, hours);
+        CHECK_EQ(fmt::duration(static_cast<double>(hours) * 3600, hours), "1d 0h");
+        CHECK_EQ(fmt::clock(static_cast<double>(hours) * 3600, hours), "Y1 D002 00:00:00");
+    }
+    char dir[] = "/tmp/ksphmi-config-XXXXXX";
+    CHECK(mkdtemp(dir) != nullptr);
+    const std::string path = std::string(dir) + "/invalid.toml";
+    std::ofstream(path) << "[format]\nday_hours = 0\n";
+    bool descriptive = false;
+    try {
+        load_config(path);
+    } catch (const std::runtime_error& e) {
+        descriptive = std::string(e.what()).find(path + ": format.day_hours must be a positive integer") == 0;
+    }
+    CHECK(descriptive);
+    std::remove(path.c_str());
+    rmdir(dir);
+}
+
 TEST(toml_subset_and_errors) {
     auto v = parse_toml("a = 1_000\n[t]\nb = \"x # y\"  # c\nc = false\nd = -2.5\n");
     CHECK_EQ(v["a"], "1000");

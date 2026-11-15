@@ -84,6 +84,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   destruction signals stop without joining a pending DNS call. Test with a blocked injected query, including
   cached reads, publication after release and destruction before release.
 
+- Validate format.day_hours as finite, positive, integral and within int range before casting configuration
+  numbers. A zero day reaches integer division in both clock and duration; generic to_int truncates floats
+  and cannot safely reject non-finite or out-of-range input. Config errors must identify the key and file.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the
