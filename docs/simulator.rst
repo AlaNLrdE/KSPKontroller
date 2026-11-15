@@ -24,6 +24,7 @@ Running it
    ./ci sim --no-board           # only the Pi        (--no-krpc: only the board)
    ./ci sim --headless           # no window, one status line every 2 s
    ./ci sim --node 250,900       # a 250 m/s prograde maneuver node 900 s ahead (the HMI's dashed orbit)
+   ./ci sim --scene vab --ship heavy  # start in the VAB with a sample editor ship (KSPHMI service)
    ./ci test_sim                 # tests, also part of ./ci verify
 
 The first time Python listens on the LAN, Windows asks whether to allow it: allow it on **private** networks,
@@ -37,6 +38,11 @@ The window
   game "starts" again). *HMI skin* (``config`` / ``classic`` / ``apollo``, or ``--skin``) adds
   ``skin=<name>`` to the UDP 50002 context reply: the Pi HMI switches its look at once (``config`` sends no
   field, as KSPSerialIO, so the HMI's own setting decides). Changes are logged as ``HMI skin ...``.
+  *VAB ship* picks what the ``KSPHMI`` kRPC service (``KSPSerialIO.Hmi.dll`` in the game) reports in the VAB and
+  SPH: ``kerbal_x`` (330 m/s short of a Mun landing), ``pending`` (delta-v not computed yet), ``heavy`` (launch
+  TWR 0.74, sandbox: no funds), ``empty`` (no parts, as after New: the Pi shows EMPTY CRAFT) or ``none`` (no service, as without the DLL: the Pi keeps its VAB cards). Each
+  choice is a new revision; outside the editor scenes the service answers kRPC's "not available in game scene"
+  error. Same as ``--ship`` / ``Simulator.set_ship``; the samples are in ``tools/kspsim/ships.py``.
 * **Scenario** loads a new vessel, as switching vessels in KSP does (the HMI re-opens its streams):
   on the pad, an 80 x 250 km orbit, a sub-orbital arc falling back through the atmosphere, an escape
   trajectory (hyperbolic, the HMI shows ``Escape``).

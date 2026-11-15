@@ -1,5 +1,29 @@
 # Changelog
 
+* **0.19.4.1**: 20261115
+  `KSPSerialIO.Hmi.dll` fixes from the first live VAB test (stock Kerbal X, KSP 1.12.5). Stage delta-v and TWR follow
+  the delta-v app's situation the way the app picks them (sea level / altitude / vacuum fields of `DeltaVStageInfo`,
+  body and situation from `DeltaVGlobals.deltaVAppValues`): the "actual" fields read before do not follow a vacuum
+  selection (Duna vacuum: 2328 m/s and TWR 5.15 instead of the app's 2452 and 5.42). New `kasl=` line (format v1,
+  optional for readers): each stage's delta-v at Kerbin sea level whatever the app shows, from the burn segments'
+  vacuum delta-v and the engines' Isp at 1 atm, so the Pi's mission delta-v does not depend on the app's body. Stage
+  events follow KSP's staging list (the Kerbal X's stage-0 parachute was missing) and fall back to the part's
+  staging icon; disagreements with `inverseStage` are logged once as `ship report check:`. Crew counts only the
+  current ship's parts (after New it reported the previous ship's crew=3 with no parts). The build writes
+  `KSPSerialIO.Hmi.xml` and `./ci install` copies it next to the DLL (kRPC warned "No documentation found" at every
+  launch); `./ci verify` compares it. `KSPSerialIO.dll` is unchanged apart from the version.
+
+* **0.19.4.0**: 20261115
+  New assembly `KSPSerialIO.Hmi.dll` (installed in `GameData/KSPSerialIO/Plugins`) with the kRPC service `KSPHMI`
+  for the Raspberry Pi's VAB screen (phase 1 of the editor ship report): `Revision()` and `ShipReport()`, available in
+  the editor scene. The report (text format v1: ship, situation of KSP's delta-v app, mass, cost, funds, parts, crew,
+  size, engines, per-stage delta-v / TWR / burn / events, or `dv=pending`) is built on Unity's main thread on
+  `onEditorShipModified`, craft load, new craft, `onDeltaVCalcsCompleted` and the delta-v app's situation change, and
+  cached; RPCs only read the cache. It targets .NET 4.7.1 because kRPC 0.7 is a .NET 4 assembly, and compiles against
+  the install's `KSP_x64_Data/Managed` and `GameData/kRPC/KRPC.Core.dll` (`./ci build_KSPSerialIO`). `KSPSerialIO.dll`
+  is unchanged apart from the version and still has no kRPC dependency: without kRPC only the new DLL fails to load.
+  Log tag `KSPSerialIO[HMI]`.
+
 * **0.19.3.16**: 20261114
   Fix the link silence detection: it measured silence from the last queued packet, which is never older than
   200 ms while flying, so a board that stopped answering mid-flight stayed `link_state=up` for minutes

@@ -8,7 +8,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from . import arduino, physics
+from . import arduino, physics, ships
 
 SAS_MODES = ("Stability assist", "Prograde", "Retrograde", "Normal", "Anti-normal", "Radial in", "Radial out",
              "Target", "Anti-target", "Maneuver")  # NavballSASMode low nibble 1-10
@@ -53,6 +53,16 @@ class App:
         skin_box.pack(side="left", padx=4)
         skin_box.bind("<<ComboboxSelected>>",
                       lambda _e: sim.set_skin("" if self.skin.get() == "config" else self.skin.get()))
+        # The editor ship the KSPHMI service reports in the VAB ("none" = no service: the Pi keeps its cards).
+        ship_row = ttk.Frame(game)
+        ship_row.pack(anchor="w", pady=(4, 0))
+        ttk.Label(ship_row, text="VAB ship").pack(side="left")
+        self.ship = tk.StringVar(value=sim.ship or "none")
+        ship_box = ttk.Combobox(ship_row, textvariable=self.ship, state="readonly", width=9,
+                                values=[n or "none" for n in ships.NAMES])
+        ship_box.pack(side="left", padx=4)
+        ship_box.bind("<<ComboboxSelected>>",
+                      lambda _e: sim.set_ship("" if self.ship.get() == "none" else self.ship.get()))
         self.board_text = tk.StringVar()
         self.krpc_text = tk.StringVar()
         for title, var, width in (("Arduino (KSPSerialIO protocol)", self.board_text, 64),

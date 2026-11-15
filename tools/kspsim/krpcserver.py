@@ -116,9 +116,19 @@ def send_message(sock: socket.socket, msg) -> None:
     sock.sendall(varint(len(data)) + data)
 
 
-def services_message() -> K.Services:
+# The game scenes KSPSerialIO.Hmi's KSPHMI service is registered for (GameScene.Editor = VAB and SPH)
+KSPHMI_SCENES = ("vab", "sph")
+
+
+def services_message(ksphmi: bool = True) -> K.Services:
     services = K.Services()
     services.services.add(name="KRPC")
+    if ksphmi:  # KSPSerialIO.Hmi.dll's service: no generated client stubs, so the procedures carry their types
+        hmi = services.services.add(name="KSPHMI")
+        for name, code in (("Revision", K.Type.UINT32), ("ShipReport", K.Type.STRING)):
+            proc = hmi.procedures.add(name=name)
+            proc.return_type.code = code
+            proc.game_scenes.extend([K.Procedure.EDITOR_VAB, K.Procedure.EDITOR_SPH])
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
                 "Resources", "Stage", "Part", "Parts"):
@@ -339,11 +349,24 @@ class KrpcServer:
         if service == "SpaceCenter":
             with self.sim.lock:
                 return self._space_center(proc, args)
+        if service == "KSPHMI" and self.sim.ship:
+            return self._ksphmi(proc)
         raise RpcFailure("kspsim does not implement the %s service" % service)
+
+    def _ksphmi(self, proc: str) -> bytes:
+        """KSPSerialIO.Hmi's editor ship report. kRPC refuses an Editor-scene procedure in any other scene."""
+        sim = self.sim
+        if sim.scene not in KSPHMI_SCENES:
+            raise RpcFailure("Procedure not available in game scene '%s'" % sim.scene, "KRPC", "InvalidOperationException")
+        if proc == "Revision":
+            return varint(sim.ship_revision)
+        if proc == "ShipReport":
+            return enc_string(sim.ship_report())
+        raise RpcFailure("kspsim does not implement KSPHMI.%s" % proc)
 
     def _krpc(self, client: ClientConn, proc: str, args: dict) -> bytes | None:
         if proc == "GetServices":
-            return services_message().SerializeToString()
+            return services_message(bool(self.sim.ship)).SerializeToString()
         if proc == "GetStatus":
             return K.Status(version="kspsim", protocol_version=PROTOCOL_VERSION).SerializeToString()
         if proc == "GetClientName":

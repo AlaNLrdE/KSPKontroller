@@ -227,3 +227,22 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   macOS instead of `/proc/self/exe`; Canvas can use system Arial Bold when Linux fonts are absent.
 - Validate native support with `./ci test_hmi` and `./ci hmi --demo --screenshot build/hmi-macos-demo.png`.
   Core tests need loopback sockets; a sandbox that blocks binds can leave the fake server waiting.
+
+## VAB ship report (2026-11-15, phase 1)
+
+- In the `vab` scene `ShipReportPoller` (telemetry.cpp) polls `KSPHMI.Revision` at 2 Hz on the session's RPC
+  connection and fetches `KSPHMI.ShipReport` only on a new revision. Any `RpcError` (no KSPSerialIO.Hmi.dll, no
+  kRPC, other scene) or a rejected text leaves `Snapshot.ship` null: the static cards stay and the session lives.
+  Log: `ship report unavailable (static VAB cards): ...` once per reason, `ship report: revision N, ...`.
+- Format v1 lives in four places that must agree: the plugin's `ShipReportFormat.cs`, `src/shipreport.cpp`,
+  `tools/kspsim/ships.py` and the fixture `hmi-cpp/tests/data/ship_report_v1.txt` (tested by all three;
+  `check_ship_report_contract`). Bump `v` for anything an old Pi would misread; new line kinds are ignored.
+- Apollo's VAB art is keyed only by size and `[vab]` config (fixed 8 stage rows, the target ring is art), never by
+  the ship. `KSPHMI_SHOTS=DIR` writes `classic_vab*.png` / `apollo_vab*.png` from the fixture.
+- End to end without the game: kspsim `--scene vab --ship heavy|kerbal_x|pending|none` and
+  `ksphmi --address 127.0.0.1 --config <toml with discovery = false and the sim ports> --screenshot`.
+- The TOML subset now accepts dotted tables (`[vab.destinations]`); destinations are `name = m/s`, max 12.
+- TWR colours (2026-11-15): `twr_level()` in shipreport.cpp is the one rule for both skins and the apollo LAUNCH TWR /
+  UPPER TWR lamps (`[vab] launch_twr_min/launch_twr_warn/upper_twr_warn`); only stages with delta-v are judged. The
+  apollo VAB header uses its own lamp table (`VAB_LAMPS`, fitted on its own so the flight lamps keep their size);
+  `ApolloSkin::on_lamp` reports every lamp evaluated live for tests.

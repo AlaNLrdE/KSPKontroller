@@ -15,7 +15,7 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
    * - ``./ci build_sketch_debug``
      - Compile the firmware with symbols and ``-Og`` into ``build/sketch-debug`` (see :doc:`debugging`).
    * - ``./ci build_KSPSerialIO``
-     - Compile the plugin with msbuild, xbuild or dotnet.
+     - Compile the plugin with msbuild, xbuild or dotnet, then ``KSPSerialIO.Hmi.dll`` (see below).
    * - ``./ci build_all``
      - Both of the above.
    * - ``./ci deploy``
@@ -91,7 +91,16 @@ stops the command before those hardware writes. This is not a transactional depl
 failure does not roll back a successful Pi deployment. See :doc:`hmi` for the Pi's one-time setup and SSH alias.
 
 ``./ci deploy`` builds the plugin and copies ``KSPSerialIO.dll``, ``PsimaxSerial.dll`` and, the first
-time, ``config.xml`` to ``GameData/KSPSerialIO`` of a local KSP install. An existing ``config.xml`` is
+time, ``config.xml`` to ``GameData/KSPSerialIO`` of a local KSP install, and ``KSPSerialIO.Hmi.dll`` to
+``GameData/KSPSerialIO/Plugins`` when it was built.
+
+``KSPSerialIO.Hmi.dll`` (the Pi's VAB ship report, :doc:`plugin`) is a separate .NET 4.7.1 project,
+``KSPSerialIO/KSPSerialIO.Hmi/KSPSerialIO.Hmi.csproj``, not part of ``KSPSerialIO.sln`` (which targets 3.5).
+``./ci build_KSPSerialIO`` builds it right after ``KSPSerialIO.dll`` with ``-p:KSPDIR=<install>`` (chosen as for
+``deploy``; set ``KSPDIR`` to skip the question) and the .NET 4.7.1 reference assemblies downloaded into
+``build/refasm-net471``. It references the install's ``KSP_x64_Data/Managed`` assemblies and
+``GameData/kRPC/KRPC.Core.dll``, read-only. Without an install or without kRPC it is skipped with a warning; the
+main plugin builds either way. ``./ci verify`` reports it as ``ship report: installed``. An existing ``config.xml`` is
 never overwritten. It refuses to run while KSP is open, because the game keeps the DLL locked.
 
 The installs are detected, not guessed, and ``./ci ksp_list`` shows them:

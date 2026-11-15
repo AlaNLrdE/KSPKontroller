@@ -605,6 +605,77 @@ def _sas_report(v):
                 node_enabled=1.0, burn_up=0.2, burn_north=0.6, burn_east=-0.7)
 
 
+class ShipReportTest(unittest.TestCase):
+    """KSPSerialIO.Hmi's KSPHMI service as kspsim serves it: same text as the plugin, same rules as kRPC."""
+
+    def test_sample_matches_the_plugin_format_and_the_pi_fixture(self):
+        from kspsim import ships
+        # hmi-cpp/tests/data/ship_report_v1.txt is also the plugin formatter's expected output
+        # (tools/plugin-shipreport-tests) and the Pi parser's input (hmi-cpp/tests/test_core.cpp)
+        with open(os.path.join(ROOT, "hmi-cpp", "tests", "data", "ship_report_v1.txt"), encoding="utf-8", newline="") as f:
+            golden = f.read()
+        self.assertEqual(ships.report_text(57, ships.ship("kerbal_x")), golden)
+        self.assertEqual(ships.escape("a b=c,d%"), "a%20b%3Dc%2Cd%25")
+        self.assertEqual(ships.escape("Señal"), "Se%C3%B1al")
+        self.assertEqual(ships.number(float("nan"), 2), "nan")
+        self.assertEqual(ships.number(-0.001, 2), "0.00")
+
+    def test_samples_cover_pending_heavy_and_no_service(self):
+        from kspsim import ships
+        pending = ships.report_text(3, ships.ship("pending"))
+        self.assertTrue(pending.endswith("engines=5\ndv=pending\n"), pending)
+        self.assertNotIn("\nst=", pending)
+        heavy = ships.report_text(4, ships.ship("heavy"))
+        self.assertNotIn("funds=", heavy)  # sandbox
+        launch = [line for line in heavy.splitlines() if line.startswith("st=")][0].split(",")
+        self.assertLess(float(launch[3]), 1.0)  # the launch stage cannot leave the pad
+        self.assertIsNone(ships.ship(""))
+        with self.assertRaises(ValueError):
+            ships.ship("saturn_v")
+
+    def test_ksphmi_service_with_the_krpc_client(self):
+        import krpc
+        from kspsim.krpcserver import KrpcServer
+
+        sim = Simulator("orbit")
+        server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
+        server.start()
+
+        def connect():
+            return krpc.connect(name="test", address="127.0.0.1", rpc_port=server.rpc_port,
+                                stream_port=server.stream_port)
+        try:
+            sim.set_scene("vab")
+            self.assertEqual(KrpcTest.context(server.context_port), "KSPHMI/1 vab")
+            conn = connect()
+            try:
+                rev = conn.ksphmi.revision()
+                self.assertEqual(conn.ksphmi.ship_report(), sim.ship_report())
+                self.assertTrue(conn.ksphmi.ship_report().startswith("v=1 rev=%d facility=vab name=Kerbal%%20X" % rev))
+                sim.set_ship("heavy")  # every editor change is a new revision
+                self.assertEqual(conn.ksphmi.revision(), rev + 1)
+                self.assertIn("name=Heavy%20Lifter", conn.ksphmi.ship_report())
+                self.assertEqual(conn.ksphmi.revision(), rev + 1)  # polling alone changes nothing
+                sim.set_scene("flight")  # GameScene.Editor: kRPC refuses the call elsewhere
+                with self.assertRaises(Exception) as err:
+                    conn.ksphmi.revision()
+                self.assertIn("not available in game scene", str(err.exception))
+                sim.set_scene("sph")
+                self.assertEqual(conn.ksphmi.revision(), rev + 1)
+                sim.set_ship("")  # as without KSPSerialIO.Hmi.dll: the service is gone
+                with self.assertRaises(Exception):
+                    conn.ksphmi.revision()
+            finally:
+                conn.close()
+            conn = connect()  # a new client no longer even sees the service
+            try:
+                self.assertFalse(hasattr(conn, "ksphmi"))
+            finally:
+                conn.close()
+        finally:
+            server.stop()
+
+
 class AttitudeTest(unittest.TestCase):
     def test_axes_and_angles_round_trip_and_match_the_rotation(self):
         for p, h, r in ((0, 0, 0), (12, 90, -25), (-40, 300, 170), (89.9, 45, 10), (90, 90, 0), (-90, 200, 0)):

@@ -4,7 +4,11 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <map>
 #include <memory>
+#include <set>
+#include <sstream>
 
 #include "apollo.hpp"
 #include "check.hpp"
@@ -15,6 +19,7 @@
 #include "navball.hpp"
 #include "scenes.hpp"
 #include "segments.hpp"
+#include "shipreport.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
 #include "theme.hpp"
@@ -23,12 +28,20 @@ using namespace ksphmi;
 
 namespace {
 
+Config repo_config() {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    Config cfg;
+    apply_toml(cfg, parse_toml(buf.str()));
+    return cfg;
+}
+
 struct Screen {
-    Screen(int w, int h, const std::string& skin = "classic") {
+    Screen(int w, int h, const std::string& skin = "classic", Config cfg = Config()) {
         surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
         renderer = SDL_CreateSoftwareRenderer(surface);
         canvas = std::make_unique<Canvas>(renderer, w, h, false);
-        Config cfg;
         cfg.display.skin = skin;
         display = std::make_unique<Display>(cfg, *canvas);
     }
@@ -630,6 +643,144 @@ TEST(apollo_review_screenshots_on_request) {
         else if (r.name == "Oxidizer") r.amount.reset();
     s.display->draw(warn, monotonic());
     CHECK(save_png(s.surface, std::string(dir) + "/apollo_cautions.png"));
+}
+
+// ------------------------------------------------------------------------------------------- VAB ship report
+namespace {
+std::shared_ptr<const ShipReport> sample_ship(const std::string& variant = "") {
+    // kerbalx / duna: the live stock Kerbal X with KSP's app on Kerbin sea level / Duna vacuum
+    const std::string file = variant == "kerbalx"  ? "ship_report_kerbal_x.txt"
+                             : variant == "duna"   ? "ship_report_kerbal_x_duna.txt"
+                                                   : "ship_report_v1.txt";
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/" + file);
+    std::stringstream buf;
+    buf << in.rdbuf();
+    auto r = parse_ship_report(buf.str());
+    if (!r) return nullptr;
+    if (variant == "pending") r->delta_v_pending = true, r->stages.clear();
+    if (variant == "empty") r->delta_v_pending = true, r->stages.clear(), r->parts = 0, r->crew = 0, r->seats = 0;
+    if (variant == "many") {  // more stages than rows, a long name, a big ship: everything must still fit
+        r->name = "An extremely long ship name that is never going to fit on any header at all, really";
+        for (int i = 3; i < 14; ++i) r->stages.push_back({i, 12345, 23456, 12.34, 9999, {{"engines", 12}, {"decouplers", 4}, {"chutes", 8}}});
+        r->mass = 12345.67, r->cost = 98765432, r->funds = 1234;
+    }
+    if (variant == "heavy") r->stages.front().twr = .74;  // cannot leave the pad
+    return std::make_shared<const ShipReport>(std::move(*r));
+}
+
+Snapshot vab(std::shared_ptr<const ShipReport> ship) {
+    Snapshot s;
+    s.state = State::NoVessel;
+    s.scene = "vab";
+    s.ship = std::move(ship);
+    return s;
+}
+}  // namespace
+
+TEST(vab_report_renders_inside_its_panels_in_both_skins) {
+    for (const char* skin : {"classic", "apollo"})
+        for (const auto& size : SIZES) {
+            const int w = size.first, h = size.second;
+            Screen s(w, h, skin, repo_config());
+            std::vector<std::pair<std::string, Rect>> panels;
+            s.display->on_vab_panel = [&](const std::string& name, const Rect& r) { panels.emplace_back(name, r); };
+            std::vector<std::pair<std::string, Rect>> texts;
+            s.canvas->on_text = [&](const std::string& label, const Rect& r) { texts.emplace_back(label, r); };
+            for (const char* variant : {"", "pending", "many", "heavy", "kerbalx", "duna", "empty"}) {
+                panels.clear(), texts.clear();
+                s.display->draw(vab(sample_ship(variant)), monotonic());
+                CHECK(!panels.empty());
+                for (const auto& [label, r] : texts)
+                    if (!Rect(0, 0, w, h).contains(r))
+                        check::fail(__FILE__, __LINE__, std::string(skin) + " " + variant + ": text off screen: " + label);
+                for (size_t i = 0; i < panels.size(); ++i) {
+                    if (!Rect(0, 0, w, h).contains(panels[i].second))
+                        check::fail(__FILE__, __LINE__, std::string(skin) + ": panel off screen: " + panels[i].first);
+                    for (size_t j = i + 1; j < panels.size(); ++j)
+                        if (panels[i].second.collides(panels[j].second))
+                            check::fail(__FILE__, __LINE__, std::string(skin) + ": panels overlap: " + panels[i].first +
+                                                                " / " + panels[j].first);
+                }
+                // text that starts in a panel stays in it (the table's events column must shrink to fit)
+                for (const auto& [label, r] : texts)
+                    for (const auto& [name, p] : panels)
+                        if (p.contains(Rect(r.x, r.y, 1, 1)) && !p.inflate(1, 1).contains(r))
+                            check::fail(__FILE__, __LINE__, std::string(skin) + " " + variant + " " + std::to_string(w) +
+                                                                ": text '" + label + "' leaves " + name);
+            }
+        }
+}
+
+TEST(vab_without_a_report_keeps_the_static_cards) {
+    for (const char* skin : {"classic", "apollo"}) {
+        Screen s(1260, 840, skin, repo_config());
+        std::vector<std::string> texts;
+        s.canvas->on_text = [&](const std::string& label, const Rect&) { texts.push_back(label); };
+        int panels = 0;
+        s.display->on_vab_panel = [&](const std::string&, const Rect&) { ++panels; };
+        s.display->draw(vab(nullptr), monotonic());
+        CHECK_EQ(panels, 0);
+        bool card = false;
+        for (const auto& t : texts) card = card || t.find("Propulsion") != std::string::npos || t == "P";
+        CHECK(card || std::string(skin) == "apollo");  // apollo paints its cards into the cached art (no on_text)
+        // a report for another facility does not take over its screen
+        Snapshot sph = vab(sample_ship());
+        sph.scene = "sph";
+        s.display->draw(sph, monotonic());
+        CHECK_EQ(panels, 0);
+    }
+}
+
+TEST(apollo_vab_header_shows_only_link_and_twr_lamps) {
+    Screen s(1920, 1080, "apollo", repo_config());
+    s.display->draw(vab(sample_ship()), monotonic());  // creates the skin
+    std::map<std::string, const Color*> seen;
+    std::map<std::string, Color> colors;
+    s.display->apollo()->on_lamp = [&](const std::string& legend, const Color* lit) {
+        seen[legend] = lit;
+        if (lit) colors[legend] = *lit;
+    };
+    s.display->draw(vab(sample_ship("heavy")), monotonic());
+    std::set<std::string> legends;
+    for (const auto& kv : seen) legends.insert(kv.first);
+    CHECK(legends == (std::set<std::string>{"UPLINK", "NO DATA", "NO LINK", "LAUNCH TWR", "UPPER TWR"}));
+    CHECK(seen["UPLINK"] != nullptr);
+    CHECK(seen["LAUNCH TWR"] != nullptr && colors["LAUNCH TWR"] == Color({246, 66, 48}));  // 0.74 < 1.0: red
+    CHECK(seen["UPPER TWR"] != nullptr && colors["UPPER TWR"] == Color({255, 178, 42}));   // 0.62 < 0.8: amber
+    seen.clear();
+    s.display->draw(vab(sample_ship("pending")), monotonic());
+    CHECK(seen.count("LAUNCH TWR") && seen["LAUNCH TWR"] == nullptr && seen["UPPER TWR"] == nullptr);
+    // flight keeps its annunciators
+    seen.clear();
+    s.display->draw(demo(), monotonic());
+    CHECK(seen.count("SAS") && seen.count("PE ATMO") && seen.count("ESCAPE") && !seen.count("LAUNCH TWR"));
+}
+
+TEST(vab_report_software_render_time) {
+    for (const char* skin : {"classic", "apollo"}) {
+        Screen s(2520, 1680, skin, repo_config());
+        Snapshot snap = vab(sample_ship());
+        s.display->draw(snap, monotonic());  // apollo: builds the panel art
+        auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < 5; ++i) s.display->draw(snap, monotonic());
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 5;
+        std::printf("     %s VAB report frame at 2520x1680: %.1f ms\n", skin, ms);
+        CHECK(ms < 1000);
+    }
+}
+
+// KSPHMI_SHOTS=DIR saves the VAB report screens (sample data, not the game) in both skins.
+TEST(vab_review_screenshots_on_request) {
+    const char* dir = std::getenv("KSPHMI_SHOTS");
+    if (!dir) return;
+    for (const char* skin : {"classic", "apollo"}) {
+        Screen s(2520, 1680, skin, repo_config());
+        for (const char* variant : {"", "pending", "heavy", "kerbalx", "duna", "empty"}) {
+            s.display->draw(vab(sample_ship(variant)), monotonic());
+            std::string name = std::string(dir) + "/" + skin + "_vab" + (*variant ? std::string("_") + variant : "") + ".png";
+            CHECK(save_png(s.surface, name));
+        }
+    }
 }
 
 TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {

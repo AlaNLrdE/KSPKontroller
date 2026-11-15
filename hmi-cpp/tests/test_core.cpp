@@ -27,6 +27,7 @@
 #include "netinfo.hpp"
 #include "pb.hpp"
 #include "scenes.hpp"
+#include "shipreport.hpp"
 #include "telemetry.hpp"
 
 using namespace ksphmi;
@@ -1050,6 +1051,380 @@ TEST(gauge_layout_fits_the_panel_at_every_resolution) {
             for (size_t i = 1; i < l.cells.size(); ++i) CHECK(l.cells[i].cx - l.cells[i - 1].cx >= 2 * l.radius - 1e-6);
         }
     }
+}
+
+// ------------------------------------------------------------------------------------------- VAB ship report
+namespace {
+std::string golden_ship_report() {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/ship_report_v1.txt");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    return buf.str();
+}
+
+bool rejects(const std::string& text, const std::string& reason) {
+    std::string error;
+    bool rejected = !parse_ship_report(text, &error);
+    if (!rejected || error.find(reason) == std::string::npos)
+        check::fail(__FILE__, __LINE__, "'" + text + "' gave '" + error + "', expected '" + reason + "'");
+    return rejected;
+}
+}  // namespace
+
+TEST(ship_report_parses_the_shared_sample) {
+    // The same file is the expected output of the plugin's formatter (tools/plugin-shipreport-tests) and of kspsim.
+    const std::string text = golden_ship_report();
+    CHECK(!text.empty());
+    std::string error;
+    auto r = parse_ship_report(text, &error);
+    CHECK(r.has_value());
+    if (!r) return;
+    CHECK_EQ(error, "");
+    CHECK_EQ(r->revision, 57u);
+    CHECK_EQ(r->facility, "vab");
+    CHECK_EQ(r->name, "Kerbal X");  // %20 decoded
+    CHECK_EQ(r->situation, "kerbin_asl");
+    CHECK_EQ(r->situation_label(), "KERBIN \xC2\xB7 SEA LEVEL");
+    CHECK_EQ(*r->mass, 18.4);
+    CHECK_EQ(*r->dry, 6.1);
+    CHECK_EQ(*r->cost, 23400.0);
+    CHECK_EQ(*r->funds, 41200.0);
+    CHECK_EQ(*r->parts, 42);
+    CHECK_EQ(*r->crew, 1);
+    CHECK_EQ(*r->seats, 3);
+    CHECK_EQ(*r->height, 11.2);
+    CHECK_EQ(*r->width, 3.8);
+    CHECK_EQ(*r->engines, 5);
+    CHECK(!r->delta_v_pending);
+    CHECK_EQ(r->stages.size(), size_t(3));
+    const StageReport& launch = r->stages.at(0);
+    CHECK_EQ(launch.stage, 2);
+    CHECK_EQ(launch.delta_v, 1720.0);
+    CHECK_EQ(launch.delta_v_vac, 1960.0);
+    CHECK_EQ(launch.twr, 1.63);
+    CHECK_EQ(launch.burn, 48.0);
+    CHECK_EQ(launch.events.size(), size_t(2));
+    CHECK_EQ(launch.events.at(0).kind, "engines");
+    CHECK_EQ(launch.events.at(0).count, 3);
+    CHECK_EQ(launch.events.at(1).kind, "clamps");
+    CHECK_EQ(r->stages.at(2).events.size(), size_t(3));
+    CHECK_EQ(events_text(launch), "3 ENG  CLAMP");
+    CHECK_EQ(events_text(r->stages.at(2)), "ENG  DECOUPLE  CHUTE");
+    CHECK_EQ(events_text(StageReport{}), "");
+    CHECK_EQ(r->total_delta_v(), 1720.0 + 1890 + 1210);
+    CHECK_EQ(r->total_delta_v_vac(), 1960.0 + 2010 + 1340);
+    // CRLF line endings and a missing final newline parse the same
+    std::string crlf;
+    for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
+    auto again = parse_ship_report(crlf.substr(0, crlf.size() - 2));
+    CHECK(again && again->stages.size() == 3 && again->name == "Kerbal X");
+}
+
+TEST(ship_report_pending_delta_v_and_missing_values) {
+    auto r = parse_ship_report("v=1 rev=3 facility=vab name=Probe sit=kerbin_vac\n"
+                               "mass=0.53 dry=0.40 cost=nan parts=4 crew=0 seats=0 size=1.2,1.3 engines=1\n"
+                               "dv=pending\n");
+    CHECK(r.has_value());
+    if (!r) return;
+    CHECK(r->delta_v_pending);
+    CHECK(r->stages.empty());
+    CHECK(!r->cost.has_value());   // nan = unknown
+    CHECK(!r->funds.has_value());  // no funds field outside career
+    CHECK_EQ(r->total_delta_v(), 0.0);
+    CHECK_EQ(r->situation_label(), "KERBIN \xC2\xB7 VACUUM");
+    // a stage with an unknown TWR still parses; totals skip unknown values
+    auto st = parse_ship_report("v=1 rev=4 name=A sit=mun_alt\nst=1,nan,300,nan,10\nst=0,200,250,1.2,5\n");
+    CHECK(st && st->stages.size() == 2 && std::isnan(st->stages[0].twr) && st->total_delta_v() == 200);
+    CHECK(st && st->situation_label() == "MUN \xC2\xB7 ALTITUDE");
+}
+
+TEST(ship_report_rejects_unknown_versions_and_malformed_lines) {
+    rejects("", "empty");
+    rejects("rev=1 name=x\n", "no version");
+    rejects("v=2 rev=1 facility=vab\nst=1,1,1,1,1\n", "unsupported version 2");
+    rejects("v=one rev=1\n", "bad v");
+    rejects("v=1 rev=-1\n", "bad rev");
+    rejects("v=1 rev=1 name=Bad%2\n", "bad name");
+    rejects("v=1 rev=1 name=Bad%zz\n", "bad name");
+    rejects("v=1 rev=1\nmass=heavy\n", "bad mass");
+    rejects("v=1 rev=1\nmass=inf\n", "bad mass");
+    rejects("v=1 rev=1\nparts=4.5\n", "bad parts");
+    rejects("v=1 rev=1\nsize=12\n", "bad size");
+    rejects("v=1 rev=1\nst=1,2,3\n", "bad st");
+    rejects("v=1 rev=1\nst=1,2,3,4,5,engines\n", "bad st");
+    rejects("v=1 rev=1\nst=1,2,3,4,5,engines:x\n", "bad st");
+    rejects("v=1 rev=1\ndv=soon\n", "bad dv");
+    rejects("v=1 rev=1\ndv=pending\nst=1,2,3,4,5\n", "pending together");
+    rejects("v=1 rev=1  name=double-space\n", "bad group");
+    rejects("v=1 rev=1\nnot a group\n", "bad group");
+    // later phases add line kinds and keys: ignored, not rejected
+    auto r = parse_ship_report("v=1 rev=9 name=X future=1\nchk=control:ok,power:warn\nlim=parts:42/45\n");
+    CHECK(r && r->revision == 9 && r->name == "X" && r->stages.empty());
+}
+
+TEST(ship_report_twr_levels_follow_the_vab_thresholds) {
+    // launch stage = first in firing order with delta-v; the clamp-only stage before it is not judged
+    auto twr_report = [](double launch, double upper, double last) {
+        return *parse_ship_report(fmt::str("v=1 rev=1\nst=4,0,0,0.00,0,clamps:1\nst=3,1500,1700,%.2f,60\n"
+                                           "st=2,1800,1900,%.2f,90\nst=1,900,950,%.2f,40\nst=0,0,0,0.00,0,chutes:1\n",
+                                           launch, upper, last));
+    };
+    const TwrLimits limits;  // 1.0 red / 1.2 amber at launch, 0.8 amber above
+    ShipReport r = twr_report(0.99, 0.79, 0.80);
+    CHECK_EQ(launch_stage_index(r), 1);
+    CHECK(twr_level(r, 0, limits) == TwrLevel::None);  // no delta-v: no thrust to judge
+    CHECK(twr_level(r, 1, limits) == TwrLevel::Bad);
+    CHECK(twr_level(r, 2, limits) == TwrLevel::Warn);
+    CHECK(twr_level(r, 3, limits) == TwrLevel::Ok);    // 0.80 is not below 0.8
+    CHECK(twr_level(r, 4, limits) == TwrLevel::None);
+    CHECK(twr_level(r, 9, limits) == TwrLevel::None);
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Bad);
+    CHECK(upper_twr_level(r, limits) == TwrLevel::Warn);
+    r = twr_report(1.00, 0.80, 2.5);  // the limits themselves pass the lower bands
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Warn);
+    CHECK(upper_twr_level(r, limits) == TwrLevel::Ok);
+    r = twr_report(1.20, 1.0, 1.0);
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Ok);
+    // configurable: a stricter pad rule turns the same ship red
+    TwrLimits strict{1.3, 1.5, 1.1};
+    CHECK(launch_twr_level(r, strict) == TwrLevel::Bad);
+    CHECK(upper_twr_level(r, strict) == TwrLevel::Warn);
+    // the shared sample: launch 1.63 fine, last stage 0.62 amber; a pending report judges nothing
+    auto sample = parse_ship_report(golden_ship_report());
+    CHECK(sample && launch_twr_level(*sample, limits) == TwrLevel::Ok && twr_level(*sample, 2, limits) == TwrLevel::Warn);
+    sample->delta_v_pending = true;
+    CHECK(launch_twr_level(*sample, limits) == TwrLevel::None && upper_twr_level(*sample, limits) == TwrLevel::None);
+}
+
+TEST(config_vab_twr_thresholds_are_validated) {
+    Config cfg;
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    apply_toml(cfg, parse_toml(buf.str()));
+    CHECK_EQ(cfg.vab.twr.launch_bad, 1.0);
+    CHECK_EQ(cfg.vab.twr.launch_warn, 1.2);
+    CHECK_EQ(cfg.vab.twr.upper_warn, 0.8);
+    apply_toml(cfg, parse_toml("[vab]\nlaunch_twr_min = 1.1\nlaunch_twr_warn = 1.4\nupper_twr_warn = 0.5\n"));
+    CHECK_EQ(cfg.vab.twr.launch_bad, 1.1);
+    CHECK_EQ(cfg.vab.twr.launch_warn, 1.4);
+    CHECK_EQ(cfg.vab.twr.upper_warn, 0.5);
+    for (const char* bad : {"[vab]\nlaunch_twr_min = 0\n", "[vab]\nupper_twr_warn = -1\n", "[vab]\nlaunch_twr_warn = \"high\"\n",
+                            "[vab]\nupper_twr_warn = 1000\n", "[vab]\nlaunch_twr_min = 2\nlaunch_twr_warn = 1.5\n"}) {
+        Config c2 = cfg;
+        bool threw = false;
+        try {
+            apply_toml(c2, parse_toml(bad));
+        } catch (const std::runtime_error& e) {
+            threw = std::string(e.what()).find("vab.") != std::string::npos;
+        }
+        CHECK(threw);
+        CHECK_EQ(c2.vab.twr.launch_bad, 1.1);  // a rejected file leaves the thresholds as they were
+    }
+}
+
+TEST(config_vab_destinations_and_target) {
+    Config cfg;
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    apply_toml(cfg, parse_toml(buf.str()));
+    CHECK_EQ(cfg.vab.target, "mun_landing");
+    CHECK(cfg.vab.destinations.size() >= 4 && static_cast<int>(cfg.vab.destinations.size()) <= MAX_DESTINATIONS);
+    std::map<std::string, double> by_key;
+    for (const auto& d : cfg.vab.destinations) by_key[d.key] = d.delta_v;
+    CHECK_EQ(static_cast<int>(cfg.vab.destinations.size()), MAX_DESTINATIONS);
+    CHECK_EQ(cfg.vab.atmosphere_dv, 1200.0);
+    // community delta-v map, cumulative from the pad, no aerobraking (config.toml comment, docs/hmi.rst)
+    CHECK_EQ(by_key["kerbin_orbit"], 3400.0);
+    CHECK_EQ(by_key["mun_orbit"], 4570.0);
+    CHECK_EQ(by_key["mun_landing"], 5150.0);
+    CHECK_EQ(by_key["minmus_orbit"], 4490.0);
+    CHECK_EQ(by_key["minmus_landing"], 4670.0);
+    CHECK_EQ(by_key["duna_orbit"], 5090.0);
+    CHECK_EQ(by_key["duna_landing"], 6540.0);
+    // every body other than Kerbin has an orbit and, except Eve (aerobraking), a landing for the app-driven target
+    for (const char* body : {"mun", "minmus", "duna", "ike", "dres"})
+        CHECK(by_key.count(std::string(body) + "_orbit") && by_key.count(std::string(body) + "_landing"));
+    for (size_t i = 1; i < cfg.vab.destinations.size(); ++i)
+        CHECK(cfg.vab.destinations[i - 1].delta_v <= cfg.vab.destinations[i].delta_v);  // sorted for display
+    // a local file adds a destination, changes another and picks it as the target
+    apply_toml(cfg, parse_toml("[vab]\ntarget = \"duna_landing\"\natmosphere_dv = 900\n[vab.destinations]\n"
+                               "duna_landing = 9000\nmun_orbit = 4300\n"));
+    CHECK_EQ(cfg.vab.target, "duna_landing");
+    CHECK_EQ(cfg.vab.atmosphere_dv, 900.0);
+    CHECK_EQ(cfg.vab.destinations.back().key, "duna_landing");
+    by_key.clear();
+    for (const auto& d : cfg.vab.destinations) by_key[d.key] = d.delta_v;
+    CHECK_EQ(by_key["mun_orbit"], 4300.0);
+    // dotted table names are parsed part by part
+    CHECK_EQ(parse_toml("[ vab . destinations ]\nx = 1\n").count("vab.destinations.x"), size_t(1));
+    for (const char* bad : {"[vab]\ntarget = \"nowhere\"\n", "[vab.destinations]\nmoon = 0\n",
+                            "[vab.destinations]\nmoon = -5\n", "[vab.destinations]\nmoon = \"far\"\n",
+                            "[vab.destinations]\nMoon = 100\n", "[vab.destinations]\nmoon = 1e9\n",
+                            "[vab]\natmosphere_dv = -1\n", "[vab]\natmosphere_dv = 100001\n", "[vab]\natmosphere_dv = nan\n",
+                            "[vab]\natmosphere_dv = \"low\"\n"}) {
+        Config c2 = cfg;
+        bool threw = false;
+        try {
+            apply_toml(c2, parse_toml(bad));
+        } catch (const std::runtime_error& e) {
+            threw = std::string(e.what()).find("vab.") != std::string::npos;  // the error names the key
+        }
+        CHECK(threw);
+    }
+    Config many;
+    std::string thirteen = "[vab.destinations]\n";
+    for (int i = 0; i <= MAX_DESTINATIONS; ++i) thirteen += "d" + std::to_string(i) + " = " + std::to_string(1000 + i) + "\n";
+    bool threw = false;
+    try {
+        apply_toml(many, parse_toml(thirteen));
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(Config().vab.destinations.empty());  // no config: the report shows no destinations, nothing breaks
+}
+
+namespace {
+std::optional<ShipReport> fixture_report(const std::string& name) {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/" + name);
+    std::stringstream buf;
+    buf << in.rdbuf();
+    return parse_ship_report(buf.str());
+}
+}  // namespace
+
+// The live Kerbal X (KSP 1.12.5, VAB): the app's total stays KSP's, the mission delta-v counts the ascent at
+// Kerbin sea level up to [vab] atmosphere_dv and the upper stages in vacuum.
+TEST(mission_delta_v_counts_the_ascent_at_sea_level_and_upper_stages_in_vacuum) {
+    auto asl = fixture_report("ship_report_kerbal_x.txt");
+    CHECK(asl && asl->has_kerbin_asl && asl->stages.size() == 8);
+    CHECK_EQ(asl->total_delta_v(), 4328.0);
+    CHECK_EQ(asl->stages.at(5).delta_v_kerbin_asl, 631.0);
+    MissionDeltaV m = mission_delta_v(*asl, 1200);
+    CHECK_EQ(m.total, 257.0 + 304 + 372 + 2764 + 2452);  // 6149
+    CHECK(m.kerbin_asl && m.per_stage.size() == 8 && m.per_stage.at(5) == 2452 && m.per_stage.at(3) == 2764);
+    CHECK_EQ(mission_basis(*asl, m), "ASCENT KERBIN ASL, UPPER STAGES VAC");
+    CHECK_EQ(events_text(asl->stages.back()), "CHUTE");
+    // another body in the app (Duna, vacuum): same mission delta-v from the kasl= line
+    auto duna = fixture_report("ship_report_kerbal_x_duna.txt");
+    CHECK(duna && duna->total_delta_v() == 6527);  // KSP shows 6528 (it sums unrounded stages)
+    CHECK_EQ(mission_delta_v(*duna, 1200).total, 6149.0);
+    // an older plugin without kasl=: the app's values stand in for the ascent, and the basis says so
+    ShipReport old = *duna;
+    old.has_kerbin_asl = false;
+    for (auto& st : old.stages) st.delta_v_kerbin_asl = std::numeric_limits<double>::quiet_NaN();
+    MissionDeltaV mo = mission_delta_v(old, 1200);
+    CHECK(!mo.kerbin_asl && mo.total == 6527);
+    CHECK(mission_basis(old, mo).find("NO KERBIN ASL DATA") != std::string::npos);
+    // ...but Kerbin sea level in the app is the ascent figure itself
+    ShipReport old_asl = *asl;
+    old_asl.has_kerbin_asl = false;
+    for (auto& st : old_asl.stages) st.delta_v_kerbin_asl = std::numeric_limits<double>::quiet_NaN();
+    CHECK(mission_delta_v(old_asl, 1200).kerbin_asl && mission_delta_v(old_asl, 1200).total == 6149);
+    // atmosphere_dv 0: every stage in vacuum; huge: everything at sea level (the app's total)
+    CHECK_EQ(mission_delta_v(*asl, 0).total, asl->total_delta_v_vac());
+    CHECK_EQ(mission_delta_v(*asl, 100000).total, 4328.0);
+    // pending: nothing
+    ShipReport pending = *asl;
+    pending.delta_v_pending = true;
+    CHECK_EQ(mission_delta_v(pending, 1200).total, 0.0);
+    // malformed kasl= is rejected like any known field
+    CHECK(!parse_ship_report("v=1 rev=1\nst=1,1,1,1,1\nkasl=1:x\n"));
+    CHECK(!parse_ship_report("v=1 rev=1\nst=1,1,1,1,1\nkasl=12\n"));
+}
+
+TEST(vab_target_follows_the_delta_v_app_body) {
+    std::vector<Destination> d = {{"kerbin_orbit", 3400}, {"mun_orbit", 4570}, {"mun_landing", 5150},
+                                  {"duna_orbit", 5090}, {"eve_orbit", 5850}, {"ike_landing", 5330}};
+    auto pick = [&](const std::string& sit) {
+        ShipReport r;
+        r.situation = sit;
+        TargetChoice t = choose_target(&r, d, "mun_landing");
+        return (t.destination ? t.destination->key : std::string("-")) + (t.from_app ? "@app" : "@config");
+    };
+    CHECK_EQ(pick("kerbin_asl"), "mun_landing@config");
+    CHECK_EQ(pick("kerbin_vac"), "mun_landing@config");
+    CHECK_EQ(pick("mun_asl"), "mun_landing@app");
+    CHECK_EQ(pick("mun_alt"), "mun_landing@app");
+    CHECK_EQ(pick("mun_vac"), "mun_orbit@app");
+    CHECK_EQ(pick("duna_vac"), "duna_orbit@app");
+    CHECK_EQ(pick("duna_asl"), "duna_orbit@app");  // no duna_landing configured: its orbit
+    CHECK_EQ(pick("eve_asl"), "eve_orbit@app");
+    CHECK_EQ(pick("ike_vac"), "ike_landing@app");
+    CHECK_EQ(pick("jool_vac"), "mun_landing@config");  // nothing for Jool: the configured target
+    CHECK_EQ(pick("odd"), "mun_landing@config");
+    CHECK(choose_target(nullptr, d, "nowhere").destination == nullptr);
+    ShipReport r;
+    r.situation = "sun_vac";
+    CHECK(r.situation_body() == "sun" && r.situation_mode() == "vac");
+    r.situation = "vac";
+    CHECK(r.situation_body().empty() && r.situation_mode().empty());
+    // an empty craft (New in the editor) is not "calculating"
+    auto empty = parse_ship_report("v=1 rev=25 facility=vab name=Untitled%20Space%20Craft sit=kerbin_vac\n"
+                                   "mass=0.00 dry=0.00 cost=0 parts=0 crew=0 seats=0 size=0.0,0.0 engines=0\ndv=pending\n");
+    CHECK(empty && empty->empty_craft() && empty->delta_v_pending);
+    CHECK(!fixture_report("ship_report_kerbal_x.txt")->empty_craft());
+}
+
+TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {
+    std::atomic<uint32_t> revision{5};
+    std::atomic<int> mode{0};  // 0 serve, 1 no service, 2 malformed text, 3 empty text
+    std::atomic<int> reports{0};
+    const std::string good = golden_ship_report();
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>&) -> FakeResult {
+        if (mode == 1) return {"", false, "No such service KSPHMI"};
+        if (proc == "Revision") return {pb::enc_uint32(revision)};
+        if (proc == "ShipReport") {
+            ++reports;
+            if (mode == 2) return {pb::enc_string("v=1 rev=1\nst=broken\n")};
+            if (mode == 3) return {pb::enc_string("")};
+            return {pb::enc_string(good)};
+        }
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    ShipReportPoller poller(1.0);
+    auto r = poller.poll(c, 0);
+    CHECK(r && r->name == "Kerbal X" && r->stages.size() == 3);
+    CHECK(poller.poll(c, .5) == r);  // same revision: no new ShipReport call, same object
+    CHECK_EQ(reports.load(), 1);
+    revision = 6;
+    auto r2 = poller.poll(c, 1);
+    CHECK(r2 && r2 != r);
+    CHECK_EQ(reports.load(), 2);
+    // the DLL or kRPC is missing: no report (static cards), the session goes on, retried after the back-off
+    mode = 1;
+    revision = 7;
+    CHECK(!poller.poll(c, 2));
+    CHECK(poller.problem().find("No such service") != std::string::npos);
+    mode = 0;
+    CHECK(!poller.poll(c, 2.5));  // still backing off
+    auto r3 = poller.poll(c, 3.1);
+    CHECK(r3 && poller.problem().empty());
+    // a malformed report is dropped and not fetched again for the same revision
+    mode = 2;
+    revision = 8;
+    int before = reports;
+    CHECK(!poller.poll(c, 4));
+    CHECK(!poller.poll(c, 4.5));
+    CHECK_EQ(reports.load(), before + 1);
+    CHECK(poller.problem().find("revision 8 rejected") != std::string::npos);
+    // an editor without a ship yet answers ""
+    mode = 3;
+    revision = 9;
+    CHECK(!poller.poll(c, 5));
+    CHECK_EQ(poller.problem(), "no ship reported yet");
+    mode = 0;
+    revision = 10;
+    CHECK(poller.poll(c, 5.5) != nullptr);
+    poller.reset();
+    CHECK(poller.problem().empty());
 }
 
 int main(int argc, char** argv) {
