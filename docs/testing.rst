@@ -20,6 +20,8 @@ Verification matrix
    * - ``./ci verify``
      - Python/tool dependencies; optional local installs
      - Layout/config/protocol consistency, available build/log evidence, simulator checks.
+       Install checks use ``KSPDIR``; without it, the shared Windows install, or the first ``./ci ksp_list``
+       entry on macOS/Linux. Without any install they are skipped with WARN; firewall checks are Windows only.
      - A full live game or physical display test.
    * - ``./ci build_sketch``
      - Arduino CLI and board core

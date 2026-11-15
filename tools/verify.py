@@ -58,8 +58,11 @@ def sha(path):
 
 
 def ksp_running():
-    out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
-    return "KSP_x64.exe" in out
+    if os.name == "nt":
+        out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
+        return "KSP_x64.exe" in out
+    # Linux runs KSP.x86_64, macOS KSP.app/Contents/MacOS/KSP (same patterns as ./ci ksp_running)
+    return subprocess.run(["pgrep", "-f", "KSP.x86_64|KSP.app"], capture_output=True).returncode == 0
 
 
 def sketch_text():
@@ -354,7 +357,28 @@ def check_reconnect_log(ctx):
 
 
 # --------------------------------------------------------------------------------------------- install checks
+def ksp_missing(ctx, name):
+    """Install checks need a KSP folder: without one (another OS, no KSPDIR) they are skipped, not failed."""
+    if os.path.isdir(os.path.join(ctx["ksp"], "GameData")):
+        return False
+    report("WARN", name, "skipped: no KSP install at %s (set KSPDIR, ./ci ksp_list)" % (ctx["ksp"] or "(none found)"))
+    return True
+
+
+def windows_firewall_rule(name):
+    """netsh output for an inbound rule, or None off Windows (no netsh there)."""
+    if os.name != "nt":
+        return None
+    try:
+        return subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", "name=" + name],
+                              capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def check_install(ctx):
+    if ksp_missing(ctx, "plugin installed"):
+        return
     ksp = ctx["ksp"]
     gd = os.path.join(ksp, "GameData", "KSPSerialIO")
     dll = os.path.join(gd, "KSPSerialIO.dll")
@@ -392,6 +416,8 @@ def gamedata_mods(ksp):
 
 def check_gamedata_snapshot(ctx):
     """Other mods must never disappear when someone deploys (the user asked for no replaced/omitted mods)."""
+    if ksp_missing(ctx, "GameData snapshot"):
+        return
     now = gamedata_mods(ctx["ksp"])
     if ctx["args"].snapshot:
         os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
@@ -568,12 +594,10 @@ def check_hmi_context(ctx):
     report("PASS" if ok and skin_ok else "FAIL", "hmi: scene context contract",
            "UDP 50002 protocol, facility event subscriptions, optional skin field (simulator only)"
            if skin_ok else "skin= field must be parsed by hmi-cpp, sent by kspsim, and absent from HmiContext.cs")
-    try:
-        out = subprocess.run(
-            ["netsh", "advfirewall", "firewall", "show", "rule", "name=KSP HMI scene context"],
-            capture_output=True, text=True, timeout=15).stdout
-    except (OSError, subprocess.SubprocessError):
-        out = ""
+    out = windows_firewall_rule("KSP HMI scene context")
+    if out is None:
+        report("PASS", "hmi: scene context firewall", "not Windows: no netsh rule (allow KSP in this OS's firewall)")
+        return
     report("PASS" if "50002" in out else "WARN", "hmi: scene context firewall",
            "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
 
@@ -772,6 +796,8 @@ def krpc_values(cfg):
 def check_krpc(ctx):
     """The kRPC mod the Pi HMI needs: installed, same version as the Pi's client, server set to start by itself,
     accept clients and listen beyond localhost, and an inbound firewall rule (the wired LAN is a Public network)."""
+    if ksp_missing(ctx, "kRPC: installed"):
+        return
     mod = os.path.join(ctx["ksp"], "GameData", "kRPC")
     if not os.path.isdir(mod):
         report("FAIL", "kRPC: installed", "no GameData/kRPC: the Pi HMI gets no game data (docs/hmi.rst)")
@@ -826,12 +852,10 @@ def check_krpc(ctx):
                + ", ".join(diff))
     else:
         report("PASS", "kRPC: matches template", "%d keys equal to tools/krpc/settings.cfg" % len(want_vals))
-    try:
-        out = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", "name=" + FIREWALL_RULE],
-                             capture_output=True, text=True, timeout=15).stdout
-    except (OSError, subprocess.SubprocessError):
-        out = ""
-    if "50000" in out:
+    out = windows_firewall_rule(FIREWALL_RULE)
+    if out is None:
+        report("PASS", "kRPC: firewall", "not Windows: no netsh rule (allow KSP in this OS's firewall)")
+    elif "50000" in out:
         report("PASS", "kRPC: firewall", "rule '%s' present" % FIREWALL_RULE)
     else:
         report("WARN", "kRPC: firewall", "no inbound rule '%s' for TCP 50000-50001: the Pi may be blocked "
@@ -1128,7 +1152,9 @@ CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_co
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--ksp", default=os.environ.get("KSPDIR", DEFAULT_KSP), help="KSP install directory")
+    # ./ci verify exports KSPDIR from ./ci ksp_list off Windows; the shared wk-rea install is the Windows default
+    ap.add_argument("--ksp", default=os.environ.get("KSPDIR") or (DEFAULT_KSP if os.name == "nt" else ""),
+                    help="KSP install directory")
     ap.add_argument("--log", help="analyse this KSP.log instead of <ksp>/KSP.log")
     ap.add_argument("--board", action="store_true", help="also test the Arduino over serial (KSP must be closed)")
     ap.add_argument("--port", help="serial port for --board, for example COM5")
@@ -1144,8 +1170,8 @@ def main():
     if args.docs_only and (args.board or args.snapshot):
         ap.error("--docs-only cannot be combined with --board or --snapshot")
 
-    ctx = {"ksp": os.path.normpath(args.ksp), "args": args}
-    ctx["log"] = args.log or os.path.join(ctx["ksp"], "KSP.log")
+    ctx = {"ksp": os.path.normpath(args.ksp) if args.ksp else "", "args": args}
+    ctx["log"] = args.log or (os.path.join(ctx["ksp"], "KSP.log") if ctx["ksp"] else "")
     if not (args.docs_only or args.firmware_only or args.plugin_only):
         report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
     checks = CHECKS

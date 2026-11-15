@@ -187,6 +187,8 @@ class KrpcServer:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: refuse to share the port with a real kRPC
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:  # POSIX: rebind right after stop() although closed connections are still in TIME_WAIT
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((self.address, port))
                 s.listen(8)
                 self._listeners.append(s)

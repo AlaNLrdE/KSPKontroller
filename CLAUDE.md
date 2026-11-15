@@ -94,6 +94,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Heredocs containing quotes break in the Bash tool: write scripts with the Write tool, run them with
   `build/venv/Scripts/python.exe` (system `python` is not installed). `Write` needs a prior Read on existing files.
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
+- `ci` must also run on macOS `/bin/bash` 3.2: expand possibly empty arrays as `${a[@]+"${a[@]}"}` (set -u), and
+  guard Windows-only tools (`tasklist`, `netsh`, `cygpath`) in `ci` and `tools/verify.py`. POSIX test servers set
+  `SO_REUSEADDR` (Windows keeps `SO_EXCLUSIVEADDRUSE`) or restarting on the same port fails in TIME_WAIT.
 - Core 1.6.0 WDT metadata says `renesas` instead of `renesas_uno`: `compile_sketch` copies the installed
   library into `build/wdt-compat/` and fixes metadata only for normal/debug builds. Do not edit Arduino15
   or suppress compiler diagnostics; corrected upstream metadata bypasses the workaround.

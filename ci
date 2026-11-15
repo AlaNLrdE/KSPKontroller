@@ -83,10 +83,13 @@ find_arduino_cli() {
   local exe="$BUILD/tools/arduino-cli"
   is_windows && exe="$exe.exe"
   if [ ! -x "$exe" ]; then
-    local url archive
-    case "$(uname -s)" in
-      MINGW*|MSYS*|CYGWIN*) url="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip" ;;
-      Linux)                url="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Linux_64bit.tar.gz" ;;
+    local url archive base="https://downloads.arduino.cc/arduino-cli/arduino-cli_latest"
+    case "$(uname -s)/$(uname -m)" in
+      MINGW*|MSYS*|CYGWIN*) url="${base}_Windows_64bit.zip" ;;
+      Linux/x86_64)         url="${base}_Linux_64bit.tar.gz" ;;
+      Linux/aarch64)        url="${base}_Linux_ARM64.tar.gz" ;;
+      Darwin/arm64)         url="${base}_macOS_ARM64.tar.gz" ;;
+      Darwin/x86_64)        url="${base}_macOS_64bit.tar.gz" ;;
       *) die "arduino-cli not found; install it from https://arduino.github.io/arduino-cli/" ;;
     esac
     log "arduino-cli not found, downloading to $BUILD/tools" >&2
@@ -124,7 +127,8 @@ compile_sketch() {
       libraries=(--library "$target")
     fi
   fi
-  "$cli" compile --fqbn "$FQBN" "${libraries[@]}" "$@" "$SKETCH"
+  # ${a[@]+...}: bash 3.2 (macOS /bin/bash) treats an empty array as unbound under set -u
+  "$cli" compile --fqbn "$FQBN" ${libraries[@]+"${libraries[@]}"} "$@" "$SKETCH"
 }
 
 build_sketch() {
@@ -379,7 +383,8 @@ save_log() {
   mkdir -p "$dest"
   cp "$ksp/KSP.log" "$dest/KSP.log"
   for playerlog in "${LOCALAPPDATA:-}/../LocalLow/Squad/Kerbal Space Program/Player.log" \
-                   "$HOME/.config/unity3d/Squad/Kerbal Space Program/Player.log"; do
+                   "$HOME/.config/unity3d/Squad/Kerbal Space Program/Player.log" \
+                   "$HOME/Library/Logs/Squad/Kerbal Space Program/Player.log"; do
     [ -f "$playerlog" ] && cp "$playerlog" "$dest/Player.log" && break
   done
   log "Saved $dest ($(grep -c 'KSPSerialIO: perf' "$dest/KSP.log") plugin perf lines, $(grep -c '\[KSPPerf\]' "$dest/KSP.log") KSPPerf lines)"
@@ -586,6 +591,7 @@ test_sim() {
 HMI_DIR="$ROOT/hmi-cpp"
 HMI_HOST="${HMI_HOST:-ksphmi}"
 HMI_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
+HMI_BREW_PACKAGES="cmake pkg-config sdl2 sdl2_ttf"
 # Fallback for a Linux box without root (this PC's WSL): the same libraries unpacked into build/hmi-cpp-deps.
 # Names are Ubuntu 24.04's (t64); SDL2's runtime needs the audio/X11 libraries even if it never opens them.
 HMI_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 fonts-freefont-ttf libxss1
@@ -625,6 +631,13 @@ hmi_in_wsl() {
 
 hmi_env() {
   local deps="$BUILD/hmi-cpp-deps" lib arch dir
+  if [ "$(uname -s)" = Darwin ]; then
+    # macOS: Xcode's clang (g++), Homebrew's CMake/pkg-config/SDL2; the HMI finds Arial Bold by itself
+    command -v cmake >/dev/null && command -v g++ >/dev/null && command -v pkg-config >/dev/null &&
+      pkg-config --exists sdl2 SDL2_ttf 2>/dev/null ||
+      die "C++ toolchain or SDL2 missing: xcode-select --install; brew install $HMI_BREW_PACKAGES"
+    return 0
+  fi
   command -v cmake >/dev/null && command -v g++ >/dev/null && command -v pkg-config >/dev/null ||
     die "C++ toolchain missing: sudo apt install $HMI_APT_PACKAGES"
   pkg-config --exists sdl2 SDL2_ttf 2>/dev/null && return 0
@@ -667,7 +680,7 @@ hmi() {
 # End to end: tools/kspsim serves the real kRPC protocol; the HMI must follow its vessel and draw a frame.
 hmi_sim() {
   local py out port=50300 sim_pid rc=0
-  py="${KSPSIM_PYTHON:-$(command -v python3)}" || die "python3 needed for tools/kspsim"
+  py="${KSPSIM_PYTHON:-$(ensure_venv "$ROOT/tools/requirements.txt")/python}"
   "$py" -c "import krpc, google.protobuf" 2>/dev/null ||
     die "tools/kspsim needs the krpc and protobuf Python packages (pip install -r tools/requirements.txt)"
   out="$BUILD/hmi-cpp-sim"; mkdir -p "$out"
@@ -830,7 +843,7 @@ clean() {
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
 }
 
-usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -n 's/^# \{0,1\}//p'; }
 
 case "${1:-help}" in
   build_sketch)      build_sketch ;;
@@ -849,7 +862,12 @@ case "${1:-help}" in
   sphinx)            sphinx ;;
   upload_sketch)     shift; upload_sketch "$@" ;;
   test_arduino)      shift; test_arduino "$@" ;;
-  verify)            shift; "$(ensure_venv "$ROOT/tools/requirements.txt")/python" "$ROOT/tools/verify.py" "$@" ;;
+  verify)            shift
+                     # off Windows the default is the first install ./ci ksp_list finds (the last launched)
+                     if [ -z "${KSPDIR:-}" ] && ! is_windows; then
+                       KSPDIR="$(ksp_candidates | head -1 | cut -f1 || true)"; export KSPDIR
+                     fi
+                     "$(ensure_venv "$ROOT/tools/requirements.txt")/python" "$ROOT/tools/verify.py" "$@" ;;
   hmi)               shift; hmi "$@" ;;
   build_hmi|build_hmi_cpp) build_hmi ;;
   test_hmi|test_hmi_cpp)   shift; test_hmi "$@" ;;

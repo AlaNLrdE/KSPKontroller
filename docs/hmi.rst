@@ -647,8 +647,8 @@ image build time; this environment is repeatable tooling, not a bit-for-bit depe
 Building on macOS
 -----------------
 
-With CMake, a C++17 compiler, pkg-config, SDL2 and SDL2_ttf installed, ``./ci hmi`` runs a native Mac
-window. ``./ci hmi --demo`` displays simulated data without KSP. Run ``./ci test_hmi`` for native tests;
+With the Xcode command line tools and ``brew install cmake pkg-config sdl2 sdl2_ttf``, ``./ci hmi`` runs a
+native Mac window (``build_hmi`` names exactly these packages when one is missing). ``./ci hmi --demo`` displays simulated data without KSP. Run ``./ci test_hmi`` for native tests;
 ``./ci hmi --demo --screenshot build/hmi-macos-demo.png --size 1280x800`` saves an off-screen frame.
 Native rendering falls back to macOS Arial Bold when the Linux fonts are absent; ``KSPHMI_FONT`` can
 select the same font used on the Pi for visual comparisons. Executable-relative configuration lookup
