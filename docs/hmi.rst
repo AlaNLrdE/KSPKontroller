@@ -144,18 +144,39 @@ On the Pi (Raspberry Pi OS Lite 64-bit, bookworm, wired to the same LAN), as you
    echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
    sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf
 
-After deploying the HMI, enable appliance-style boot once on the Pi:
+After deploying the HMI, enable the kiosk boot once on the Pi (``--undo`` reverts all of it except lingering):
 
 .. code-block:: bash
 
-   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh
+   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh && sudo reboot
 
-This backs up the boot files with a ``.ksphmi-backup`` suffix, hides firmware splash and console boot text,
-masks the tty1 login prompt and persists the cursor setting (it uses the system ``python3`` to edit the boot
-command line; ctest checks that part). SSH stays available. The HMI service is enabled
-by deployment and starts without login through lingering. Boot changes take effect at the next reboot;
-the display is blank until the HMI paints its waiting or live screen. Do not cut power to shut down Linux;
-use ``sudo poweroff`` first to avoid filesystem damage.
+The script is idempotent and keeps SSH, the network and the serial console. It:
+
+* edits ``cmdline.txt`` (backup ``cmdline.txt.ksphmi-backup``, written once): removes ``console=tty1`` and puts
+  ``console=ttynull`` first, so kernel, systemd and cloud-init text never reach the screen (``serial0``, if
+  enabled, stays the last console and so ``/dev/console``); adds ``quiet loglevel=3 logo.nologo
+  vt.global_cursor_default=0 consoleblank=0 systemd.show_status=false rd.systemd.show_status=false
+  plymouth.enable=0``. Everything else (``root=``, ``ds=nocloud``, the Wi-Fi country) is kept;
+* adds ``disable_splash=1`` (no rainbow) and ``avoid_warnings=1`` (no under-voltage icon over the HMI) to
+  ``config.txt`` (backup ``config.txt.ksphmi-backup``);
+* writes the fbcon ``cursor_blink`` tmpfiles rule and masks ``getty@tty1`` (no login prompt);
+* installs the udev rule ``/etc/udev/rules.d/99-ksphmi-fb.rules`` (makes ``dev-fb0.device`` visible to systemd)
+  and the **system** unit ``ksphmi-splash.service`` (from ``hmi-cpp/systemd/``, with the user and home filled
+  in): ``Type=oneshot``, ``DefaultDependencies=no``, ``After=dev-fb0.device``, ``WantedBy=sysinit.target``,
+  ``Before=systemd-user-sessions.service`` (capped by ``JobTimeoutSec=20``), running
+  ``~/ksphmi/cpp/build/ksphmi --splash`` as the HMI user in group ``video``;
+* enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci deploy_hmi`` does that).
+
+What the screen shows at boot: black while the firmware and kernel start (no rainbow, no logo, no text), then the
+loading screen ("KSP HMI", "Starting...") as soon as ``/dev/fb0`` exists, held by the framebuffer; then the user
+unit ``ksphmi.service`` (lingering, ``WantedBy=default.target``, ``Restart=always``, ``StartLimitIntervalSec=0``)
+paints its waiting screen over it and connects when KSP and kRPC are up. ``ksphmi --splash`` reads no settings
+and touches no network; it re-applies the video mode (``FBIOPUT_VSCREENINFO``) because with a silent console
+nothing else may have set it. Without the font it still fills the screen with the HMI background. Review the
+picture with ``./ci hmi --splash --screenshot build/splash.png --size 2520x1680``. The HMI opens ``/dev/fb0``
+without clearing it and rewrites every row at each unblank (start, then every 30 s), so neither the splash nor
+console text can survive behind its frames. ``./ci verify`` reports each missing piece in ``hmi: kiosk boot``.
+Do not cut power to shut down Linux; use ``sudo poweroff`` first to avoid filesystem damage.
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's
 address, ``User``, ``IdentityFile``). The repo never stores the address or the user name; ``HMI_HOST`` overrides
@@ -233,8 +254,8 @@ the vessel ring), resource fractions, gauge geometry and layout, scene replies, 
 broadcast, settings layers, protobuf values, the kRPC client against an in-process server, the handshake timeout,
 reconnect discovery and the launch-pad errors), ``render`` (off-screen layout checks: ten metric tiles below 40 %
 of the height, text inside its tile, dials inside the resources panel, ORBIT and NavBall never drawing outside
-their panels, apsis labels, facility views, the software frame time) and ``kiosk`` (the boot file edit of
-``setup-kiosk.sh``, when ``python3`` is found).
+their panels, apsis labels, facility views, the boot splash, the software frame time) and ``kiosk`` (the boot
+file edit of ``setup-kiosk.sh`` and the unit files, when ``python3`` is found).
 
 Measured: about 9 ms per 2520x1680 flight frame on the PC (x86-64, WSL, software renderer).
 ``ksphmi --bench 20 --offscreen --size 2520x1680`` prints ``HMI_RENDER_MS`` without touching the screen;

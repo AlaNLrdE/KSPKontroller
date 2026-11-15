@@ -4,6 +4,8 @@
 // of what the device shows skips unchanged rows, so a mostly static screen costs little more than the
 // comparison. The device can be left blanked (powered down: /sys/class/graphics/fb0/blank = 4, seen after an SDL
 // kmsdrm run), which hides every frame: it is unblanked at start and every 30 s (FBIOBLANK needs only write access).
+// Each unblank also rewrites every row once, so pixels somebody else left (the boot splash, console text) never
+// survive behind rows the shadow copy believes unchanged.
 #pragma once
 
 #include <SDL.h>
@@ -26,6 +28,9 @@ public:
     int bits_per_pixel() const { return bpp_; }
     /// Copy an ARGB8888 surface of the device's size; returns the rows actually written.
     int write(const SDL_Surface* frame);
+    /// Re-apply the current video mode (FBIOPUT_VSCREENINFO, FB_ACTIVATE_FORCE): with DRM's fbdev emulation the
+    /// mode is only set when somebody calls set_par, normally the text console; the splash must not rely on it.
+    void activate();
 
     static constexpr double UNBLANK_EVERY = 30.0;
 

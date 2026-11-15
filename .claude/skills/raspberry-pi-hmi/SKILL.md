@@ -46,6 +46,14 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - The text console (fbcon, tty1) blinks its cursor into the framebuffer. Only root can stop it: tmpfiles rule
   `w /sys/class/graphics/fbcon/cursor_blink - - - - 0` in `/etc/tmpfiles.d/ksphmi-cursor.conf`. The live
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
+- Kiosk boot (2026-11-14, `hmi-cpp/systemd/setup-kiosk.sh`, run by the user with sudo, `--undo` reverts): a
+  system oneshot `ksphmi-splash.service` runs `ksphmi --splash` after `dev-fb0.device` (needs the udev rule
+  `TAG+="systemd"` on fb0, else the device unit never appears) and before `systemd-user-sessions.service`, so the
+  HMI's first frame always comes after it. Removing `console=tty1` alone is not enough: with no `console=` left the
+  kernel falls back to tty0 (the screen), and on a Pi 4 without `enable_uart=1` `serial0` may not exist; so
+  `console=ttynull` goes **first** (the last `console=` becomes `/dev/console`). Never add `fbcon=map:`/`nodefer`:
+  with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies it with
+  `FBIOPUT_VSCREENINFO` + `FB_ACTIVATE_FORCE`. Unverified until the first reboot: ask the user what they saw.
 - Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (in WSL; the
   path is relative to the repo), then look at the PNG.
 - Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per

@@ -483,6 +483,28 @@ def check_hmi_cpp(ctx):
            ", ".join(problems) if problems else "%d scene views, %d resources, LF rule" % (len(views), len(names)))
 
 
+# Boot command line flags setup-kiosk.sh adds so that nothing but the splash and the HMI reaches the screen.
+KIOSK_CMDLINE = ("quiet", "logo.nologo", "vt.global_cursor_default=0", "consoleblank=0", "systemd.show_status=false")
+
+
+def kiosk_problems(env):
+    """What the Pi's kiosk boot lacks, from check_hmi's probe values (kcmd = cmdline.txt words joined by '|')."""
+    args = [a for a in env.get("kcmd", "").split("|") if a]
+    missing = []
+    if not args:
+        return ["cmdline.txt unreadable"]
+    if any(re.fullmatch(r"console=tty\d+", a) for a in args):
+        missing.append("console=tty* removed")
+    missing += [flag for flag in KIOSK_CMDLINE if flag not in args]
+    if env.get("nosplash") != "yes":
+        missing.append("disable_splash=1")
+    if env.get("tty1") != "masked":
+        missing.append("getty@tty1 masked (is %s)" % (env.get("tty1") or "?"))
+    if env.get("splashunit") != "enabled" or env.get("fbrule") != "yes":
+        missing.append("ksphmi-splash.service enabled (is %s)" % (env.get("splashunit") or "absent"))
+    return missing
+
+
 def check_hmi(ctx):
     """Local C++ test build is current, then (if the Pi answers over SSH) its service state and the kRPC address."""
     # ctest needs a Linux toolchain (WSL here): only check that ./ci test_hmi ran after the last source change.
@@ -508,8 +530,11 @@ def check_hmi(ctx):
              "echo \"oldunit=$(test -e ~/.config/systemd/user/ksphmi-cpp.service && echo yes || echo no)\"; "
              "echo \"tty1=$(systemctl is-enabled getty@tty1.service)\"; "
              "bootfile=/boot/firmware/cmdline.txt; test -r $bootfile || bootfile=/boot/cmdline.txt; "
-             "echo \"bootquiet=$(test -r $bootfile && ! grep -qw console=tty1 $bootfile "
-             "&& grep -qw quiet $bootfile && echo yes || echo no)\"")
+             "echo \"kcmd=$(tr -s ' \\n' '||' < $bootfile 2>/dev/null)\"; "
+             "echo \"nosplash=$(grep -qsx '[[:space:]]*disable_splash=1[[:space:]]*' $(dirname $bootfile)/config.txt "
+             "&& echo yes || echo no)\"; "
+             "echo \"splashunit=$(systemctl is-enabled ksphmi-splash.service 2>/dev/null || true)\"; "
+             "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
                            capture_output=True, text=True, timeout=15)
@@ -551,10 +576,10 @@ def check_hmi(ctx):
     autostart = env.get("linger") == "yes" and env.get("autostart") == "enabled"
     report("PASS" if autostart else "WARN", "hmi: boot autostart",
            "service enabled with lingering" if autostart else "enable service and loginctl lingering")
-    kiosk = env.get("tty1") == "masked" and env.get("bootquiet") == "yes"
-    report("PASS" if kiosk else "WARN", "hmi: kiosk boot",
-           "login console masked and boot text hidden" if kiosk else
-           "run sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi")
+    missing = kiosk_problems(env)
+    report("WARN" if missing else "PASS", "hmi: kiosk boot",
+           "missing: %s; run sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi, then reboot" % ", ".join(missing)
+           if missing else "splash unit, quiet console, no firmware splash, login prompt masked")
     cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
     report("PASS" if cpp else "WARN", "hmi: C++ unit",
            "ksphmi.service runs ~/ksphmi/cpp/build/ksphmi" if cpp else
