@@ -93,6 +93,10 @@ Run `./ci verify` and read every `hmi:` / `kRPC:` line **before** they launch. I
 missing (mod, firewall, cursor rule), stop them and say so first; do not start monitors for a session that cannot
 work. Remind them the board and the HMI only get data once a vessel is **in flight**.
 
+- The RPC and stream sockets can fail independently. Check the stream-reader error before returning cached
+  values; otherwise fresh snapshot timestamps can keep frozen telemetry marked LIVE. Test by closing only
+  the fake server stream socket after receiving a value, while verifying RPC still answers.
+
 ## Real kRPC vs the stand-in
 
 - Real kRPC 0.7 returns **null** for `SpaceCenter.ActiveVessel` at the Space Center (no RPC error): the HMI read

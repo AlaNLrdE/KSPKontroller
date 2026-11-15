@@ -266,6 +266,7 @@ Value Client::stream(uint64_t id, double wait) {
     auto ready = [&] { return latest_.count(id) || !stream_error_.empty() || closing_; };
     if (!updated_.wait_for(lock, std::chrono::duration<double>(wait), ready))
         throw TimeoutError("no value from kRPC stream within " + fmt::str("%.0f s", wait));
+    if (!stream_error_.empty()) throw ConnectionError(stream_error_);
     auto it = latest_.find(id);
     if (it == latest_.end()) throw ConnectionError(stream_error_.empty() ? "connection closed" : stream_error_);
     std::string result = it->second;

@@ -42,6 +42,12 @@ public:
         for (auto& t : threads_) t.join();
     }
 
+    /// Disconnect only the stream transport; keep RPC available for liveness probes.
+    void disconnect_stream() {
+        int fd = stream_client_.load();
+        if (fd >= 0) shutdown(fd, SHUT_RDWR);
+    }
+
     int rpc_port = 0, stream_port = 0;
     std::atomic<int> calls{0};
     /// AddStream answers the call's error when it fails at once (real kRPC); off keeps older tests' streams.
