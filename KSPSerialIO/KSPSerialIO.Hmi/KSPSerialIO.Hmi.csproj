@@ -37,6 +37,8 @@
     <WarningLevel>4</WarningLevel>
     <PlatformTarget>anycpu</PlatformTarget>
     <DebugSymbols>false</DebugSymbols>
+    <!-- kRPC reads KSPSerialIO.Hmi.xml next to the DLL for its service documentation (installed by ./ci install) -->
+    <DocumentationFile>$(OutputPath)KSPSerialIO.Hmi.xml</DocumentationFile>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />

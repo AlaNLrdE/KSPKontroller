@@ -136,9 +136,20 @@ In a fresh worktree copy `build/refasm` from the main checkout before `./ci buil
   (`KRPC.Service.Attributes`). kRPC declares no `KSPAssembly`, so no `KSPAssemblyDependency` on it. Its own
   validation can be run outside KSP: load the DLL and call `KRPC.Service.Scanner.Scanner.GetServices(errors)` by
   reflection under mono (it accepted KSPHMI: Editor scene, Revision/ShipReport). Leave the service `Id` unset.
-- Not yet seen in the game: the Windows build against KSP 1.12's real assemblies, the editor events, and whether
-  the situation/body inference (`EditorShipReport.Option/BodyName`) matches KSP's delta-v app. Check
-  `KSPSerialIO[HMI] ship report rev N` in KSP.log and compare the Pi with the app in the VAB.
+- KSP 1.12 delta-v app (seen live 2026-11-15, read from Assembly-CSharp metadata): the app's body and situation
+  are `DeltaVGlobals.fetch.deltaVAppValues.body/.situation` (enum SeaLevel, Altitude, Vaccum). The app shows
+  `DeltaVStageInfo.GetSituationDeltaV(opt)` = deltaVatASL / deltaVActual / deltaVinVac (same for TWR*):
+  `deltaVActual` is the *altitude* value and does not follow Vacuum (Duna vac read 2328 for 2452). Fuel flow is
+  pressure-independent, so dv at a pressure = dv_vac * flow-weighted Isp(p) / Isp(vac) (`ShipMath.AtPressure`).
+- Editor facts: loading a craft from the other building's tab calls `EditorLogic.SwitchEditor` and moves the
+  player to that building (`EditorDriver.editorFacility` changes, kRPC logs a scene switch, no KSP scene change).
+  After New the crew manifest (`ShipConstruction.ShipManifest`) still holds the previous ship's crew. The staging
+  list is `StageManager.Instance.Stages` (`StageGroup.inverseStageIndex`, `.Icons[i].Part`).
+- To inspect KSP's API without decompilers: a tiny .NET 8 console using `System.Reflection.Metadata` (in the
+  shared framework, no NuGet) lists a type's fields/methods and an IL dump (ldfld/call targets) of one method.
+  Read the install's DLLs read-only; never write into the install.
+- Windows Python opens text as cp1252 by default: pass `encoding='utf-8'` in edit scripts (a non-cp1252
+  character makes `open(p,'w').write()` fail after truncating the file; restore it with `git checkout`).
 - Linux VM without root: `apt-get -o Dir::State::Lists=... -o Dir::Cache=... update/download` + `dpkg -x` gives
   SDL2 dev files and `mono-mcs`; `pip install --user cmake`. The repo is LF in git (`text=auto`): a Linux checkout
   is LF, so new files must be LF there (CRLF exists only in the Windows working tree). The VM has no git identity:

@@ -1,5 +1,18 @@
 # Changelog
 
+* **0.19.4.1**: 20261115
+  `KSPSerialIO.Hmi.dll` fixes from the first live VAB test (stock Kerbal X, KSP 1.12.5). Stage delta-v and TWR follow
+  the delta-v app's situation the way the app picks them (sea level / altitude / vacuum fields of `DeltaVStageInfo`,
+  body and situation from `DeltaVGlobals.deltaVAppValues`): the "actual" fields read before do not follow a vacuum
+  selection (Duna vacuum: 2328 m/s and TWR 5.15 instead of the app's 2452 and 5.42). New `kasl=` line (format v1,
+  optional for readers): each stage's delta-v at Kerbin sea level whatever the app shows, from the burn segments'
+  vacuum delta-v and the engines' Isp at 1 atm, so the Pi's mission delta-v does not depend on the app's body. Stage
+  events follow KSP's staging list (the Kerbal X's stage-0 parachute was missing) and fall back to the part's
+  staging icon; disagreements with `inverseStage` are logged once as `ship report check:`. Crew counts only the
+  current ship's parts (after New it reported the previous ship's crew=3 with no parts). The build writes
+  `KSPSerialIO.Hmi.xml` and `./ci install` copies it next to the DLL (kRPC warned "No documentation found" at every
+  launch); `./ci verify` compares it. `KSPSerialIO.dll` is unchanged apart from the version.
+
 * **0.19.4.0**: 20261115
   New assembly `KSPSerialIO.Hmi.dll` (installed in `GameData/KSPSerialIO/Plugins`) with the kRPC service `KSPHMI`
   for the Raspberry Pi's VAB screen (phase 1 of the editor ship report): `Revision()` and `ShipReport()`, available in

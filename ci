@@ -346,6 +346,8 @@ install_plugin() {
   if [ -f "$hmi_dll" ]; then
     mkdir -p "$dest/Plugins"
     cp "$hmi_dll" "$dest/Plugins/"
+    # kRPC reads the service documentation from the XML next to the DLL (it warns at every launch without it)
+    if [ -f "${hmi_dll%.dll}.xml" ]; then cp "${hmi_dll%.dll}.xml" "$dest/Plugins/"; fi
   else
     log "KSPSerialIO.Hmi.dll not built: the Pi keeps its static VAB cards (./ci build_KSPSerialIO with kRPC installed)"
   fi

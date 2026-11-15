@@ -35,6 +35,7 @@ SNAPSHOT = os.path.join(ROOT, "build", "gamedata_snapshot.json")
 HMI_PLUGIN_DIR = os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO.Hmi")
 HMI_ASSEMBLY_INFO = os.path.join(HMI_PLUGIN_DIR, "Properties", "AssemblyInfo.cs")
 HMI_BUILT_DLL = os.path.join(HMI_PLUGIN_DIR, "bin", "Release", "KSPSerialIO.Hmi.dll")
+HMI_BUILT_XML = os.path.join(HMI_PLUGIN_DIR, "bin", "Release", "KSPSerialIO.Hmi.xml")
 
 results = []  # (status, name, detail)
 
@@ -892,7 +893,8 @@ def check_ship_report_contract(ctx):
 
 
 def check_install_hmi_service(ctx):
-    """KSPSerialIO.Hmi.dll (the Pi's VAB report) installed in GameData/KSPSerialIO/Plugins and identical to the build.
+    """KSPSerialIO.Hmi.dll (the Pi's VAB report) installed in GameData/KSPSerialIO/Plugins and identical to the build,
+    with its KSPSerialIO.Hmi.xml (kRPC reads the service documentation from it and warns at every launch without it).
     It needs kRPC in the game; without it only that DLL fails to load and the Pi keeps its static VAB cards."""
     gd = os.path.join(ctx["ksp"], "GameData")
     installed = os.path.join(gd, "KSPSerialIO", "Plugins", "KSPSerialIO.Hmi.dll")
@@ -914,8 +916,12 @@ def check_install_hmi_service(ctx):
         report("WARN", "ship report: installed", "installed; no build output to compare (./ci build_KSPSerialIO)")
     elif sha(installed) != sha(HMI_BUILT_DLL):
         report("FAIL", "ship report: installed", "installed KSPSerialIO.Hmi.dll differs from the build (./ci deploy, KSP closed)")
+    elif os.path.isfile(HMI_BUILT_XML) and (not os.path.isfile(installed[:-4] + ".xml") or
+                                             sha(installed[:-4] + ".xml") != sha(HMI_BUILT_XML)):
+        report("FAIL", "ship report: installed", "Plugins/KSPSerialIO.Hmi.xml missing or differs from the build "
+                                                 "(kRPC warns 'No documentation found'; ./ci deploy, KSP closed)")
     else:
-        report("PASS", "ship report: installed", "Plugins/KSPSerialIO.Hmi.dll identical to the build, kRPC present")
+        report("PASS", "ship report: installed", "Plugins/KSPSerialIO.Hmi.dll and .xml identical to the build, kRPC present")
 
 
 # --------------------------------------------------------------------------------------------- hardware

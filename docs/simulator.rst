@@ -40,7 +40,7 @@ The window
   field, as KSPSerialIO, so the HMI's own setting decides). Changes are logged as ``HMI skin ...``.
   *VAB ship* picks what the ``KSPHMI`` kRPC service (``KSPSerialIO.Hmi.dll`` in the game) reports in the VAB and
   SPH: ``kerbal_x`` (330 m/s short of a Mun landing), ``pending`` (delta-v not computed yet), ``heavy`` (launch
-  TWR 0.74, sandbox: no funds) or ``none`` (no service, as without the DLL: the Pi keeps its VAB cards). Each
+  TWR 0.74, sandbox: no funds), ``empty`` (no parts, as after New: the Pi shows EMPTY CRAFT) or ``none`` (no service, as without the DLL: the Pi keeps its VAB cards). Each
   choice is a new revision; outside the editor scenes the service answers kRPC's "not available in game scene"
   error. Same as ``--ship`` / ``Simulator.set_ship``; the samples are in ``tools/kspsim/ships.py``.
 * **Scenario** loads a new vessel, as switching vessels in KSP does (the HMI re-opens its streams):

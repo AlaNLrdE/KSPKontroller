@@ -3,3 +3,4 @@ mass=18.40 dry=6.10 cost=23400 funds=41200 parts=42 crew=1 seats=3 size=11.2,3.8
 st=2,1720,1960,1.63,48,engines:3,clamps:1
 st=1,1890,2010,1.41,71,engines:1,decouplers:1
 st=0,1210,1340,0.62,52,engines:1,decouplers:1,chutes:1
+kasl=2:1720,1:1890,0:1210

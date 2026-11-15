@@ -9,7 +9,7 @@ import math
 
 VERSION = 1
 # kspsim's ship choices: "" = no KSPHMI service at all (KSPSerialIO.Hmi.dll or kRPC missing: the Pi keeps its cards)
-NAMES = ("", "kerbal_x", "pending", "heavy")
+NAMES = ("", "kerbal_x", "pending", "heavy", "empty")
 
 
 def escape(text: str) -> str:
@@ -43,6 +43,9 @@ def report_text(revision: int, ship: dict) -> str:
                       number(st["burn"], 0)]
             fields += ["%s:%d" % (escape(kind), n) for kind, n in st["events"]]
             lines.append("st=" + ",".join(fields))
+        if ship["stages"]:  # Kerbin sea-level delta-v per stage (plugin 0.19.4.1+); the samples are kerbin_asl
+            lines.append("kasl=" + ",".join("%d:%s" % (st["stage"], number(st.get("kasl", st["dv"]), 0))
+                                            for st in ship["stages"]))
     return "\n".join(lines) + "\n"
 
 
@@ -68,6 +71,9 @@ def ship(name: str) -> dict | None:
                         dict(stage=2, dv=1980, vac=2120, twr=0.95, burn=120, events=[("engines", 1), ("decouplers", 6)]),
                         dict(stage=1, dv=1630, vac=1700, twr=0.58, burn=140, events=[("engines", 1), ("decouplers", 1)]),
                         dict(stage=0, dv=0, vac=0, twr=0, burn=0, events=[("decouplers", 1), ("chutes", 3)])])
+    if name == "empty":  # New in the editor: no parts, KSP never computes delta-v (the Pi shows EMPTY CRAFT)
+        return dict(facility="vab", name="Untitled Space Craft", situation="kerbin_asl", mass=0, dry=0, cost=0,
+                    funds=41200, parts=0, crew=0, seats=0, height=0, width=0, engines=0, pending=True, stages=[])
     if name == "":
         return None
     raise ValueError("unknown sample ship %r (choose from %s)" % (name, ", ".join(n or '""' for n in NAMES)))

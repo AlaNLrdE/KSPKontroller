@@ -21,7 +21,7 @@ internal static class Program
 
     private static StageFacts Stage(int n, double dv, double vac, double twr, double burn, params object[] events)
     {
-        var s = new StageFacts { Stage = n, DeltaV = dv, DeltaVVac = vac, Twr = twr, Burn = burn };
+        var s = new StageFacts { Stage = n, DeltaV = dv, DeltaVVac = vac, Twr = twr, Burn = burn, DeltaVKerbinAsl = dv };
         for (int i = 0; i + 1 < events.Length; i += 2)
             s.Events.Add(new KeyValuePair<string, int>((string)events[i], (int)events[i + 1]));
         return s;
@@ -38,6 +38,70 @@ internal static class Program
         f.Stages.Add(Stage(1, 1890, 2010, 1.41, 71, "engines", 1, "decouplers", 1));
         f.Stages.Add(Stage(0, 1210, 1340, 0.62, 52, "engines", 1, "decouplers", 1, "chutes", 1));
         return f;
+    }
+
+    // The stock Kerbal X's last stage fires only its parachute: a stage without delta-v must still list it.
+    private static void StageEvents()
+    {
+        var t = new StageTally();
+        for (int i = 0; i < 7; ++i) t.Add(7, "engines");
+        for (int i = 0; i < 3; ++i) t.Add(7, "clamps");
+        t.Add(1, "decouplers");
+        t.Add(0, "chutes");
+        t.Add(-1, "decouplers");  // a heat shield's decoupler with staging off
+        t.Add(2, null);
+        Check(t.MaxStage == 7 && t.Has(0) && !t.Has(2), "tally stages");
+        List<KeyValuePair<string, int>> seven = t.Events(7);
+        Check(seven.Count == 2 && seven[0].Key == "engines" && seven[0].Value == 7 && seven[1].Key == "clamps",
+              "engines before clamps");
+        var f = new ShipFacts { Name = "Kerbal X", Situation = "kerbin_asl" };
+        var chute = new StageFacts { Stage = 0, DeltaVKerbinAsl = 0 };
+        chute.Events.AddRange(t.Events(0));
+        f.Stages.Add(chute);
+        string body = ShipReportFormat.Body(f);
+        Check(body.Contains("\nst=0,0,0,0.00,0,chutes:1\n") && body.EndsWith("kasl=0:0\n"), "chute-only stage:\n" + body);
+        Check(StageTally.KindFromIcon("PARACHUTES") == "chutes" && StageTally.KindFromIcon("DECOUPLER_VERT") == "decouplers" &&
+              StageTally.KindFromIcon("LIQUID_ENGINE") == "engines" && StageTally.KindFromIcon("SOLID_BOOSTER") == "engines" &&
+              StageTally.KindFromIcon("") == null && StageTally.KindFromIcon(null) == null &&
+              StageTally.KindFromIcon("FUEL_TANK") == null, "staging icon kinds");
+    }
+
+    // Duna vacuum in KSP's app: the situation value is the vacuum one (the app showed 2452 m/s, TWR 5.42 for the
+    // Kerbal X's Poodle stage; deltaVActual read 2328, TWRActual 5.15).
+    private static void Situations()
+    {
+        Check(ShipMath.Situation("vac", 1000, 2328, 2452) == 2452, "vacuum situation uses the vacuum value");
+        Check(ShipMath.Situation("vac", 4.9, 5.15, 5.42) == 5.42, "vacuum situation TWR");
+        Check(ShipMath.Situation("asl", 631, 700, 2452) == 631, "sea level");
+        Check(ShipMath.Situation("alt", 631, 700, 2452) == 700, "altitude is the actual value");
+    }
+
+    // Kerbin sea level (1 atm) from vacuum delta-v for the stock Kerbal X: KSP's app showed 257, 304, 372, 2764 and 631.
+    private static void KerbinSeaLevel()
+    {
+        double[] mainsail = { 1500, 310, 285 }, swivel = { 215, 320, 250 }, poodle = { 250, 350, 90 };
+        var launch = new List<double[]> { mainsail };
+        for (int i = 0; i < 6; ++i) launch.Add(swivel);
+        var core = new List<double[]> { mainsail };
+        Check(Math.Abs(ShipMath.AtPressure(301, launch) - 257) <= 1, "stage 7 Kerbin ASL " + ShipMath.AtPressure(301, launch));
+        Check(Math.Abs(ShipMath.AtPressure(3006, core) - 2764) <= 1, "stage 4 Kerbin ASL " + ShipMath.AtPressure(3006, core));
+        Check(ShipReportFormat.Number(ShipMath.AtPressure(2452, new List<double[]> { poodle }), 0) == "631", "stage 2 Kerbin ASL");
+        Check(ShipMath.AtPressure(0, core) == 0, "no delta-v");
+        Check(double.IsNaN(ShipMath.AtPressure(100, new List<double[]>())), "no engine data");
+    }
+
+    // After New the editor keeps the previous crew manifest: crew must come from this ship's parts and seats.
+    private static void Crew()
+    {
+        var none = new Dictionary<uint, int>();
+        var stale = new List<KeyValuePair<uint, int>> { new KeyValuePair<uint, int>(4294320818u, 3) };
+        Check(ShipMath.CrewAboard(stale, none) == 0, "empty ship has no crew");
+        var pod = new Dictionary<uint, int> { { 100u, 3 } };
+        Check(ShipMath.CrewAboard(new List<KeyValuePair<uint, int>> { new KeyValuePair<uint, int>(100u, 2) }, pod) == 2, "crew in the pod");
+        Check(ShipMath.CrewAboard(new List<KeyValuePair<uint, int>> { new KeyValuePair<uint, int>(100u, 5) }, pod) == 3, "at most the seats");
+        var mixed = new List<KeyValuePair<uint, int>> { new KeyValuePair<uint, int>(100u, 1), new KeyValuePair<uint, int>(7u, 3) };
+        Check(ShipMath.CrewAboard(mixed, pod) == 1, "parts that are gone do not count");
+        Check(ShipMath.CrewAboard(stale, new Dictionary<uint, int> { { 1u, 1 } }) == 1, "unmatched ids: capped at the seats");
     }
 
     private static int Main(string[] args)
@@ -73,7 +137,14 @@ internal static class Program
         Check(ShipReportCache.Report == "" && ShipReportCache.Revision == r0 + 3, "clear empties and bumps rev");
         Check(ShipReportCache.Publish(Sample()) && ShipReportCache.Revision == r0 + 4, "publish after clear");
 
-        Console.WriteLine(failures == 0 ? "ship report format: golden text, escaping, pending, revisions" : failures + " failures");
+        StageEvents();
+        Situations();
+        KerbinSeaLevel();
+        Crew();
+
+        Console.WriteLine(failures == 0
+            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew"
+            : failures + " failures");
         return failures == 0 ? 0 : 1;
     }
 }

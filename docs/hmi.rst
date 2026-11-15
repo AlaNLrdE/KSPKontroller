@@ -282,7 +282,7 @@ orbit: landing there means aerobraking), so the app-driven target always finds o
 ``mun_flyby = 4310`` did not match the map (3400 + 860 = 4260); the flybys and keostationary were dropped to stay
 within the twelve destinations both skins lay out.
 
-Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``heavy``, ``none``) serves sample ships
+Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``heavy``, ``empty``, ``none``) serves sample ships
 (:doc:`simulator`). Review screenshots of both skins: ``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes
 ``classic_vab*.png`` and ``apollo_vab*.png`` from the shared sample and from the live stock Kerbal X reports in
 ``hmi-cpp/tests/data/ship_report_kerbal_x*.txt`` (app on Kerbin sea level and on Duna vacuum; the latter with the

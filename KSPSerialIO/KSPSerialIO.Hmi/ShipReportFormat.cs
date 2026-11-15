@@ -17,17 +17,158 @@ namespace KSPSerialIO.Hmi
         public double Twr, Burn;
         /// <summary>What the stage fires: kind ("engines", "decouplers", "chutes", "clamps", "fairings") and count.</summary>
         public readonly List<KeyValuePair<string, int>> Events = new List<KeyValuePair<string, int>>();
+        /// <summary>Delta-v in m/s at Kerbin sea level, whatever situation the app shows (the kasl= line).</summary>
+        public double DeltaVKerbinAsl = double.NaN;
+    }
+
+    /// <summary>
+    /// What each stage fires, counted from KSP's staging list (or the parts' inverse stage when there is none).
+    /// Plain data: tested without KSP (tools/plugin-shipreport-tests).
+    /// </summary>
+    public sealed class StageTally
+    {
+        /// <summary>Report order of the kinds.</summary>
+        public static readonly string[] Order = { "engines", "decouplers", "chutes", "clamps", "fairings" };
+        private readonly Dictionary<int, Dictionary<string, int>> stages = new Dictionary<int, Dictionary<string, int>>();
+
+        /// <summary>Highest stage that fires something, -1 for none.</summary>
+        public int MaxStage = -1;
+
+        /// <summary>Count one part of `kind` firing in `stage`; ignored for a null kind or a negative stage.</summary>
+        public void Add(int stage, string kind)
+        {
+            if (kind == null || stage < 0) return;
+            Dictionary<string, int> s;
+            if (!stages.TryGetValue(stage, out s)) stages[stage] = s = new Dictionary<string, int>();
+            int n;
+            s.TryGetValue(kind, out n);
+            s[kind] = n + 1;
+            if (stage > MaxStage) MaxStage = stage;
+        }
+
+        /// <summary>True when `stage` fires anything.</summary>
+        public bool Has(int stage) { return stages.ContainsKey(stage); }
+
+        /// <summary>The stage's events in report order.</summary>
+        public List<KeyValuePair<string, int>> Events(int stage)
+        {
+            var list = new List<KeyValuePair<string, int>>();
+            Dictionary<string, int> s;
+            if (stages.TryGetValue(stage, out s))
+                foreach (string k in Order)
+                    if (s.ContainsKey(k)) list.Add(new KeyValuePair<string, int>(k, s[k]));
+            return list;
+        }
+
+        /// <summary>
+        /// The kind from a part's staging icon name (Part.stagingIcon, KSP's DefaultIcons: PARACHUTES,
+        /// DECOUPLER_VERT, LIQUID_ENGINE, SOLID_BOOSTER, ...), for parts whose modules did not tell; null otherwise.
+        /// </summary>
+        public static string KindFromIcon(string icon)
+        {
+            string i = (icon ?? "").ToUpperInvariant();
+            if (i.Length == 0) return null;
+            if (i.Contains("PARACHUTE")) return "chutes";
+            if (i.Contains("DECOUPLER") || i.Contains("SEPARATOR")) return "decouplers";
+            if (i.Contains("ENGINE") || i.Contains("BOOSTER")) return "engines";
+            if (i.Contains("CLAMP")) return "clamps";
+            if (i.Contains("FAIRING")) return "fairings";
+            return null;
+        }
+    }
+
+    /// <summary>Delta-v at Kerbin sea level from vacuum delta-v, and the editor crew count (no KSP types).</summary>
+    public static class ShipMath
+    {
+        /// <summary>
+        /// The value KSP's delta-v app shows for its situation code ("asl", "alt", "vac"), from a DeltaVStageInfo's
+        /// sea-level, actual and vacuum fields, like its GetSituationDeltaV / GetSituationTWR (SeaLevel, Altitude,
+        /// Vaccum). The "actual" field is the altitude value: it does not follow a vacuum selection.
+        /// </summary>
+        public static double Situation(string code, double asl, double actual, double vac)
+        {
+            if (code == "vac") return vac;
+            if (code == "asl") return asl;
+            return actual;
+        }
+
+        /// <summary>
+        /// Effective specific impulse of engines burning together: KSP keeps each engine's propellant flow fixed
+        /// (thrust / Isp, from the vacuum figures), so the mixture's Isp at a pressure is the flow-weighted mean of
+        /// the engines' Isp at that pressure. Each engine is { vacuum thrust kN, vacuum Isp s, Isp s at the pressure }.
+        /// NaN without a burning engine.
+        /// </summary>
+        public static double Isp(IList<double[]> engines, int column)
+        {
+            double flow = 0, weighted = 0;
+            foreach (double[] e in engines)
+            {
+                if (e == null || e.Length < 3 || !(e[0] > 0) || !(e[1] > 0) || double.IsNaN(e[column])) continue;
+                double f = e[0] / e[1];
+                flow += f;
+                weighted += f * e[column];
+            }
+            return flow > 0 ? weighted / flow : double.NaN;
+        }
+
+        /// <summary>
+        /// Delta-v at the pressure of column 2 for a burn with `vacuumDeltaV` in vacuum: the same masses and flow,
+        /// so delta-v scales with the effective Isp. 0 for a burn without delta-v; NaN without engine data.
+        /// </summary>
+        public static double AtPressure(double vacuumDeltaV, IList<double[]> engines)
+        {
+            if (!(vacuumDeltaV > 0)) return 0;
+            double vac = Isp(engines, 1), asl = Isp(engines, 2);
+            return vac > 0 && !double.IsNaN(asl) ? vacuumDeltaV * asl / vac : double.NaN;
+        }
+
+        /// <summary>
+        /// Crew aboard the current ship: the crew manifest's (part id, kerbals) entries for parts of this ship
+        /// (part id -> crew capacity), at most each part's capacity; 0 for a ship without seats. The editor keeps
+        /// the previous ship's manifest after New, so entries for parts that are gone never count. If no entry
+        /// matches any part (ids from another numbering), the manifest's crew capped at the seats.
+        /// </summary>
+        public static int CrewAboard(IEnumerable<KeyValuePair<uint, int>> manifest, IDictionary<uint, int> capacity)
+        {
+            int total = 0, unmatched = 0, seats = 0;
+            bool matched = false;
+            if (manifest == null || capacity == null) return 0;
+            foreach (int c in capacity.Values) seats += Math.Max(0, c);
+            if (seats == 0) return 0;
+            var used = new Dictionary<uint, int>();
+            foreach (KeyValuePair<uint, int> m in manifest)
+            {
+                int cap;
+                if (m.Value <= 0) continue;
+                if (!capacity.TryGetValue(m.Key, out cap))
+                {
+                    unmatched += m.Value;
+                    continue;
+                }
+                matched = true;
+                int already;
+                used.TryGetValue(m.Key, out already);
+                int add = Math.Min(m.Value, cap - already);
+                if (add <= 0) continue;
+                used[m.Key] = already + add;
+                total += add;
+            }
+            return matched ? total : Math.Min(unmatched, seats);
+        }
     }
 
     /// <summary>Plain data of one editor ship: filled from KSP on the main thread, formatted without KSP types.</summary>
     public sealed class ShipFacts
     {
+        /// <summary>Editor building: "vab" or "sph" (EditorDriver.editorFacility).</summary>
         public string Facility = "vab";
+        /// <summary>Ship name as typed in the editor.</summary>
         public string Name = "";
         /// <summary>Delta-v situation, "body_asl" / "body_alt" / "body_vac" (e.g. "kerbin_asl").</summary>
         public string Situation = "";
         /// <summary>Tonnes (wet and dry) and funds; NaN = unknown (Funds is NaN outside career games).</summary>
         public double Mass, Dry, Cost, Funds = double.NaN;
+        /// <summary>Part count, kerbals aboard, crew seats and engines.</summary>
         public int Parts, Crew, Seats, Engines;
         /// <summary>Craft size in metres: height and the larger horizontal extent.</summary>
         public double Height, Width;
@@ -40,13 +181,16 @@ namespace KSPSerialIO.Hmi
     /// <summary>
     /// The text the KSPHMI kRPC service returns from ShipReport(): one "key=value" group per line, separated by
     /// single spaces, version 1. Line 1: v, rev, facility, name, sit. Line 2: the vehicle summary. Then one st= line
-    /// per stage ("st=stage,dv,dv_vac,twr,burn[,kind:count...]"), or a single "dv=pending" line. Numbers use the
+    /// per stage ("st=stage,dv,dv_vac,twr,burn[,kind:count...]") and one "kasl=stage:dv,..." line (Kerbin sea-level
+    /// delta-v per stage, independent of the app's situation; added in 0.19.4.1, optional for readers), or a single
+    /// "dv=pending" line. Numbers use the
     /// invariant culture; "nan" marks an unknown value. Text values (name, situation) are percent-encoded: every
     /// UTF-8 byte outside A-Z a-z 0-9 . _ ~ - becomes %XX (so spaces, '=', ',' and '%' never appear raw).
     /// Readers must reject any v other than 1 and ignore line kinds they do not know (phase 2 adds chk= and lim=).
     /// </summary>
     public static class ShipReportFormat
     {
+        /// <summary>Text format version, the first field of every report ("v=1").</summary>
         public const int Version = 1;
 
         /// <summary>Percent-encode a text value (see the class summary).</summary>
@@ -104,6 +248,17 @@ namespace KSPSerialIO.Hmi
                     sb.Append(',').Append(Escape(e.Key)).Append(':').Append(e.Value.ToString(CultureInfo.InvariantCulture));
                 sb.Append('\n');
             }
+            if (f.Stages.Count > 0)
+            {
+                sb.Append("kasl=");
+                for (int i = 0; i < f.Stages.Count; ++i)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.Append(f.Stages[i].Stage.ToString(CultureInfo.InvariantCulture)).Append(':')
+                      .Append(Number(f.Stages[i].DeltaVKerbinAsl, 0));
+                }
+                sb.Append('\n');
+            }
             return sb.ToString();
         }
 
@@ -126,6 +281,7 @@ namespace KSPSerialIO.Hmi
         private static string text = "";
         private static uint revision;
 
+        /// <summary>Increases whenever the report's contents change and when the editor is left.</summary>
         public static uint Revision { get { lock (Gate) return revision; } }
 
         /// <summary>The current report, or "" when no editor ship has been reported (the Pi then keeps its cards).</summary>

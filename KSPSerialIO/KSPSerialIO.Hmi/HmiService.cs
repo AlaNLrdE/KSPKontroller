@@ -13,14 +13,17 @@ namespace KSPSerialIO.Hmi
     [KRPCService(Name = "KSPHMI", GameScene = GameScene.Editor)]
     public static class HmiService
     {
-        /// <summary>Increases whenever the ship report changes (and when the editor is left).</summary>
+        /// <summary>Increases whenever the ship report changes (and when the editor is left). Poll it (cheap) and
+        /// call ShipReport only when it differs from the last revision fetched.</summary>
         [KRPCProcedure]
         public static uint Revision()
         {
             return ShipReportCache.Revision;
         }
 
-        /// <summary>The ship report, text format version 1 (see ShipReportFormat); "" before the first report.</summary>
+        /// <summary>The editor ship report, text format version 1 (docs/hmi.rst "VAB ship report"): one key=value
+        /// group per field, header, vehicle summary, one st= line per stage and a kasl= line, or dv=pending.
+        /// "" before the first report of an editor session.</summary>
         [KRPCProcedure]
         public static string ShipReport()
         {
