@@ -94,8 +94,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   outside flight and does not distinguish the Space Center building dialogs. Use facility spawn/despawn events.
 - HMI reconnects discover the PC by broadcasting the same context request on UDP 50002 after the saved address
   fails. Disable discovery in isolated client tests so an open real game cannot redirect their connections.
-- Pi kiosk boot setup is `sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh` (run by the user): hide boot text and
-  firmware splash, mask tty1 getty, persist cursor settings; user-service lingering starts the HMI without login.
+- Pi kiosk boot is `hmi-cpp/systemd/setup-kiosk.sh`: `./ci deploy_hmi` reruns it over `ssh -t` (the user types the
+  sudo password) when its sha256 differs from `/etc/ksphmi-kiosk.applied`; it never reboots. It hides boot text
+  and firmware splash, masks tty1 getty, keeps the journal on disk; lingering starts the HMI without login.
+  **Never `console=ttynull`**: it hung the Pi 4 at boot (black, no ping, no journal). Keep `console=tty1` + `quiet`.
 - On Windows, `hmi_ssh` prefers native Windows OpenSSH: Git Bash/MSYS SSH can abort long remote builds
   with `poll: No error`. Keep stdin available for piped tar transfers; do not blindly retry deployments.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in

@@ -326,7 +326,11 @@ On the Pi (Raspberry Pi OS Lite 64-bit, bookworm, wired to the same LAN), as you
    echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
    sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf
 
-After deploying the HMI, enable the kiosk boot once on the Pi (``--undo`` reverts all of it except lingering):
+``./ci deploy_hmi`` applies the kiosk boot at its end whenever the deployed ``setup-kiosk.sh`` differs from the
+one last applied (``/etc/ksphmi-kiosk.applied`` holds its sha256): it runs the script over ``ssh -t`` and sudo
+asks for the Pi user's password. Without a terminal, or with ``NO_KIOSK=1``, it only prints the command. It never
+reboots the Pi; do that yourself so the boot changes take effect. By hand (``--undo`` reverts all of it except
+lingering):
 
 .. code-block:: bash
 
@@ -334,11 +338,14 @@ After deploying the HMI, enable the kiosk boot once on the Pi (``--undo`` revert
 
 The script is idempotent and keeps SSH, the network and the serial console. It:
 
-* edits ``cmdline.txt`` (backup ``cmdline.txt.ksphmi-backup``, written once): removes ``console=tty1`` and puts
-  ``console=ttynull`` first, so kernel, systemd and cloud-init text never reach the screen (``serial0``, if
-  enabled, stays the last console and so ``/dev/console``); adds ``quiet loglevel=3 logo.nologo
-  vt.global_cursor_default=0 consoleblank=0 systemd.show_status=false rd.systemd.show_status=false
-  plymouth.enable=0``. Everything else (``root=``, ``ds=nocloud``, the Wi-Fi country) is kept;
+* edits ``cmdline.txt`` (backup ``cmdline.txt.ksphmi-backup``, written once): keeps ``console=tty1`` and adds
+  ``quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 systemd.show_status=false
+  rd.systemd.show_status=false plymouth.enable=0``, which keep kernel and systemd text off the screen. Everything
+  else (``root=``, ``ds=nocloud``, the Wi-Fi country) is kept. **Never use** ``console=ttynull``: on the Pi 4 it
+  hung the boot before the journal was written (black screen with the backlight on, no network, nothing to read
+  afterwards; 2026-11-15). The script removes it if an older version added it;
+* makes the journal persistent (``/etc/systemd/journald.conf.d/50-ksphmi-persistent.conf``; Raspberry Pi OS keeps
+  it in RAM by default), so ``journalctl -b -1`` shows a boot that failed before SSH came up;
 * adds ``disable_splash=1`` (no rainbow) and ``avoid_warnings=1`` (no under-voltage icon over the HMI) to
   ``config.txt`` (backup ``config.txt.ksphmi-backup``);
 * writes the fbcon ``cursor_blink`` tmpfiles rule and masks ``getty@tty1`` (no login prompt);

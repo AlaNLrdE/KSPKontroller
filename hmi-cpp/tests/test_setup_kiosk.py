@@ -28,10 +28,9 @@ class KioskTest(unittest.TestCase):
                 self.assertIn('rootwait', args)
                 self.assertIn('ds=nocloud;i=rpi-imager-1', args)
                 self.assertIn('cfg80211.ieee80211_regdom=MX', args)
-                self.assertNotIn('console=tty1', args)
-                # ttynull first, serial0 after it: /dev/console (the last console=) stays the serial port
+                # the consoles stay as they were: console=ttynull hung the Pi 4 at boot
                 consoles = [a for a in args if a.startswith('console=')]
-                self.assertEqual(consoles, ['console=ttynull', 'console=serial0,115200'])
+                self.assertEqual(consoles, ['console=serial0,115200', 'console=tty1'])
                 for flag in ('quiet', 'loglevel=3', 'logo.nologo', 'vt.global_cursor_default=0', 'consoleblank=0',
                              'systemd.show_status=false', 'plymouth.enable=0'):
                     self.assertEqual(args.count(flag), 1, flag)
@@ -42,13 +41,25 @@ class KioskTest(unittest.TestCase):
                 self.assertIn('dtoverlay=vc4-kms-v3d', config.read_text())
             self.assertEqual(cmdline.with_name('cmdline.txt.ksphmi-backup').read_text(), original)
 
+    def test_ttynull_from_an_older_kiosk_is_removed(self):
+        python = SCRIPT.read_text().split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            cmdline = Path(folder) / 'cmdline.txt'
+            cmdline.write_text('console=ttynull console=serial0,115200 root=PARTUUID=test rootwait quiet\n')
+            subprocess.run([sys.executable, '-c', python, str(cmdline)], check=True)
+            args = cmdline.read_text().split()
+            self.assertNotIn('console=ttynull', args)
+            self.assertEqual([a for a in args if a.startswith('console=')], ['console=serial0,115200'])
+            self.assertEqual(args.count('quiet'), 1)
+
     def test_script_names_its_deployed_path(self):
         self.assertIn('~/ksphmi/cpp/systemd/setup-kiosk.sh', SCRIPT.read_text())
 
     def test_script_installs_the_splash_and_can_undo(self):
         text = SCRIPT.read_text()
         for needle in ('--undo', 'ksphmi-splash.service', 'TAG+="systemd"', 'mask --now getty@tty1',
-                       'unmask getty@tty1', 'enable-linger', '.ksphmi-backup'):
+                       'unmask getty@tty1', 'enable-linger', '.ksphmi-backup', 'Storage=persistent',
+                       '/etc/ksphmi-kiosk.applied'):
             self.assertIn(needle, text)
 
     def test_splash_unit_is_an_early_oneshot_as_the_hmi_user(self):
