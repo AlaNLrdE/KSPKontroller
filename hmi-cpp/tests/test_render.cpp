@@ -57,7 +57,7 @@ constexpr uint32_t FILL_PIXEL = 0x010203;
 
 Rect orbit_panel(const Screen& s) {
     double u = s.canvas->u;
-    return Rect::f(s.canvas->w * .44 + 1.6 * u, 13 * u, s.canvas->w * .56 - 4.1 * u, 22 * u);
+    return Rect::f(s.canvas->w * .44 + 1.6 * u, 13 * u, s.canvas->w * .56 - 4.1 * u, 27 * u);
 }
 
 Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
@@ -326,6 +326,32 @@ TEST(maneuver_orbit_is_dashed_cached_and_clipped) {
     }
 }
 
+TEST(orbit_fills_the_panel_and_navball_stays_dominant) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h);
+        double u = s.canvas->u;
+        Rect panel = orbit_panel(s);
+        s.fill(FILL);
+        s.display->orbit(panel, demo());
+        s.canvas->flush();
+        int top = h, bottom = -1;
+        for (int y = panel.y; y < panel.bottom(); ++y)
+            for (int x = panel.x; x < panel.right(); ++x) {
+                uint32_t p = s.pixel(x, y);
+                bool curve = p == (uint32_t(theme::ACCENT.r) << 16 | theme::ACCENT.g << 8 | theme::ACCENT.b) ||
+                             p == (uint32_t(theme::MANEUVER.r) << 16 | theme::MANEUVER.g << 8 | theme::MANEUVER.b);
+                if (curve) top = std::min(top, y), bottom = std::max(bottom, y);
+            }
+        // The conics span most of the drawable height (panel minus title and label margins).
+        CHECK(bottom - top >= .85 * (panel.h - 9.3 * u));
+        // The NavBall panel keeps at least 90 % of the globe it had with the former 22u ORBIT panel.
+        double nav_h = (h - 2.5 * u) - 13 * u - panel.h - 1.6 * u, nav_w = panel.w;
+        double before = std::min((h - 2.5 * u) - 13 * u - 22 * u - 1.6 * u, nav_w);
+        CHECK(std::min(nav_h, nav_w) >= .9 * before);
+        CHECK(std::min(nav_h, nav_w) * .31 * 2 > panel.h);  // the globe stays taller than the whole ORBIT panel
+    }
+}
+
 TEST(all_views_render_within_screen) {
     for (auto [w, h] : {std::pair<int, int>{1260, 840}, {1920, 1080}}) {
         Screen s(w, h);
@@ -368,7 +394,7 @@ TEST(full_frame_software_render_time) {
     double u = s.canvas->u;
     time("clear", [&] { s.canvas->clear(theme::BG); });
     time("navball", [&] { s.display->navball().draw(*s.canvas, Rect::f(2520 * .44 + 1.6 * u, 36.6 * u, 2520 * .56 - 4.1 * u, 60.9 * u), snap.nav); });
-    time("orbit", [&] { s.display->orbit(Rect::f(2520 * .44 + 1.6 * u, 13 * u, 2520 * .56 - 4.1 * u, 22 * u), snap); });
+    time("orbit", [&] { s.display->orbit(Rect::f(2520 * .44 + 1.6 * u, 13 * u, 2520 * .56 - 4.1 * u, 27 * u), snap); });
     time("header", [&] { s.display->header(snap, monotonic()); });
     time("tile", [&] { s.display->tile(Rect::f(40, 200, 500, 117), "ALTITUDE", "123.4 km", theme::VALUE); });
     time("panel", [&] { theme::panel(*s.canvas, Rect::f(40, 200, 500, 117)); });

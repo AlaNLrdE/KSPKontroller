@@ -90,7 +90,10 @@ derived from the same position, velocity and gravitational parameter, so it rota
 without rotating the camera. This avoids apparent vessel jumps during RCS docking in near-circular orbits,
 where true anomaly and the periapsis direction are ill-conditioned. Ap/Pe are hidden for effectively circular
 orbits without a meaningful apsis direction. This is a 2D inertial projection, not a surface-longitude map;
-switching vessels or bodies initializes a new view. The clip still contains unbounded escape trajectories.
+switching vessels or bodies initializes a new view. The clip still contains unbounded escape trajectories. The
+scale and offset fit the drawn extent (body, vessel, current and planned conics, with exact projected ellipse
+bounds) to the plot area's full width and height; the axes never move. ORBIT is 27u tall (22u before), which
+shrinks the NavBall globe by about 8 % (634 to 582 px at 2520x1680) and keeps it the largest element.
 
 With a maneuver node, ORBIT also draws the orbit that results from it, as KSP's map view does: an orange
 dashed line (dash and gap 1.2% of the panel height, constant on screen) with its own small orange Ap/Pe

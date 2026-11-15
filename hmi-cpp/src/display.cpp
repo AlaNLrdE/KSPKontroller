@@ -247,7 +247,8 @@ void Display::flight(const Snapshot& s) {
     staging(Rect::f(x0, 80.6 * u, left_w - x0, bottom - 80.6 * u), s);
 
     const double right_x = left_w + gap, right_w = c_.w - left_w - gap - 2.5 * u;
-    const double orbit_h = 22 * u;
+    // ORBIT is short and wide; 27u keeps the NavBall globe within 10 % of its size with a 22u ORBIT panel.
+    const double orbit_h = 27 * u;
     orbit(Rect::f(right_x, top, right_w, orbit_h), s);
     navball_.draw(c_, Rect::f(right_x, top + orbit_h + gap, right_w, bottom - top - orbit_h - gap), s.nav);
 }
@@ -557,6 +558,7 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     if (!conic) reach = std::max(4 * atmo, std::sqrt(dot(state.position, state.position)));
     else if (conic->apoapsis()) reach = std::max(atmo, *conic->apoapsis());
     else reach = std::max(4 * atmo, 2.5 * conic->periapsis());
+    const double base = reach;  // the current orbit alone
     // The post-burn orbit shares the frame and the view axes; widen the view to show it, at most 20 times.
     std::optional<Conic> next;
     std::optional<ConicSpan> next_span;
@@ -571,18 +573,43 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
         if (s.maneuver_orbit->soi > 0 && std::isfinite(s.maneuver_orbit->soi)) far = std::min(far, s.maneuver_orbit->soi);
         if (std::isfinite(far)) reach = std::max(reach, std::min(far, 20 * reach));
     }
-    double margin = apsis_label_width() + 2.6 * u;
-    Rect area = rect.inflate(-2 * margin, -10 * u).move(0, 2 * u);
-    double scale = std::min(area.w, area.h) / (2 * reach);
+    // Fit what is drawn (body and atmosphere, vessel, current conic, planned orbit) to the drawable area, using its
+    // full width and height. The view axes stay fixed: only the scale and the offset follow the conics.
+    double margin = apsis_label_width() + 2.6 * u;  // Ap/Pe labels sit beside their markers
+    Rect area = Rect::f(rect.x + margin, rect.y + 6.5 * u, rect.w - 2 * margin, rect.h - 9.3 * u);
+    double x0 = -atmo, x1 = atmo, y0 = -atmo, y1 = atmo;
+    auto include = [&](double x, double y, double rx, double ry) {
+        if (!std::isfinite(x + y + rx + ry)) return;
+        x0 = std::min(x0, x - rx), x1 = std::max(x1, x + rx), y0 = std::min(y0, y - ry), y1 = std::max(y1, y + ry);
+    };
+    // Projected ellipse: centre - a e P + a cos E P + b sin E T, so each axis spans +-hypot(a P_i, b T_i).
+    auto ellipse = [&](const Conic& c, double cap) {
+        double e = c.eccentricity, a = c.p / (1 - e * e), b = a * std::sqrt(1 - e * e);
+        if (!(a * (1 + e) <= cap)) return false;
+        auto [px, py] = state.project(c.peri_direction);
+        auto [tx, ty] = state.project(c.transverse);
+        include(-a * e * px, -a * e * py, std::hypot(a * px, b * tx), std::hypot(a * py, b * ty));
+        return true;
+    };
+    if (!(conic && conic->apoapsis() && ellipse(*conic, 1e300))) include(0, 0, base, base);
+    if (next && next_span) {
+        double cap = std::min(reach, 20 * base);  // the planned orbit widens the view at most 20 times
+        if (!(next_span->closed && ellipse(*next, cap))) include(0, 0, cap, cap);
+    }
+    auto [vx, vy] = state.vessel_point();
+    include(vx, vy, 0, 0);
+    reach = std::max({std::fabs(x0), std::fabs(x1), std::fabs(y0), std::fabs(y1)});
+    double scale = std::min(area.w / (x1 - x0), area.h / (y1 - y0));
     // With a dashed orbit, quantise the scale (0.5 % steps) so its cached dashes survive small changes of reach.
     if (next && next_span && scale > 0 && std::isfinite(scale)) scale = std::exp(std::round(std::log(scale) * 200) / 200);
-    double cx = area.centerx(), cy = area.centery();
+    double cx = area.x + area.w / 2.0 - (x0 + x1) / 2 * scale, cy = area.y + area.h / 2.0 + (y0 + y1) / 2 * scale;
     auto point = [&](const Vec3& v) {
         auto [x, y] = state.project(v);
         return Pt{static_cast<float>(cx + x * scale), static_cast<float>(cy - y * scale)};
     };
     if (s.atmosphere_depth > 0)
         c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), ATMOSPHERE);
+    const float orbit_width = static_cast<float>(std::max(1.5, .14 * u));  // as the dashed orbit
     if (conic) {
         std::vector<Pt> segment;
         for (int index = 0; index < 241; ++index) {
@@ -590,11 +617,11 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
             if (vector && dot(*vector, *vector) <= (12 * reach) * (12 * reach)) {
                 segment.push_back(point(*vector));
             } else {
-                if (segment.size() > 1) c_.polyline(segment, false, 1, ACCENT);
+                if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
                 segment.clear();
             }
         }
-        if (segment.size() > 1) c_.polyline(segment, false, 1, ACCENT);
+        if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
     }
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
