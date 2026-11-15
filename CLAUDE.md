@@ -143,6 +143,20 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Only `KSPSerialIO.Hmi.dll` (kRPC service KSPHMI, the Pi's VAB report) may reference kRPC; it targets .NET 4.7.1
   because kRPC 0.7 is a .NET 4 assembly, and builds against the install's Managed + GameData/kRPC (read-only). The
   report format v1 has four copies that must agree (plugin, hmi-cpp, kspsim, shared fixture): see the skills.
+- Facility screens (VAB, Tracking Station, Astronaut Complex) follow an approved roadmap and order:
+  `docs/hmi.rst` "Facility screens roadmap". All extend the one kRPC service `KSPHMI`; never a second service DLL.
+- Commands for the user run in **PowerShell**: `$env:KSPDIR = "C:/Users/alanl/wk/wk-rea/Kerbal Space Program"`
+  then `.\ci.cmd <target>`. Never bash `VAR=x ./ci`, never placeholders like `KSPDIR=...`.
+- Agent branches live in `.claude/worktrees/<name>`: the user builds, deploys (`deploy`, `deploy_hmi`) and tests a
+  branch from that folder. `./ci deploy_all` from the main checkout deploys `main`, not the branch.
+- The only way to reach the `ksp-workbench` session is the user: `SendMessage` reaches only agents of the current
+  session. Give the user a ready-to-paste "OK deploy?" request before a deploy and a notice afterwards.
+- Cowork/VM shell (`device_bash`): the main checkout shows ~76 modified files that are only CRLF noise; never
+  `git add -A`/`commit -a` there, commit explicit paths from a worktree. Git needs deletion permission once per
+  session (`device_request_delete_permission`). No mono/cmake by default, no `ssh ksphmi`, no KSP: Windows builds,
+  Pi deploys and game sessions are always the user's.
+- `./ci verify` `log:` checks read the last saved KSP.log: after a deploy they stay FAIL (old plugin version, old
+  link windows) until a new game session; judge only `installed == built` and `ship report: installed` then.
 
 - Control packets use a latest-value buffer, but STAGE/SAS/RCS presses are events: capture their edges and
   receipt times on the serial reader before replacing that buffer. Decode/apply game controls only on Unity's

@@ -243,6 +243,32 @@ Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``he
 (:doc:`simulator`). Review screenshots of both skins: ``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes
 ``classic_vab*.png`` and ``apollo_vab*.png`` from the shared sample (sample data, not the game).
 
+Facility screens roadmap
+------------------------
+
+Three facility screens were designed and approved on 2026-11-15 (proposals with mockups of both skins, written
+in Spanish: `VAB <https://claude.ai/artifact/5FMkLW25dQJmWzRf6r291g>`_, `Tracking Station
+<https://claude.ai/artifact/8KnQXpYxJKR2x4R8dCPerd>`_, `Astronaut Complex
+<https://claude.ai/artifact/BMZVd6PmfMXHEiUBtaFhsv>`_). All three extend the same kRPC service ``KSPHMI`` in
+``KSPSerialIO.Hmi.dll``; each report carries a format version and a revision, and the Pi falls back to the static
+cards when a procedure is missing. Implement them in this order, each merged before the next starts:
+
+#. **VAB, phase 1** (this section above). Phase 2: live pre-launch checklist (control, power, parachute, antenna,
+   decouplers, TWR) and facility limits (parts, mass, height, width vs. VAB/launch pad level; cost vs. funds),
+   with the apollo lamps NO CHUTE / UPPER TWR / PARTS LIMIT. Phase 3: thrust offset and CoM shift full to dry,
+   and the SPH variant (CoM vs. CoL).
+#. **Tracking Station, phase 1**: ``FleetRevision``/``FleetReport`` (next events of every vessel by absolute UT:
+   maneuver nodes with delta-v, Ap/Pe, SOI changes, stock alarms; fleet alerts: Pe in atmosphere or under the
+   terrain, no CommNet link, low or empty EC, stranded crew; debris excluded) and
+   ``SelectionRevision``/``SelectionReport`` (selected vessel with the ORBIT diagram). The Pi computes
+   countdowns from the game clock, so the report does not change every second. Phase 2: selected body, transfer
+   windows, fleet counts, delta-v left only when KSP has computed it. Thresholds, event count and transfer
+   targets in ``config.toml``. To confirm in game: SOI patches of unloaded vessels and the selection event.
+#. **Astronaut Complex, phase 1**: ``CrewRevision``/``CrewReport`` in the Space Center scene (roster with role,
+   level, XP to next level and status or vessel; free crew by role; best available per role with a fixed table of
+   what each stock level unlocks; capacity vs. complex level, next hire cost, applicants; lamps CREW LOST,
+   CREW CAP, NO PILOT). Phase 2: kerbals close to the next level, XP pending recovery, suggested mission.
+
 Settings
 --------
 
