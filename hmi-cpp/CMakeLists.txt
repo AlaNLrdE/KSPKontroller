@@ -4,7 +4,10 @@
 #   ctest --test-dir build/hmi-cpp --output-on-failure
 #
 # Dependencies (apt): build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf.
-# The kRPC wire protocol is encoded by hand (src/pb.*): no libprotobuf / protoc needed.
+# The kRPC wire protocol is encoded by hand (src/pb.cpp, include/pb.hpp): no libprotobuf / protoc needed.
+#
+# Layout: src/ holds only .cpp files, include/ only .hpp headers (./ci verify checks it); tests/ keeps the
+# test programs and their helper headers.
 cmake_minimum_required(VERSION 3.16)
 project(ksphmi VERSION 0.1.0 LANGUAGES CXX)
 
@@ -36,7 +39,7 @@ add_library(ksphmi_core STATIC
   src/scenes.cpp
   src/telemetry.cpp
   src/vec.cpp)
-target_include_directories(ksphmi_core PUBLIC src)
+target_include_directories(ksphmi_core PUBLIC include)
 target_compile_definitions(ksphmi_core PUBLIC KSPHMI_VERSION="${PROJECT_VERSION}")
 target_link_libraries(ksphmi_core PUBLIC Threads::Threads)
 
