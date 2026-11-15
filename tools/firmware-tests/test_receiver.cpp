@@ -116,7 +116,7 @@ void receive_byte_by_byte(const Packet& packet) {
     auto bytes = frame(reinterpret_cast<const byte*>(&packet), sizeof packet);
     for (size_t i = 0; i < bytes.size(); ++i) {
         Serial.feed({bytes[i]});
-        ++clockMs;
+        clockMs += 5;  // complete telemetry takes >250 ms; each individual gap stays short
         check(input() == (i + 1 == bytes.size() ? packet.id : -1), "byte-wise delivery must accept only the complete frame");
     }
 }
@@ -202,8 +202,35 @@ void test_early_connection_recovery() {
     reset_boot_state();
 }
 
+void test_abrupt_close() {
+    VesselData packet{};
+    packet.id = 1;
+    auto bytes = frame(reinterpret_cast<byte*>(&packet), sizeof packet);
+    for (size_t split = 1; split < bytes.size(); ++split) {
+        reset_boot_state();
+        expect_handshake();
+        clockMs = 100;
+        Serial.feed(std::vector<byte>(bytes.begin(), bytes.begin() + split));
+        check(input() == -1, "truncated telemetry must stay incomplete");
+        clockMs += 800;  // host closes for 500 ms and waits 300 ms after reopening
+        expect_handshake();  // first reconnect probe, before the 2 s idle deadline
+    }
+    reset_boot_state();
+    clockMs = 100;
+    partial_telemetry();
+    clockMs += RX_GAP_MS;
+    input();
+    check(rx_state == RX_PAYLOAD, "a gap exactly at the deadline must preserve the partial frame");
+    ++clockMs;
+    input();
+    check(rx_state == RX_HEADER1, "a gap above the deadline must discard the partial frame");
+    expect_handshake();
+    reset_boot_state();
+}
+
 int main() {
     try {
+        test_abrupt_close();
         test_early_connection_recovery();
         expect_handshake();
         clockMs = 100;
@@ -229,7 +256,7 @@ int main() {
         reject_unknown_after(HandShakePacket{0, 1, 2, 3}, HPacket);
         reject_unknown_after(DisplayCommand{2, 1}, DCmd);
         test_incremental_receiver();
-        std::puts("PASS firmware receiver: early connection recovery, timeouts, frame splits, byte-wise delivery, invalid frames and IDs");
+        std::puts("PASS firmware receiver: truncated reconnects, gap boundaries, early recovery, timeouts, slow delivery, invalid frames and IDs");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "FAIL firmware receiver: %s\n", e.what()); return 1; }
 }

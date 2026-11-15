@@ -8,7 +8,8 @@ plugin expects:
   2. telemetry      after a VesselData packet the board must stream ControlPackets (id 101, 25 bytes)
   3. reopen         close and reopen the port (DTR toggles): handshake answered again, ControlPackets
                     resume within 2 s; also after an abrupt close with 60 frames in flight
-  4. idle timeout   with no more telemetry the board must stop sending after about 2 seconds
+  4. truncated reopen  first handshake succeeds after a deliberately truncated header/payload/checksum
+  5. idle timeout   with no more telemetry the board must stop sending after about 2 seconds
 
 If the board does not answer on the requested port (or no port is given), every USB serial port is
 tried, Arduino vendor ids first. Exit code: 0 all passed, 1 a test failed, 2 no board found.
@@ -96,8 +97,8 @@ def candidate_ports(requested):
     return ordered
 
 
-def test_handshake(ser):
-    for _ in range(3):
+def test_handshake(ser, attempts=3):
+    for _ in range(attempts):
         ser.write(frame([ID_HANDSHAKE, 1, 2, 3]))
         frames, _ = read_frames(ser, 0.7)
         for p in frames:
@@ -156,8 +157,8 @@ def _feed_and_wait_controls(ser, seconds):
     return controls
 
 
-def _reopen(ser, wait=2.0):
-    """Close and reopen the same port (DTR drops and rises), then give the board `wait` seconds."""
+def _reopen(ser):
+    """Close for 500 ms, reopen, then allow 300 ms for the bridge to settle."""
     ser.close()
     time.sleep(0.5)
     ser.open()
@@ -188,6 +189,23 @@ def test_reopen(ser):
             return False, "reopen %d: only %d ControlPackets within 2 s after the handshake" % (n, controls)
         steps.append("%d (%.1f s)" % (controls, time.monotonic() - t0))
     return True, "handshake answered and ControlPackets resumed after 3 reopens: %s" % ", ".join(steps)
+
+
+def test_truncated_reopen(ser):
+    """Reopen with header, payload or checksum missing; the FIRST probe must reconnect."""
+    vessel = frame([ID_VESSEL_DATA] + [0] * (VESSEL_DATA_SIZE - 1))
+    for cut in (2, 12, len(vessel) - 1):
+        ser.write(vessel[:cut])
+        ser.flush()  # ensure this deliberately incomplete prefix reaches the board before closing
+        time.sleep(0.05)
+        _reopen(ser)
+        ok, detail = test_handshake(ser, attempts=1)
+        if not ok:
+            return False, "cut at byte %d: %s" % (cut, detail)
+        controls = _feed_and_wait_controls(ser, 2.0)
+        if controls < 3:
+            return False, "cut at byte %d: only %d ControlPackets" % (cut, controls)
+    return True, "first probe answered after truncated header, payload and checksum; controls resumed"
 
 
 def test_idle(ser):
@@ -232,7 +250,8 @@ def main():
             print("Controller found on %s" % device)
             failed = False
             for name, test in (("telemetry", test_telemetry), ("debug", test_debug),
-                              ("reopen", test_reopen), ("idle timeout", test_idle)):
+                              ("reopen", test_reopen), ("truncated reopen", test_truncated_reopen),
+                              ("idle timeout", test_idle)):
                 ok, detail = test(ser)
                 print("  [%s] %s: %s" % ("PASS" if ok else "FAIL", name, detail))
                 failed = failed or not ok

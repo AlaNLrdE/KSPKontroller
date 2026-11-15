@@ -9,6 +9,8 @@
 
 enum ReceiveState { RX_HEADER1, RX_HEADER2, RX_LENGTH, RX_ID, RX_PAYLOAD, RX_CHECKSUM };
 ReceiveState rx_state = RX_HEADER1; ///< Next byte expected, preserved across calls
+const unsigned long RX_GAP_MS = 250; ///< Maximum silence between bytes of an incomplete frame
+unsigned long rx_last_byte_ms = 0;  ///< Last byte consumed, independent of valid-packet liveness
 uint8_t rx_len;        ///< Announced payload size (0 until the length byte arrives)
 uint8_t * address;     ///< Destination struct for the packet being received
 byte buffer[256];      ///< Temporary storage and parsing buffer; buffer[0] holds the packet id
@@ -37,8 +39,14 @@ void KSPBoardResetReceiver() {
  * @return true when a complete, valid packet was stored; the packet id is left in the global @c id.
  */
 boolean KSPBoardReceiveData() {
+  // A host close can truncate a frame. Reopening takes less than IDLETIMER: abandon that frame before
+  // consuming a queued reconnect probe, instead of swallowing the probe as its remaining payload.
+  // At 115200 baud a complete 218-byte telemetry frame takes 19 ms; allow 250 ms between bytes.
+  if (rx_state != RX_HEADER1 && (millis() - rx_last_byte_ms) > RX_GAP_MS)
+    KSPBoardResetReceiver();
   while (Serial.available() > 0) {
     const byte next = Serial.read();
+    rx_last_byte_ms = millis();
     switch (rx_state) {
     case RX_HEADER1:
       if (next == 0xBE) rx_state = RX_HEADER2;
