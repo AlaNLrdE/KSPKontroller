@@ -2,7 +2,8 @@
 # ./ci deploy_hmi copies hmi-cpp/ to ~/ksphmi/cpp and builds it there (~/ksphmi/cpp/build/ksphmi).
 # Settings: ~/ksphmi/cpp/config.toml (defaults, replaced on every deploy), then ~/ksphmi/config.local.toml (yours,
 # never touched), then ~/ksphmi/env (KSPHMI_KRPC_ADDRESS, written by ./ci deploy_hmi).
-# Runs without a desktop: frames are copied to the Linux framebuffer /dev/fb0 (user in group video). Needs lingering
+# Runs without a desktop: frames go to the GPU through SDL kmsdrm (user in groups video and render), or to the
+# Linux framebuffer /dev/fb0 if the GPU path cannot open (output auto). Needs lingering
 # (sudo loginctl enable-linger $USER) so it starts at boot without anybody logged in.
 # Boot: the system unit ksphmi-splash.service (setup-kiosk.sh) paints the loading screen first; this unit opens
 # /dev/fb0 without clearing it and its first frame (the waiting screen) replaces the splash directly.
@@ -12,9 +13,9 @@ Description=KSP HMI flight data display
 StartLimitIntervalSec=0
 
 [Service]
-# fbdev = SDL software renderer + /dev/fb0, the proven path on the Pi 4.
-# To try the GPU instead: KSPHMI_OUTPUT=sdl and SDL_VIDEODRIVER=kmsdrm (needs Mesa EGL/GLES and DRM master).
-Environment=KSPHMI_OUTPUT=fbdev
+# auto = GPU (SDL kmsdrm, V3D OpenGL) with a fallback to the framebuffer if the GPU path cannot open.
+Environment=KSPHMI_OUTPUT=auto
+Environment=SDL_VIDEODRIVER=kmsdrm
 Environment=KSPHMI_APP_DIR=%h/ksphmi/cpp
 Environment=KSPHMI_LOCAL_CONFIG=%h/ksphmi/config.local.toml
 EnvironmentFile=-%h/ksphmi/env
