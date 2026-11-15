@@ -27,8 +27,17 @@ public:
     Display(const Display&) = delete;
     Display& operator=(const Display&) = delete;
 
-    /// One frame (without presenting it).
+    /// One frame (without presenting it). With the layer cache on, it is drawn into the cached layer (a render
+    /// target) and copied to the screen, and the pixels under the NavBall globe are kept for animate().
     void draw(const Snapshot& snap, double now);
+    /// A NavBall-only frame between samples: the cached layer, then the globe square redrawn at the current
+    /// smoothed attitude. False (nothing drawn) when there is no layer for it: cache off, or the last draw had no
+    /// globe (not in flight, no attitude). Any change of data, skin or screen goes through draw(), which rebuilds
+    /// the layer, so the cache cannot go stale.
+    bool animate();
+    /// Turn the layer cache on or off; it stays off when the renderer has no render targets. Returns the state.
+    bool set_layer_cache(bool on);
+    bool layer_cache() const { return layer_cache_; }
 
     void header(const Snapshot& s, double now);
     void waiting(const Snapshot& s, double now);
@@ -100,6 +109,15 @@ private:
     };
     std::optional<GaugeLayout> gauge_layout_;
     std::map<std::tuple<int, int, std::string>, SDL_Texture*> gauge_faces_;
+
+    void draw_screen(const Snapshot& snap, double now);
+    void capture_under_globe(const Rect& square);
+    void free_layer();
+    bool layer_cache_ = false, layer_valid_ = false;
+    SDL_Texture* layer_ = nullptr;  ///< full screen, everything of the last draw()
+    SDL_Texture* under_ = nullptr;  ///< what was under the globe square before the globe was drawn
+    Rect under_rect_;
+    int under_w_ = 0, under_h_ = 0;
 
     Canvas& c_;
     int day_hours_;

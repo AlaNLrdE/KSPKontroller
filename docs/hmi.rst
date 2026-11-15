@@ -38,6 +38,17 @@ quads with limb fading, and the NavBall lighting is one texture per size. A fram
 snapshot arrives (or the screen animates: waiting view, stale counter). The HMI replaced a Python/pygame version
 in November 2026: on the Pi 4 it uses about 43 % of one core against 91 % for the Python one.
 
+Between two 10 Hz samples only the NavBall moves (its attitude is smoothed at ``fps``). With the **layer cache**
+(``[display] layer_cache``: ``auto`` = on with a GPU renderer, ``on``, ``off``; ``--layer-cache``) every new
+snapshot, skin or screen is drawn into a full-screen render target, and the pixels under the globe square are
+kept just before the globe is drawn. An in-between frame copies that layer, puts those pixels back and redraws,
+clipped to the globe square, only what depends on the smoothed attitude: globe, lighting, labels, markers and
+whatever is drawn over them (rim, boresight, the classic speed box). Readouts and lamps stay in the layer. Render
+tests require the composed frame to equal a full redraw pixel for pixel in both skins. Without render targets
+(``fbdev``, software) every frame is a full redraw, as before. The ``perf:`` log line (every 60 s) splits the
+frames: ``full N at X ms, navball-only M at Y ms``, and gives the CPU time spent inside ``present`` next to its
+wall time (a long present with little CPU is the wait for the page flip, not work).
+
 The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
 leaving resource gauges and a read-only staging queue below them. Each resource is a classic car fuel gauge:
 a chrome bezel around a white face, a 110-degree arc across the upper half from E (left) to F (right) with
@@ -136,7 +147,9 @@ under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
 ``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
 ``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
---config FILE --fps N --bench N --offscreen --skin NAME`` (``ksphmi --help``).
+--config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME --layer-cache auto|on|off``
+(``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
+NavBall-only frames (full frames when the cache is off).
 
 ``[display] skin`` picks the look: ``classic`` (the default, flat dark panels) or ``apollo``, a proposal under
 review that draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,

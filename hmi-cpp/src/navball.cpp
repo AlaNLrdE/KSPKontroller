@@ -253,31 +253,64 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     }
     if (!nav) {
         animating_ = false;
+        last_nav_.reset();
         if (chrome) c.text("Attitude unavailable", 3.4, WHITE, rect.centerx(), rect.centery(), Anchor::Center);
         return;
     }
     const Navigation& n = *nav;
+    advance(n.rotation);
+    if (chrome)
+        c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
+               rect.y + 1.8 * u, Anchor::TopRight);
+    last_nav_ = n, last_rect_ = rect, last_chrome_ = chrome;
+    if (before_globe) before_globe(globe_square(c, rect));
+    attitude_layer(c, rect, n);
+}
+
+void Navball::advance(const Quat& target) {
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (hold) {
+        shown_ = *hold, shown_at_ = now, animating_ = true;
+        return;
+    }
+    shown_ = shown_at_ < 0 ? target : smooth(shown_, target, now - shown_at_);
+    shown_at_ = now;
+    animating_ = angle_between(shown_, target) > 0.05;
+}
+
+Rect Navball::globe_square(const Canvas& c, const Rect& rect) {
+    const Globe g = globe_geometry(c, rect);
+    const int size = static_cast<int>(std::ceil(2 * g.r + 4));
+    const double origin = size / 2.0;
+    return Rect(static_cast<int>(g.cx - origin), static_cast<int>(g.cy - origin), size, size);
+}
+
+bool Navball::redraw(Canvas& c) {
+    if (!last_nav_) return false;
+    advance(last_nav_->rotation);
+    const bool keep = chrome;
+    chrome = last_chrome_;
+    attitude_layer(c, last_rect_, *last_nav_);
+    chrome = keep;
+    return true;
+}
+
+void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
+    const double u = c.u;
     const Globe g = globe_geometry(c, rect);
     const double radius = g.r;
     const double cx = g.cx, cy = g.cy;
-    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    shown_ = shown_at_ < 0 ? n.rotation : smooth(shown_, n.rotation, now - shown_at_);
-    shown_at_ = now;
-    animating_ = angle_between(shown_, n.rotation) > 0.05;
     Basis axes;
     try {
         axes = basis(shown_);
     } catch (const std::invalid_argument&) {  // a zero quaternion: show the globe level rather than nothing
         axes = basis(Quat{0, 0, 0, 1});
     }
-    if (chrome)
-        c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
-               rect.y + 1.8 * u, Anchor::TopRight);
     const double r = radius;
-    const int size = static_cast<int>(std::ceil(2 * r + 4));
-    const double origin = size / 2.0;
     // The ball is composed at an integer offset (whole-pixel blit of its surface).
-    const int bx = static_cast<int>(cx - origin), by = static_cast<int>(cy - origin);
+    const Rect square = globe_square(c, rect);
+    const int size = square.w, bx = square.x, by = square.y;
+    const double origin = size / 2.0;
     auto point = [&](const Vec3& v) { return Pt{static_cast<float>(bx + origin + v.x * r), static_cast<float>(by + origin + v.y * r)}; };
 
     const Rect previous_clip = c.clip();

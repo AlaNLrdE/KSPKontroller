@@ -5,7 +5,9 @@
 // limb fading, never screen-space collision tests). Per frame only vertices are computed.
 #pragma once
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,17 @@ public:
     Navball& operator=(const Navball&) = delete;
 
     void draw(Canvas& c, const Rect& rect, const std::optional<Navigation>& nav);
+    /// Only what depends on the smoothed attitude, for the last draw()'s rect, data and chrome: the globe with its
+    /// lighting, and everything drawn over it (rim, markers, boresight, and the chrome after the globe). The caller
+    /// restores the pixels under the globe square first and clips to it (Display::animate). False without data.
+    bool redraw(Canvas& c);
+    /// The square the attitude layer can change (globe, lighting, markers), in pixels, not clipped to the screen.
+    static Rect globe_square(const Canvas& c, const Rect& rect);
+    /// Called by draw() with globe_square() just before the globe is drawn: everything already drawn there is
+    /// the background redraw() must start from (Display captures it from its cached layer).
+    std::function<void(const Rect&)> before_globe;
+    /// Tests and --bench-anim: draw this attitude instead of the smoothed one (animating() stays true).
+    std::optional<Quat> hold;
     /// Where the globe goes in a NavBall rect (centre and radius in pixels).
     struct Globe {
         double cx, cy, r;
@@ -69,6 +82,14 @@ public:
     bool animating() const { return animating_; }
 
 private:
+    /// One smoothing step towards `target` (or `hold`), at the wall clock.
+    void advance(const Quat& target);
+    /// The globe and everything drawn after it (see redraw).
+    void attitude_layer(Canvas& c, const Rect& rect, const Navigation& n);
+    std::optional<Navigation> last_nav_;
+    Rect last_rect_;
+    bool last_chrome_ = true;
+
     void build_labels(Canvas& c);
     void build_lighting(Canvas& c, int size, double radius);
 

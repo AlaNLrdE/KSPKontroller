@@ -140,9 +140,75 @@ Rect Display::orbit_text(const std::string& s, float units, Color color, double 
 
 Display::~Display() {
     for (auto& [key, texture] : gauge_faces_) SDL_DestroyTexture(texture);
+    free_layer();
+}
+
+void Display::free_layer() {
+    if (layer_) SDL_DestroyTexture(layer_), layer_ = nullptr;
+    if (under_) SDL_DestroyTexture(under_), under_ = nullptr;
+    under_w_ = under_h_ = 0;
+    layer_valid_ = false;
+}
+
+bool Display::set_layer_cache(bool on) {
+    layer_cache_ = on && SDL_RenderTargetSupported(c_.renderer());
+    if (!layer_cache_) free_layer();
+    return layer_cache_;
 }
 
 void Display::draw(const Snapshot& snap, double now) {
+    layer_valid_ = false;
+    if (layer_cache_ && !layer_) {
+        layer_ = SDL_CreateTexture(c_.renderer(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, c_.w, c_.h);
+        if (layer_) {
+            SDL_SetTextureBlendMode(layer_, SDL_BLENDMODE_NONE);
+        } else {
+            log::warning("ksphmi.display", std::string("layer cache off: ") + SDL_GetError());
+            layer_cache_ = false;
+        }
+    }
+    if (!layer_cache_) return draw_screen(snap, now);
+    // Everything goes into the layer; the NavBall reports its globe square just before drawing the globe, so
+    // the pixels under it (panel, apollo bezel well) can be put back before each NavBall-only frame.
+    c_.set_target(layer_);
+    navball_.before_globe = [this](const Rect& square) { capture_under_globe(square); };
+    draw_screen(snap, now);
+    navball_.before_globe = nullptr;
+    c_.set_target(nullptr);
+    c_.blit(layer_, Rect(0, 0, c_.w, c_.h), Rect(0, 0, c_.w, c_.h));
+    c_.flush();
+}
+
+void Display::capture_under_globe(const Rect& square) {
+    const Rect s = Rect(0, 0, c_.w, c_.h).clip(square);
+    if (s.w <= 0 || s.h <= 0) return;
+    if (!under_ || under_w_ != s.w || under_h_ != s.h) {
+        if (under_) SDL_DestroyTexture(under_);
+        under_ = SDL_CreateTexture(c_.renderer(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, s.w, s.h);
+        under_w_ = under_ ? s.w : 0, under_h_ = under_ ? s.h : 0;
+        if (!under_) return;
+        SDL_SetTextureBlendMode(under_, SDL_BLENDMODE_NONE);
+    }
+    c_.set_target(under_);
+    c_.blit(layer_, s, Rect(0, 0, s.w, s.h));
+    c_.set_target(layer_);
+    under_rect_ = s;
+    layer_valid_ = true;
+}
+
+bool Display::animate() {
+    if (!layer_cache_ || !layer_valid_) return false;
+    c_.blit(layer_, Rect(0, 0, c_.w, c_.h), Rect(0, 0, c_.w, c_.h));
+    c_.blit(under_, Rect(0, 0, under_rect_.w, under_rect_.h), under_rect_);
+    const Rect keep = c_.clip();
+    c_.set_clip(under_rect_);
+    navball_.redraw(c_);
+    c_.set_clip(keep);
+    c_.flush();
+    return true;
+}
+
+void Display::draw_screen(const Snapshot& snap, double now) {
     // The simulator's context reply may pick the skin; otherwise the [display] setting. Each skin keeps its own
     // caches (built lazily, released with the Display), so switching back and forth costs nothing after the first.
     if (known_skin(snap.skin)) set_skin(snap.skin, "context");
