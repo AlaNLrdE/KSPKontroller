@@ -5,7 +5,7 @@
 #   ./ci build_sketch_debug  Compile the sketch with symbols and -Og into build/sketch-debug (for the SWD debugger)
 #   ./ci build_KSPSerialIO   Compile the KSP plugin (dotnet / msbuild / xbuild), then KSPSerialIO.Hmi.dll (kRPC service
 #                            for the Pi's VAB report; needs a KSP install with kRPC, skipped with a warning without one)
-#   ./ci build_all           Both of the above
+#   ./ci build_all           Plugin, sketch and Pi HMI (build_KSPSerialIO, build_sketch, build_hmi)
 #   ./ci install             Copy the built plugin + config.xml into the local KSP (GameData/KSPSerialIO, and
 #                            KSPSerialIO.Hmi.dll into GameData/KSPSerialIO/Plugins when built)
 #   ./ci deploy              Build the plugin and install it into a local KSP (lists the installs it finds and asks which)
@@ -654,7 +654,7 @@ build_hmi() {
   hmi_env
   log "Building the HMI into build/hmi-cpp"
   cmake -S "$HMI_DIR" -B "$BUILD/hmi-cpp" -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || echo 2)"
+  cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 }
 
 # Build, then run it in a window on this PC (WSLg on Windows); ARGS as ksphmi --help, e.g. --demo
@@ -836,7 +836,7 @@ case "${1:-help}" in
   build_sketch)      build_sketch ;;
   build_sketch_debug) build_sketch_debug ;;
   build_KSPSerialIO) build_KSPSerialIO ;;
-  build_all)         build_KSPSerialIO; build_sketch ;;
+  build_all)         build_KSPSerialIO; build_sketch; build_hmi ;;
   install)           install_plugin ;;
   deploy)            deploy ;;
   deploy_all)        shift; deploy_all "$@" ;;
