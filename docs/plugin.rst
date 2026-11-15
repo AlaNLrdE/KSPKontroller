@@ -43,7 +43,8 @@ Settings (``config.xml``)
      - Wait after opening a port before talking, for boards that reset on open.
    * - ``HandshakeDisable``
      - int
-     - ``1`` skips the handshake and uses ``DefaultPort`` directly.
+     - ``1`` skips the handshake and trusts only ``DefaultPort``, for both initial connection and retries.
+       An empty, busy or absent configured port never falls back to another device.
    * - ``PerfLog``
      - int
      - ``1`` logs the plugin's cost per frame every 10 s (see below). Default 0 when the key is missing.
@@ -102,10 +103,15 @@ STAGE requests older than one second are discarded using their actual receive ti
 Port discovery and failures
 ---------------------------
 
-Discovery probes ``DefaultPort`` first and then every COM port in the registry. Each port is probed
-in isolation: an error opening it, a write timeout or a missing reply only closes that port and moves
-on to the next one. Bluetooth modem ports (``\Device\BthModem*``) are skipped because they open but
-never answer, and a port equal to ``DefaultPort`` is not probed twice.
+With handshake enabled, discovery probes the last known port when present, then ``DefaultPort`` and
+remaining ports. Each candidate is verified in isolation: an open failure, write timeout or missing reply
+closes that port before moving on. Bluetooth modem ports (``\Device\BthModem*``) are skipped because they
+open but never answer, and candidates are not probed twice.
+
+With ``HandshakeDisable = 1``, discovery does not enumerate ports: it tries only the configured
+``DefaultPort``, even if enumeration would not list it. Empty or whitespace-only configuration produces
+no candidates. Connection and reconnection also reject any other candidate before constructing or
+opening it, so failure of the trusted port cannot send telemetry to an unrelated device.
 
 Telemetry is only sent while a controller was found (``DisplayFound``). If sending fails three times in
 a row, ``LinkFailed`` stops main-thread send/application until the background supervisor restores

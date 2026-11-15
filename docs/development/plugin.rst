@@ -94,6 +94,11 @@ decoding. Disabled panel axes can still be fields in the protocol without contro
 Connection supervision
 -----------------------
 
+When ``HandshakeDisable`` is 1, ``BuildCandidates`` returns only the non-empty configured ``DefaultPort``
+without reading the registry or enumerating devices. ``TryConnect`` independently rejects other names
+before constructing a serial port. This applies to initial discovery and supervisor retries; a missing or
+busy configured port remains a failed attempt, while normal handshake-verified scanning is unchanged.
+
 ``LinkReady`` requires link-up, a compatible controller, an open port and no write failure. Three
 consecutive failed writes mark the link failed. Supervision can also detect silence or a closed port.
 The normal silence threshold is 3000 ms, retry delay 2000 ms, candidate settle delay 300 ms, handshake

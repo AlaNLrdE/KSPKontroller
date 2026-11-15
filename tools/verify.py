@@ -209,24 +209,33 @@ def check_button_events(ctx):
     report("PASS" if result.returncode == 0 else "FAIL", "button events", detail)
 
 
-def check_plugin_receiver(ctx):
-    """Exercise the built plugin's real receive/dispatch methods without Unity callbacks or hardware."""
+def run_plugin_assembly_test(kind, project_name):
+    """Exercise real methods of the built plugin without Unity callbacks or hardware."""
     dotnet = shutil.which("dotnet")
     if not dotnet or not os.path.isfile(BUILT_DLL):
-        report("WARN", "plugin receiver", "requires .NET 8 SDK and ./ci build_KSPSerialIO output")
+        report("WARN", "plugin " + kind, "requires .NET 8 SDK and ./ci build_KSPSerialIO output")
         return
     sources = [CS, os.path.join(os.path.dirname(CS), "ButtonEvents.cs")]
     if max(os.path.getmtime(p) for p in sources) > os.path.getmtime(BUILT_DLL):
-        report("FAIL", "plugin receiver", "plugin assembly is stale: run ./ci build_KSPSerialIO first")
+        report("FAIL", "plugin " + kind, "plugin assembly is stale: run ./ci build_KSPSerialIO first")
         return
-    project = os.path.join(ROOT, "tools", "plugin-receiver-tests", "PluginReceiver.Tests.csproj")
-    artifacts = os.path.join(ROOT, "build", "plugin-receiver-tests")
+    project = os.path.join(ROOT, "tools", "plugin-" + kind + "-tests", project_name + ".csproj")
+    artifacts = os.path.join(ROOT, "build", "plugin-" + kind + "-tests")
     result = subprocess.run([dotnet, "build", project, "--configuration", "Release", "--artifacts-path", artifacts,
-                             "--nologo"], capture_output=True, text=True, timeout=60)
+                             "--nologo", "-p:NuGetAudit=false", "--ignore-failed-sources"], capture_output=True, text=True, timeout=120)
     if result.returncode == 0:
-        dll = os.path.join(artifacts, "bin", "PluginReceiver.Tests", "release", "PluginReceiver.Tests.dll")
+        dll = os.path.join(artifacts, "bin", project_name, "release", project_name + ".dll")
         result = subprocess.run([dotnet, dll, ROOT], capture_output=True, text=True, timeout=30)
-    report("PASS" if result.returncode == 0 else "FAIL", "plugin receiver", (result.stdout + result.stderr).strip())
+    report("PASS" if result.returncode == 0 else "FAIL", "plugin " + kind, (result.stdout + result.stderr).strip())
+
+
+
+def check_plugin_receiver(ctx):
+    run_plugin_assembly_test("receiver", "PluginReceiver.Tests")
+
+
+def check_plugin_connection(ctx):
+    run_plugin_assembly_test("connection", "PluginConnection.Tests")
 
 
 def check_plugin_safety(ctx):
@@ -922,7 +931,7 @@ def check_board(ctx):
         report(m.group(1) if m else "FAIL", "board: " + name, m.group(2) if m else "no result (board silent: press RESET once, or double-tap RESET and re-flash)")
 
 
-CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_safety, check_no_direct_debug_log,
+CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
           check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_documentation, check_hmi_desktop, check_git]
 
 
@@ -935,7 +944,7 @@ def main():
     ap.add_argument("--snapshot", action="store_true", help="record the GameData entries now present")
     ap.add_argument("--docs-only", action="store_true", help="check documentation guides, UML lifelines and API coverage without KSP or hardware")
     ap.add_argument("--firmware-only", action="store_true", help="run native firmware tests without KSP or hardware")
-    ap.add_argument("--plugin-only", action="store_true", help="run plugin button and receiver tests without KSP or hardware")
+    ap.add_argument("--plugin-only", action="store_true", help="run plugin button, receiver and connection tests without KSP or hardware")
     args = ap.parse_args()
     if args.plugin_only and (args.docs_only or args.firmware_only or args.board or args.snapshot):
         ap.error("--plugin-only cannot be combined with --docs-only, --firmware-only, --board or --snapshot")
@@ -954,7 +963,7 @@ def main():
     elif args.firmware_only:
         checks = [check_firmware_receiver, check_firmware_matrix]
     elif args.plugin_only:
-        checks = [check_button_events, check_plugin_receiver]
+        checks = [check_button_events, check_plugin_receiver, check_plugin_connection]
     for chk in checks:
         try:
             chk(ctx)

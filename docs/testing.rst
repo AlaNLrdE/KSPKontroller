@@ -92,6 +92,13 @@ handshake state, and successful recovery with valid payloads. Requires .NET 8; s
 rather than testing an older assembly. Artifacts stay under ``build/plugin-receiver-tests``. This does not
 validate Unity control application, serial hardware or the game.
 
+``--plugin-only`` also runs ``tools/plugin-connection-tests`` against the real plugin assembly. Its
+separate process substitutes test-only serial and KSP configuration assemblies and verifies those bindings
+before invoking discovery methods; no operating-system serial port is opened. Tests cover busy/absent
+configured ports in initial and supervisor modes, stale/other candidates, no-handshake success without a
+probe, empty configuration, normal verified fallback and cancellation. Every test stops the plugin's reader
+and sender workers. The stand-ins remain under the test project/build directories and are never deployed.
+
 Button event regression tests
 -----------------------------
 

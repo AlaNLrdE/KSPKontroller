@@ -1220,9 +1220,16 @@ namespace KSPSerialIO
          * Ports come from the registry (the value name tells a Bluetooth modem apart, those open fine but never
          * answer, so they are skipped) or from SerialPort.GetPortNames() if the registry is unavailable. A name
          * that does not exist (the DefaultPort placeholder, or a port that vanished) is not listed.
+         * With handshake disabled, returns only the configured port without enumeration, even if absent.
          */
         private static List<string> BuildCandidates()
         {
+            if (SettingsNStuff.HandshakeDisable == 1)
+            {
+                List<string> configured = new List<string>();
+                if (IsConfiguredPort(SettingsNStuff.DefaultPort)) configured.Add(SettingsNStuff.DefaultPort);
+                return configured;  // without identity verification, never enumerate or trust another device
+            }
             List<string> present = new List<string>();
             bool listed = false;
             try
@@ -1263,6 +1270,14 @@ namespace KSPSerialIO
             return ordered;
         }
 
+        /// @brief A non-empty configured port is the only device trusted without a handshake.
+        private static bool IsConfiguredPort(string name)
+        {
+            string configured = SettingsNStuff.DefaultPort;
+            return !String.IsNullOrEmpty(configured) && configured.Trim().Length > 0 &&
+                String.Equals(name, configured, StringComparison.Ordinal);
+        }
+
         /// @brief Builds a fresh handshake packet (1, 2, 3); the static HPacket is overwritten by the board's reply.
         private static HandShakePacket NewHandshake()
         {
@@ -1284,13 +1299,15 @@ namespace KSPSerialIO
          * open and becomes Port, the link state is reset (SendFailures, board uptime, stage seeding, silence timer),
          * LinkUp is raised and the writer is started. Must only run while no reader or writer of an earlier
          * link is active (the caller closes it first).
-         * @return True if a board answered.
+         * Without handshake, only DefaultPort may be opened, even if the caller supplies other candidates.
+         * @return True if a board answered, or the configured port opened with handshake disabled.
          */
         private static bool TryConnect(List<string> candidates, int settleMs, int replyWaitMs, int gen)
         {
             foreach (string name in candidates)
             {
                 if (Cancelled(gen)) return false;
+                if (SettingsNStuff.HandshakeDisable == 1 && !IsConfiguredPort(name)) continue;
                 SerialPort p = null;
                 ReaderState st = null;
                 bool ok = false;

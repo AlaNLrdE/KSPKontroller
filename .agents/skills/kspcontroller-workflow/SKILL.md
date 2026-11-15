@@ -97,6 +97,12 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
   packet otherwise reuses handshake magic and can assert Abort. `--plugin-only` tests the actual built
   assembly via reflection, with log queue main-thread identity unset so no Unity UI/native calls execute.
 
+- HandshakeDisable=1 trusts only the exact configured DefaultPort: bypass enumeration and guard TryConnect
+  before constructing any other candidate. Missing/busy ports must retry that port without fallback; empty
+  configuration must open nothing. Connection tests load the real plugin with separate test-only serial
+  and KSP configuration assemblies (the real settings initializer calls Unity). Assert test bindings first
+  and close real plugin workers after each scenario; never deploy the stand-in DLLs.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer
