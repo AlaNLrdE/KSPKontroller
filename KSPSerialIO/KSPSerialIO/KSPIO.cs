@@ -659,7 +659,10 @@ namespace KSPSerialIO
                 if (!LinkUp) return;   // link down: nothing to send to
                 byte[] frame = BuildFrame(anything);
                 lock (sendLock) { pendingFrame = frame; }
-                Interlocked.Exchange(ref lastQueueTicks, NowTicks());   // the board answers (ControlPacket) only while we send
+                long now = NowTicks();
+                long prev = Interlocked.Exchange(ref lastQueueTicks, now);   // the board answers (ControlPacket) only while we send
+                // A new sending run (first packet, or after a pause long enough for the board to go idle) restarts the silence timer.
+                if (prev == 0 || TicksToMs(now - prev) > SendGapMs) Interlocked.Exchange(ref sendStartTicks, now);
                 EnsureSender();
                 sendEvent.Set();
             }
@@ -1167,6 +1170,8 @@ namespace KSPSerialIO
         private static long linkUpTicks;           ///< Stopwatch timestamp of the last link-up, reference for the silence timer (Interlocked)
         private static long quietUntilTicks;       ///< No loss detection before this timestamp (Interlocked)
         private static long lastQueueTicks;        ///< Timestamp of the last telemetry packet queued since the link came up, 0 = none yet (Interlocked)
+        private static long sendStartTicks;        ///< Timestamp of the first packet of the current sending run (Interlocked)
+        public const int SendGapMs = 1000;         ///< A pause in sending longer than this starts a new sending run
         private static Thread SupervisorThread;
         private static readonly ManualResetEvent supStop = new ManualResetEvent(false);
         private static int supGen;                 ///< Identifies the current supervisor; any other value means "stop". Guarded by supLock
@@ -1198,6 +1203,7 @@ namespace KSPSerialIO
             Interlocked.Exchange(ref linkUpTicks, now);
             Interlocked.Exchange(ref quietUntilTicks, now + (long)graceMs * System.Diagnostics.Stopwatch.Frequency / 1000);
             Interlocked.Exchange(ref lastQueueTicks, 0);
+            Interlocked.Exchange(ref sendStartTicks, 0);
             LinkFailed = false;
             SendFailures = 0;
             lastBoardUptime = 0;         // a new board uptime is not a reboot
@@ -1407,10 +1413,14 @@ namespace KSPSerialIO
             if (now < Interlocked.Read(ref quietUntilTicks)) return null;
             if (!PortIsOpen()) return "port closed";
             // The board goes idle 2 s after the last valid packet and stops sending ControlPackets, so silence only
-            // means a loss while the plugin has been sending: measure it from our last queued telemetry packet.
+            // means a loss while the plugin has been sending: measure it from the start of the current sending run.
+            // (Measuring from the LAST queued packet, as before 0.19.3.16, never fired while sending at 5 Hz: the board
+            // stayed silent for minutes with link_state=up, session board-dead-1923.)
             long queued = Interlocked.Read(ref lastQueueTicks);
             if (queued == 0) return null;
-            long refTicks = Math.Max(Interlocked.Read(ref LastRxTicks), Math.Max(Interlocked.Read(ref linkUpTicks), queued));
+            if (TicksToMs(now - queued) > SendGapMs) return null;   // we paused (scene load): the board is idle, not lost
+            long refTicks = Math.Max(Interlocked.Read(ref LastRxTicks),
+                                     Math.Max(Interlocked.Read(ref linkUpTicks), Interlocked.Read(ref sendStartTicks)));
             double silentMs = TicksToMs(now - refTicks);
             if (silentMs > LinkTimeoutMs) return "no data from the board for " + ((int)silentMs) + " ms";
             return null;

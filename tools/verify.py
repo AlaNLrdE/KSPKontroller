@@ -374,6 +374,13 @@ def check_log(ctx):
                 report("FAIL", "log: board kept talking", "%d window(s) of %d with writes but 0 bytes received (first at window %d)" % (len(silent), len(rx), silent[0] + 1))
             else:
                 report("PASS", "log: board kept talking", "bytes received in every window")
+            # The supervisor must notice a silent board: rx_age far above LinkTimeoutMs (3 s) while link_state=up means
+            # the loss detection did not fire (board-dead-1923: up for 7 minutes with no byte received).
+            stuck = [l for l in perf if "link_state=up" in l
+                     for m in [re.search(r"\brx_age_ms=(\d+)", l)] if m and int(m.group(1)) > 10000]
+            report("FAIL" if stuck else "PASS", "log: link loss detected",
+                   ("%d window(s) with link_state=up and rx_age_ms > 10000, first: %s" % (len(stuck), stuck[0][5:17]))
+                   if stuck else "no window stayed up on a silent board")
         if wavg and max(wavg) > 5:
             report("WARN", "log: serial write time", "max avg write %.1f ms (background thread, so it does not cost frames)" % max(wavg))
     else:
