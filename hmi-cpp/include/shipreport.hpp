@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace ksphmi {
 
@@ -33,7 +34,18 @@ struct StageReport {
     std::vector<StageEvent> events;
     /// m/s at Kerbin sea level from the kasl= line, independent of the app's situation; NaN = not reported
     double delta_v_kerbin_asl = std::numeric_limits<double>::quiet_NaN();
+    struct Item { std::string kind, name; int count = 0; };
+    std::vector<Item> items;
 };
+
+struct EditorAction { std::string group, part, name; };
+struct EditorSeat { std::string part_id, part, name, role; int seat = 0, level = 0; };
+struct EditorInventory {
+    std::string key, part;
+    int slots = 0;
+    std::optional<double> mass, mass_capacity, volume, volume_capacity;
+};
+struct EditorCargo { std::string inventory, name; int slot = 0, quantity = 0; std::optional<double> mass, volume; };
 
 struct ShipReport {
     uint32_t revision = 0;
@@ -44,6 +56,12 @@ struct ShipReport {
     bool delta_v_pending = false;
     std::vector<StageReport> stages;  ///< firing order (highest stage number first)
     bool has_kerbin_asl = false;      ///< a kasl= line was present
+    bool has_editor = false;
+    std::string editor_mode = "construction", selected_group;
+    std::vector<EditorAction> actions;
+    std::vector<EditorSeat> manifest;
+    std::vector<EditorInventory> inventories;
+    std::vector<EditorCargo> cargo;
 
     /// Sum of the finite stage delta-v, in the situation and in vacuum (0 without stages).
     double total_delta_v() const;
@@ -116,5 +134,18 @@ std::string destination_label(const std::string& key);
 
 /// What a stage fires, short and upper case: "3 ENG  CLAMP" (a count only above one); "" for nothing.
 std::string events_text(const StageReport& stage);
+
+/// Shared data, independently drawn with the existing Classic and Apollo primitives.
+struct EditorRow { std::string label, value, detail; bool warning = false; };
+struct EditorPage {
+    std::string title, left_title, right_title;
+    std::vector<std::pair<std::string, std::string>> metrics;
+    std::vector<EditorRow> left, right;
+};
+std::string editor_mode_label(const std::string& mode);
+EditorPage editor_page(const ShipReport& report);
+struct PageSlice { size_t begin = 0, end = 0, page = 0, pages = 1; };
+PageSlice page_slice(size_t count, size_t rows, double received);
+std::vector<std::string> stage_detail_lines(const StageReport& stage, size_t characters = 66);
 
 }  // namespace ksphmi

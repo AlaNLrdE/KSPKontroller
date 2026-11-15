@@ -228,8 +228,10 @@ std::string events_text(const StageReport& stage) {
 std::optional<ShipReport> parse_ship_report(const std::string& text, std::string* error) {
     ShipReport r;
     std::vector<std::pair<int, double>> kasl;
+    std::vector<std::pair<int, StageReport::Item>> stage_items;
     try {
         if (text.empty()) throw Fail{"empty report"};
+        if (text.size() > 1024 * 1024) throw Fail{"report too large"};
         std::vector<std::string> lines = split(text, '\n');
         if (!lines.empty() && lines.back().empty()) lines.pop_back();
         bool header = false;
@@ -299,6 +301,49 @@ std::optional<ShipReport> parse_ship_report(const std::string& text, std::string
                         st.events.push_back({*kind, static_cast<int>(k)});
                     }
                     r.stages.push_back(std::move(st));
+                } else if (key == "editor") {
+                    auto f = split(value, ',');
+                    if (f.size() != 2 || r.has_editor) throw bad();
+                    if (f[0] != "construction" && f[0] != "actions" && f[0] != "crew" && f[0] != "cargo") throw bad();
+                    auto selected = percent_decode(f[1]);
+                    if (!selected) throw bad();
+                    r.has_editor = true;
+                    r.editor_mode = f[0];
+                    r.selected_group = *selected;
+                } else if (key == "ac" || key == "seat" || key == "inv" || key == "cargo" || key == "sp") {
+                    auto f = split(value, ',');
+                    auto text_at = [&](size_t i) {
+                        if (i >= f.size()) throw bad();
+                        auto t = percent_decode(f[i]);
+                        if (!t) throw bad();
+                        return *t;
+                    };
+                    auto int_at = [&](size_t i) {
+                        long long v;
+                        if (i >= f.size() || !integer(f[i], 0, 1000000, v)) throw bad();
+                        return static_cast<int>(v);
+                    };
+                    auto num_at = [&](size_t i) {
+                        std::optional<double> v;
+                        if (i >= f.size() || !optional_number(f[i], v)) throw bad();
+                        return v;
+                    };
+                    if (key == "ac") {
+                        if (f.size() != 3) throw bad();
+                        r.actions.push_back({text_at(0), text_at(1), text_at(2)});
+                    } else if (key == "seat") {
+                        if (f.size() != 6) throw bad();
+                        r.manifest.push_back({text_at(0), text_at(1), text_at(3), text_at(4), int_at(2), int_at(5)});
+                    } else if (key == "inv") {
+                        if (f.size() != 7) throw bad();
+                        r.inventories.push_back({text_at(0), text_at(1), int_at(2), num_at(3), num_at(4), num_at(5), num_at(6)});
+                    } else if (key == "cargo") {
+                        if (f.size() != 6) throw bad();
+                        r.cargo.push_back({text_at(0), text_at(2), int_at(1), int_at(3), num_at(4), num_at(5)});
+                    } else {
+                        if (f.size() != 4) throw bad();
+                        stage_items.push_back({int_at(0), {text_at(1), text_at(2), int_at(3)}});
+                    }
                 } else if (key == "kasl") {
                     // stage:dv pairs, matched to the st= lines once the whole report is read
                     for (const std::string& pair : split(value, ',')) {
@@ -316,6 +361,14 @@ std::optional<ShipReport> parse_ship_report(const std::string& text, std::string
             }
         }
         if (!header) throw Fail{"no version field"};
+        for (const auto& item : stage_items) {
+            auto stage = std::find_if(r.stages.begin(), r.stages.end(), [&](const StageReport& st) { return st.stage == item.first; });
+            if (stage == r.stages.end()) throw Fail{"stage item without a stage"};
+            stage->items.push_back(item.second);
+        }
+        for (const auto& cargo : r.cargo)
+            if (std::none_of(r.inventories.begin(), r.inventories.end(), [&](const EditorInventory& i) { return i.key == cargo.inventory; }))
+                throw Fail{"cargo without an inventory"};
         for (const auto& [stage, v] : kasl)
             for (auto& st : r.stages)
                 if (st.stage == stage) st.delta_v_kerbin_asl = v;

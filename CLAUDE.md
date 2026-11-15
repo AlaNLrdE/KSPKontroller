@@ -200,3 +200,11 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Keep approved mockup content separate from visual identity: extend the real Apollo/Classic drawing helpers,
   and verify actual renderer captures. Windows environment variables such as KSPHMI_SHOTS must be set inside
   WSL when the ci wrapper does not forward them.
+
++- Before removing worktrees, preserve useful ignored evidence (build/perf, renderer captures and simulator
++  smoke records) under build/worktree-archive and verify the copies. Clean git status does not include these
++  files. Check patch equivalence as well as ancestry before deleting a branch containing cherry-picked commits;
++  retain a local bundle if redundant commit hashes would otherwise be discarded.
++- verify checks that repository SKILL.md files match between .claude/skills and .agents/skills, including
++  documentation-only CI. Resolve mirrored skill conflicts once in the canonical file and copy the result.
++

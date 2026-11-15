@@ -168,3 +168,7 @@ The default backslash path is shell-quoted by `docs/conf.py` and Java can receiv
 - `tools/verify.py` content checks must be newline-agnostic: the main checkout is CRLF (core.autocrlf), some
   worktrees/CI checkouts are LF. `read()` uses universal newlines (it once used `newline=""`, so `^VERSION = 1$`
   with re.M failed only in the main checkout). Read repo text through `read()`; `tools/test_verify.py` checks both.
+
+- Since 0.19.5.0 COM5 is owned in the editor too. Do not probe or flash there: close KSP, or confirm a scene
+  without the serial owner plus a logged closed port and explicit user/peer OK. Editor testing needs no new
+  firmware: SAS/RCS use existing receive-time edges and the plugin routes them on Unity, with neutral telemetry.

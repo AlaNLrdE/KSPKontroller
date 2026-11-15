@@ -163,7 +163,7 @@ VAB ship report
 
 In the VAB the static cards are replaced by a live engineering report of the ship being built, when the game
 serves one. It comes from ``KSPSerialIO.Hmi.dll`` (KSPSerialIO 0.19.4.0), a separate assembly that adds the kRPC
-service ``KSPHMI`` (see :doc:`plugin`). The Pi uses its existing kRPC connection: no new port, no Arduino.
+service ``KSPHMI`` (see :doc:`plugin`). The Pi uses its existing kRPC connection with no new network port; the Arduino optionally navigates editor modes.
 
 .. uml:: diagrams/seq_vab_report.puml
    :caption: Editor events build and cache the report; the Pi polls the revision and fetches the text on change.
@@ -230,7 +230,7 @@ body, else the configured target. The screen says why (``TARGET DUNA ORBIT · FR
 calculating state that would never end. While KSP computes a real ship, a framed amber ``CALCULATING ΔV`` plate
 covers the stage table (and apollo lights its ΔV CALC lamp).
 
-The apollo skin keeps its static art (eight stage rows, destination lamp housings, the target ring and the target
+The apollo skin keeps its static art (four detailed stage rows, destination lamp housings, the target ring and the target
 caption) in the cached panel texture, rebuilt only when the size, the ``[vab]`` settings or the chosen target
 change.
 
@@ -288,6 +288,69 @@ Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``he
 ``hmi-cpp/tests/data/ship_report_kerbal_x*.txt`` (app on Kerbin sea level and on Duna vacuum; the latter with the
 values KSP's app showed), plus the empty-craft and calculating states.
 
+Editor mode screens
+-------------------
+
+The approved Apollo and Classic skins retain their existing colours, lettering, frames, annunciators and
+readouts. The design mockups approved on 2026-11-15 describe information and navigation, not a replacement skin.
+KSPSerialIO 0.19.5.0 adds four VAB screens:
+
+* **Construction:** the existing delta-v report, with component titles and quantities below each stage's
+  metrics (engines, decouplers, parachutes, clamps and fairings). KSP's staging list remains authoritative;
+  unstaged parts are excluded, and stages without delta-v, including parachutes, remain visible.
+* **Action groups:** stock Stage, Gear, Lights, Brakes, Abort, SAS and RCS, and custom groups 1-10, with assigned
+  action counts and the panel control that drives them in flight. The detail panel follows the group selected
+  in KSP and lists its part/module actions. Only SAS and RCS currently have enabled physical inputs; the stage
+  and custom-group-1 pins remain disabled. The display does not execute these actions in the editor.
+* **Crew:** each current-ship part and seat, assigned kerbal, stock role and experience level, or an empty seat;
+  assigned/free totals and the role counts. Seat indices come from the manifest, not a compact crew list.
+* **Cargo:** stored part stacks, quantity, slot and owning inventory, mass and packed volume, plus each stock
+  inventory's used mass/volume, capacities and slots. Inventory totals are KSP's own cached totals; item mass
+  comes from its stored snapshot. Unknown data, an unlimited capacity and an empty inventory are distinct.
+
+The Pi follows ``onEditorScreenChange``. The Arduino **SAS** button requests the next stock editor panel and
+**RCS** the previous one, cyclically: Construction, Action groups, Crew, Cargo. Requests run on Unity's thread,
+are queued across UI transitions, and only the stock screen-change event acknowledges them. A rejected request
+times out after two seconds without changing the reported mode. Selecting a panel directly in KSP is always
+authoritative. Lists rotate every eight seconds with a page indicator; construction stage rows also rotate,
+and long component lists rotate within their stage. No extra panel input is needed to reach overflow rows.
+
+``EditorSerialLink`` owns the existing serial transport in the editor, starts discovery on the supervisor
+thread, and sends a neutral VesselData heartbeat at 5 Hz. Receive-time SAS/RCS edges go to ``EditorNavigation``;
+STAGE, analog axes and action-group levels do not control the editor. Presses older than one second are dropped.
+Leaving the editor closes the port; scene initialization clears axes, control levels, publication flags and
+pending presses before flight can consume them. The firmware and serial packet layouts do not change.
+**KSP now owns the serial port in the editor as well as in flight: close KSP before external board probes.**
+
+The existing ``KSPHMI.Revision`` / ``ShipReport`` procedures carry optional format-v1 lines (old readers ignore
+them; a new reader defaults to Construction for old reports):
+
+.. code-block:: text
+
+   editor=actions,custom1
+   ac=custom1,Communotron%2016,Toggle%20antenna
+   seat=1,Mk1-3%20Pod,0,Valentina%20Kerman,Pilot,1
+   seat=1,Mk1-3%20Pod,1,,,0
+   inv=1%3A0,Mk1-3%20Pod,3,0.022000,0.050000,84.000,120.000
+   cargo=1%3A0,0,Repair%20kit,2,0.010000,20.000
+   sp=2,engines,LV-T30%20Reliant,3
+
+``editor`` contains mode and selected-group code. ``ac`` contains group, part title and action caption.
+``seat`` contains part id, part title, zero-based seat, name (empty for free), role and level. ``inv`` contains
+part-id/module-index key, title, slot count, used mass, mass capacity, used volume and volume capacity.
+``cargo`` contains inventory key, zero-based slot, title, quantity, stack mass and stack volume. ``sp`` contains
+stage number, event kind, part title and quantity. Mass is in tonnes, volume in litres; ``nan`` is unknown and
+capacity ``-1`` means unlimited. The parser rejects malformed known fields and dangling inventory/stage links.
+Crew, action and inventory lines remain available while delta-v is pending. They are collected at 2 Hz because
+not every editor dialog sends ``onEditorShipModified``; the revision advances only when the text changes.
+
+``hmi-cpp/tests/data/editor_report_v1.txt`` is shared by plugin formatting, Pi parsing and simulator tests.
+``./ci sim --scene vab --editor-mode actions`` also exposes mode/group controls in its window. Its serial link
+sends the same neutral heartbeat in the editor and routes SAS/RCS to mode changes without changing flight state.
+``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes ``classic_editor_*.png`` and ``apollo_editor_*.png`` from the real
+renderers with simulator fixture data. On Windows set that environment inside WSL (the Windows wrapper does
+not automatically forward arbitrary environment variables).
+
 Facility screens roadmap
 ------------------------
 
@@ -302,14 +365,14 @@ cards when a procedure is missing. Implement them in this order, each merged bef
    decouplers, TWR) and facility limits (parts, mass, height, width vs. VAB/launch pad level; cost vs. funds),
    with the apollo lamps NO CHUTE / UPPER TWR / PARTS LIMIT. Phase 3: thrust offset and CoM shift full to dry,
    and the SPH variant (CoM vs. CoL).
-#. **VAB screens per editor mode** (decided by the user 2026-11-15; a proposal with mockups of both skins is still
-   to be made and approved). One Pi screen per KSP editor mode: *Construction* (the current delta-v report),
+#. **VAB screens per editor mode** (decided by the user 2026-11-15; mockups of both skins and the named staging
+   component breakdown were approved; keep the real Apollo and Classic skin artwork). One Pi screen per KSP editor mode: *Construction* (the current delta-v report),
    *Action groups* (custom groups 1-10 and the stock groups Stage, Gear, Lights, Brakes, Abort, SAS, RCS with
    their actions, and which Arduino panel control drives each in flight), *Crew* (seats per part, assigned kerbals
    with role and level, free seats) and *Cargo* (inventories: stored parts, mass and volume against capacity).
    Navigation: the Pi follows the editor mode automatically (EditorLogic's editor screen), and the Arduino SAS and
    RCS buttons step to the next / previous screen while in the VAB. That needs the plugin to open the serial link
-   in the editor too (today ``KSPIO`` runs only in ``Startup.Flight``), so it must be tested with the board. Order:
+   in the editor too (``EditorSerialLink`` in 0.19.5.0), so it must be tested with the board. Order:
    after VAB phase 1 is merged, before Tracking Station phase 1.
 #. **Tracking Station, phase 1**: ``FleetRevision``/``FleetReport`` (next events of every vessel by absolute UT:
    maneuver nodes with delta-v, Ap/Pe, SOI changes, stock alarms; fleet alerts: Pe in atmosphere or under the

@@ -237,7 +237,7 @@ void Display::header(const Snapshot& snap, double now) {
     } else if (snap.state == State::NoVessel && snap.scene == "vab" && snap.ship) {
         const std::string name = snap.ship->name.empty() ? "Untitled ship" : snap.ship->name;
         c_.text(clip_utf8(name, 60), 5.2, VALUE, 2.5 * u, top);
-        c_.text("VEHICLE ASSEMBLY  \xC2\xB7  \xCE\x94v " + snap.ship->situation_label(), 3.0, LABEL, 2.5 * u, top + 5.4 * u);
+        c_.text("VEHICLE ASSEMBLY  \xC2\xB7  " + editor_mode_label(snap.ship->editor_mode), 3.0, LABEL, 2.5 * u, top + 5.4 * u);
     } else if (snap.state == State::NoVessel && find_view(snap.scene)) {
         c_.text("KSP KONTROLLER", 5.2, VALUE, 2.5 * u, top);
         c_.text(find_view(snap.scene)->subtitle, 3.0, LABEL, 2.5 * u, top + 5.4 * u);
@@ -306,7 +306,41 @@ TargetChoice Display::vab_target(const ShipReport* report) const {
     return choose_target(report, cfg_.vab.destinations, cfg_.vab.target);
 }
 
+void Display::editor_report(const Snapshot& snap) {
+    const EditorPage page = editor_page(*snap.ship);
+    const double u = c_.u, gap = 1.6 * u, x = 2.5 * u, width = c_.w - 5 * u;
+    const double metric_w = (width - 3 * gap) / 4;
+    for (size_t i = 0; i < page.metrics.size(); ++i)
+        tile(Rect::f(x + i * (metric_w + gap), 13 * u, metric_w, 7 * u),
+             page.metrics[i].first, page.metrics[i].second, VALUE);
+    const double panel_w = (width - gap) / 2;
+    auto table = [&](double px, const std::string& title, const std::vector<EditorRow>& rows) {
+        const Rect box = Rect::f(px, 22 * u, panel_w, 72 * u);
+        panel(c_, box);
+        if (on_vab_panel) on_vab_panel(title, box);
+        const double left = box.x + 1.3 * u, right = box.right() - 1.3 * u, room = right - left;
+        c_.text(title, fit_units(c_, title, 2.3f, room), LABEL, left, box.y + u);
+        const PageSlice slice = page_slice(rows.size(), 10, snap.received);
+        for (size_t i = slice.begin; i < slice.end; ++i) {
+            const auto& row = rows[i];
+            const double y = box.y + 5.3 * u + (i - slice.begin) * 6 * u;
+            const double label_room = row.value.empty() ? room : room * .52;
+            c_.text(row.label, fit_units(c_, row.label, 2.1f, label_room), row.warning ? WARN : VALUE, left, y);
+            if (!row.value.empty())
+                c_.text(row.value, fit_units(c_, row.value, 2.1f, room * .45), row.warning ? WARN : ACCENT, right, y, Anchor::TopRight);
+            if (!row.detail.empty()) c_.text(row.detail, fit_units(c_, row.detail, 1.8f, room), LABEL, left, y + 2.6 * u);
+            c_.line({float(left), float(y + 5.1 * u)}, {float(right), float(y + 5.1 * u)}, 1, GRID);
+        }
+        c_.text(fmt::str("PAGE %zu / %zu%s", slice.page + 1, slice.pages, slice.pages > 1 ? "  /  AUTO 8s" : ""),
+                1.8, MUTED, left, box.bottom() - 3.2 * u);
+    };
+    table(x, page.left_title, page.left);
+    table(x + panel_w + gap, page.right_title, page.right);
+    c_.text("EDITOR SYNC  /  SAS NEXT  /  RCS PREVIOUS", 1.9, MUTED, x, 96 * u);
+}
+
 void Display::vab_report(const Snapshot& snap) {
+    if (snap.ship->editor_mode != "construction") { editor_report(snap); return; }
     const ShipReport& r = *snap.ship;
     const double u = c_.u;
     const double top = 13 * u, bottom = c_.h - 2.5 * u, x0 = 2.5 * u, gap = 1.6 * u;
@@ -387,7 +421,7 @@ void Display::vab_report(const Snapshot& snap) {
     c_.text("BURN", 1.8, MUTED, c_burn, ty, Anchor::TopRight);
     c_.text("FIRES", 1.8, MUTED, c_events, ty);
     c_.line({float(px), float(ty + 3 * u)}, {float(pr), float(ty + 3 * u)}, line, GRID);
-    const double row0 = ty + 4 * u, pitch = 5.4 * u;
+    const double row0 = ty + 4 * u, pitch = 9.5 * u;
     const int rows = std::max(1, static_cast<int>((dvp.bottom() - 1.5 * u - row0) / pitch));
     if (pending && r.empty_craft()) {  // KSP never computes delta-v without parts: not "calculating"
         c_.text("EMPTY CRAFT", 3.4, VALUE, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
@@ -400,13 +434,10 @@ void Display::vab_report(const Snapshot& snap) {
     } else if (r.stages.empty()) {
         c_.text("No stages", 3.0, MUTED, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
     }
-    for (int i = 0; !pending && i < static_cast<int>(r.stages.size()) && i < rows; ++i) {
+    const PageSlice stages = page_slice(r.stages.size(), rows, snap.received);
+    for (size_t i = stages.begin; !pending && i < stages.end; ++i) {
         const StageReport& st = r.stages[i];
-        double y = row0 + i * pitch;
-        if (i == rows - 1 && static_cast<int>(r.stages.size()) > rows) {
-            c_.text(fmt::str("+%d more stages", static_cast<int>(r.stages.size()) - rows + 1), 2.2, MUTED, c_stage, y + .6 * u);
-            break;
-        }
+        double y = row0 + (i - stages.begin) * pitch;
         // [vab] TWR thresholds: launch stage red / amber, upper stages amber (stages without delta-v not judged)
         const TwrLevel level = twr_level(r, static_cast<size_t>(i), cfg_.vab.twr);
         const Color twr_color = level == TwrLevel::Bad ? BAD : level == TwrLevel::Warn ? WARN : VALUE;
@@ -419,6 +450,10 @@ void Display::vab_report(const Snapshot& snap) {
                 Anchor::TopRight);
         const std::string ev = events_text(st);
         if (!ev.empty()) c_.text(ev, fit_units(c_, ev, 2.0f, pr - c_events), LABEL, c_events, y + .7 * u);
+        const auto details = stage_detail_lines(st);
+        const PageSlice parts = page_slice(details.size(), 2, snap.received / stages.pages);
+        for (size_t j = parts.begin; j < parts.end; ++j)
+            c_.text(details[j], fit_units(c_, details[j], 1.65f, pw), LABEL, px, y + (3.4 + 2.0 * (j - parts.begin)) * u);
     }
 
     // ---- right: destinations
@@ -474,7 +509,7 @@ void Display::vab_report(const Snapshot& snap) {
         if (i == 3 && r.funds && r.cost) color = *r.funds >= *r.cost ? GOOD : BAD;  // can the program pay for it
         tile(t, tiles[i].label, tiles[i].value, color);
     }
-    c_.text(fmt::str("Editor ship report  |  revision %u  |  updates as you build", r.revision), 2.2, MUTED, x1,
+    c_.text(fmt::str("SAS NEXT / RCS PREV | STAGES %zu/%zu", stages.page + 1, stages.pages), 2.2, MUTED, x1,
             bottom - 2.6 * u);
 }
 

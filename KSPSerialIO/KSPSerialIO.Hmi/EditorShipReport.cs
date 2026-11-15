@@ -16,6 +16,8 @@ namespace KSPSerialIO.Hmi
     {
         private const string Tag = "KSPSerialIO[HMI] ";
         private const double G0 = 9.80665;
+        private readonly EditorDetails details = new EditorDetails();
+        private float nextPoll;
         /// <summary>Situation chosen in the editor delta-v app ("asl", "alt", "vac"), "" until it reports one.</summary>
         private string situationOption = "";
         private string lastError = "";
@@ -26,6 +28,8 @@ namespace KSPSerialIO.Hmi
         /// <summary>Unity: subscribe to the editor and delta-v events and build the first report.</summary>
         public void Start()
         {
+            GameEvents.onEditorScreenChange.Add(OnScreen);
+            EditorNavigation.StepRequested += details.Step;
             GameEvents.onEditorShipModified.Add(OnShipModified);
             GameEvents.onEditorLoad.Add(OnEditorLoad);
             GameEvents.onEditorStarted.Add(Rebuild);
@@ -38,6 +42,8 @@ namespace KSPSerialIO.Hmi
         /// <summary>Unity: unsubscribe and forget the ship (leaving the editor).</summary>
         public void OnDestroy()
         {
+            GameEvents.onEditorScreenChange.Remove(OnScreen);
+            EditorNavigation.StepRequested -= details.Step;
             GameEvents.onEditorShipModified.Remove(OnShipModified);
             GameEvents.onEditorLoad.Remove(OnEditorLoad);
             GameEvents.onEditorStarted.Remove(Rebuild);
@@ -46,6 +52,17 @@ namespace KSPSerialIO.Hmi
             GameEvents.onDeltaVAppAtmosphereChanged.Remove(OnSituation);
             ShipReportCache.Clear();
         }
+
+        /// <summary>Poll editor facts that have no ship-modified event (crew, groups and inventories).</summary>
+        public void Update()
+        {
+            details.Pump();
+            if (Time.unscaledTime < nextPoll) return;
+            nextPoll = Time.unscaledTime + 0.5f;
+            Rebuild();
+        }
+
+        private void OnScreen(EditorScreen screen) { details.OnScreen(screen); Rebuild(); }
 
         private void OnShipModified(ShipConstruct ship) { Rebuild(); }
 
@@ -134,15 +151,15 @@ namespace KSPSerialIO.Hmi
             foreach (Part p in ship.parts)
             {
                 string kind = Kind(p);
-                if (kind == null) continue;
                 if (!fromList)
                 {
-                    tally.Add(p.inverseStage, kind);
+                    if (kind == null) continue;  // without a staging list, never invent events for ordinary tanks
+                    tally.Add(p.inverseStage, kind, EditorDetails.Title(p));
                     continue;
                 }
                 int stage;
                 if (!stageOf.TryGetValue(p, out stage)) continue;  // not staged (e.g. a heat shield's decoupler)
-                tally.Add(stage, kind);
+                tally.Add(stage, kind ?? "other", EditorDetails.Title(p));
                 if (stage != p.inverseStage)
                     diagnostics.Add(p.partInfo.name + " (" + kind + ") staged in " + stage + ", inverseStage " + p.inverseStage);
             }
@@ -154,6 +171,7 @@ namespace KSPSerialIO.Hmi
             var f = new ShipFacts();
             f.Facility = EditorDriver.editorFacility == EditorFacility.SPH ? "sph" : "vab";
             f.Name = ship.shipName ?? "";
+            details.Collect(ship, f);
             float dry, fuel, dryCost, fuelCost;
             ship.GetShipMass(out dry, out fuel);
             ship.GetShipCosts(out dryCost, out fuelCost);
@@ -212,6 +230,7 @@ namespace KSPSerialIO.Hmi
                             reference = info;
                     }
                     st.Events.AddRange(tally.Events(s));
+                    st.Items.AddRange(tally.Items(s));
                     f.Stages.Add(st);
                 }
             }

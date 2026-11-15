@@ -2,7 +2,7 @@
 PROJECT_NAME           = "KSPKontroller"
 PROJECT_BRIEF          = "KSP control panel and flight display: mod, Arduino firmware and C++ Raspberry Pi HMI"
 OUTPUT_DIRECTORY       = build/docs
-INPUT                  = KSPSerialIO/KSPSerialIO/KSPIO.cs KSPSerialIO/KSPSerialIO/HmiContext.cs KSPSerialIO/KSPSerialIO.Hmi arduino-sketch/KSPIODemo9 hmi-cpp/include hmi-cpp/src README.md
+INPUT                  = KSPSerialIO/KSPSerialIO/KSPIO.cs KSPSerialIO/KSPSerialIO/HmiContext.cs KSPSerialIO/KSPSerialIO/ButtonEvents.cs KSPSerialIO/KSPSerialIO/EditorNavigation.cs KSPSerialIO/KSPSerialIO/EditorSerialLink.cs KSPSerialIO/KSPSerialIO.Hmi arduino-sketch/KSPIODemo9 hmi-cpp/include hmi-cpp/src README.md
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */bin/* */obj/*
 FILE_PATTERNS          = *.cs *.ino *.hpp *.cpp *.md

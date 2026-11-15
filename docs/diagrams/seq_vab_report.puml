@@ -1,5 +1,5 @@
 @startuml seq_vab_report
-title VAB ship report: built on editor events, cached, polled by revision
+title VAB editor report: event-driven and 2 Hz dialog facts, cached, polled by revision
 skinparam sequenceMessageAlign left
 participant "GameEvents\n(editor, delta-v)" as Game
 participant "EditorShipReport\nUnity main thread" as Addon
@@ -44,5 +44,5 @@ activate UI
 UI -> UI : read latest Snapshot\ndraw the VAB report, or the static\ncards when Snapshot.ship is null
 deactivate UI
 note over HMI : Polled every 0.5 s while the context scene is vab.\nRpcError (no service, other scene): ship null, retry after 5 s.
-note over Addon : RPCs never touch KSP objects:\nthey only read the cache.
+note over Addon : RPCs never touch KSP objects:\nthey only read the cache.\nUpdate also polls crew, actions and cargo at 2 Hz;\nSAS/RCS requests stock panels on the Unity thread.
 @enduml

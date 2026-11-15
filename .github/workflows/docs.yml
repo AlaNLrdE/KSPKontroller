@@ -6,7 +6,11 @@ on:
     branches: [main]
     paths:
       - "docs/**"
+      - ".claude/skills/**"
+      - ".agents/skills/**"
+      - "tools/verify.py"
       - "KSPSerialIO/KSPSerialIO/**"
+      - "KSPSerialIO/KSPSerialIO.Hmi/**"
       - "hmi-cpp/**"
       - "tools/kspsim/**"
       - "tools/hmi-container/**"

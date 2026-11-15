@@ -1549,6 +1549,60 @@ TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {
     CHECK(poller.problem().empty());
 }
 
+TEST(editor_report_contract_and_page_models) {
+    std::ifstream file(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/editor_report_v1.txt");
+    std::stringstream text;
+    text << file.rdbuf();
+    auto report = parse_ship_report(text.str());
+    CHECK(report.has_value());
+    CHECK(report->has_editor);
+    CHECK_EQ(report->editor_mode, "actions");
+    CHECK_EQ(report->selected_group, "custom1");
+    CHECK_EQ(report->actions.size(), size_t(1));
+    CHECK_EQ(report->manifest.size(), size_t(3));
+    CHECK_EQ(report->manifest[0].name, "Valentina Kerman");
+    CHECK(report->manifest[1].name.empty());
+    CHECK_EQ(report->inventories.size(), size_t(1));
+    CHECK_EQ(report->cargo.size(), size_t(2));
+    CHECK_EQ(report->stages[0].items[0].count, 3);
+    CHECK(stage_detail_lines(report->stages[0])[0].find("Engine x3") != std::string::npos);
+    auto actions = editor_page(*report);
+    CHECK_EQ(actions.left.size(), size_t(17));
+    CHECK_EQ(actions.right.back().detail, "Toggle antenna");
+    report->selected_group = "sas";
+    actions = editor_page(*report);
+    CHECK_EQ(actions.right[1].detail, "Toggle stability assist");
+    report->editor_mode = "crew";
+    auto crew = editor_page(*report);
+    CHECK_EQ(crew.metrics[0].second, "1");
+    CHECK_EQ(crew.metrics[2].second, "2");
+    report->editor_mode = "cargo";
+    auto cargo = editor_page(*report);
+    CHECK_EQ(cargo.metrics[0].second, "3");
+    CHECK_EQ(cargo.metrics[1].second, "22.0");
+    CHECK_EQ(cargo.metrics[2].second, "84.0");
+    report->inventories[0].volume_capacity = -1;
+    CHECK(editor_page(*report).right[0].detail.find("NO LIMIT") != std::string::npos);
+    report->inventories[0].volume_capacity.reset();
+    CHECK(editor_page(*report).right[0].detail.find("UNKNOWN") != std::string::npos);
+    CHECK(parse_ship_report(golden_ship_report())->editor_mode == "construction");
+    CHECK(rejects(golden_ship_report() + "editor=invalid,\n", "bad editor"));
+    CHECK(rejects(golden_ship_report() + "seat=1,Pod,0,A,Pilot,NaN\n", "bad seat"));
+    CHECK(rejects(golden_ship_report() + "inv=1,Pod,3,inf,1,2,3\n", "bad inv"));
+    CHECK(rejects(golden_ship_report() + "sp=999,engines,Engine,1\n", "without a stage"));
+    CHECK(rejects(golden_ship_report() + "cargo=missing,0,Kit,1,1,1\n", "without an inventory"));
+}
+
+TEST(editor_pagination_visits_every_row_without_unbounded_casts) {
+    CHECK_EQ(page_slice(0, 0, 0).pages, size_t(1));
+    CHECK_EQ(page_slice(21, 10, 0).end, size_t(10));
+    CHECK_EQ(page_slice(21, 10, 8).begin, size_t(10));
+    CHECK_EQ(page_slice(21, 10, 16).end, size_t(21));
+    CHECK_EQ(page_slice(21, 10, 24).begin, size_t(0));
+    CHECK_EQ(page_slice(21, 10, std::numeric_limits<double>::infinity()).page, size_t(0));
+    CHECK(page_slice(21, 10, 1e300).page < 3);
+}
+
 int main(int argc, char** argv) {
     log::set_quiet(true);
     return RUN_TESTS(argc, argv);
