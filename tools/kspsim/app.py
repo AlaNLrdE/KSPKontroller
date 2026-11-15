@@ -87,6 +87,17 @@ class App:
             self.flags[name] = (var, cb)
         self.stage_btn = ttk.Button(ctl, text="STAGE", command=self._stage)
         self.stage_btn.pack(anchor="w", padx=4, pady=2)
+        stick = ttk.Frame(ctl)
+        stick.pack(fill="x", padx=4)
+        ttk.Label(stick, text="Stick (hold)").pack(side="left")
+        self.stick_btns = []
+        for text, axis, value in (("Pitch up", "pitch", 1.0), ("down", "pitch", -1.0), ("Yaw left", "yaw", -1.0),
+                                  ("right", "yaw", 1.0), ("Roll left", "roll", -1.0), ("right", "roll", 1.0)):
+            b = ttk.Button(stick, text=text, width=len(text) + 1)
+            b.bind("<ButtonPress-1>", lambda _e, a=axis, x=value: self._stick(a, x))
+            b.bind("<ButtonRelease-1>", lambda _e, a=axis: self._stick(a, 0.0))
+            b.pack(side="left")
+            self.stick_btns.append(b)
         self.groups_text = tk.StringVar()
         ttk.Label(ctl, textvariable=self.groups_text).pack(anchor="w", padx=4)
 
@@ -428,6 +439,10 @@ class App:
             self.throttle.set(0)  # the slider was mirroring the board: start from engine off
         self.sim.set_manual(throttle=self.throttle.get() / 100)  # re-apply at once
 
+    def _stick(self, axis: str, value: float) -> None:
+        if not self.sim.board_driven:  # with the board linked its axes steer
+            self.sim.set_manual(**{axis: value})
+
     def _stage(self) -> None:
         self.sim.set_manual(stage=True)
         self.root.after(300, lambda: self.sim.set_manual(stage=False))
@@ -468,6 +483,8 @@ class App:
             slider_free = not sim.board_driven or not sim.board_throttle
             self.throttle_scale.state(["!disabled" if slider_free else "disabled"])
             self.stage_btn.state([state])
+            for b in self.stick_btns:
+                b.state([state])
             for name, (var, cb) in self.flags.items():
                 cb.state([state])
                 if sim.board_driven:
@@ -493,11 +510,22 @@ class App:
                 + "%-14s %-14s %-14s %s\n" % ("Stage", "%d of %d" % (v.stage, physics.STAGES - 1),
                                               "Stage fuel", "%.0f %%" % lf)
                 + "%-14s %-14s %-14s %s\n" % ("G", "%.2f" % r["g_force"], "Heat", "%.0f %%" % (v.heat * 100))
+                + "%-14s pitch %+6.1f  heading %5.1f  roll %+6.1f   %s\n" % (
+                    "Attitude", r["pitch"], r["heading"], r["roll"], self._sas_text(sim, v))
                 + "%-14s %-14s %-14s %s" % ("Mission time", _time(v.mission_time), "UT", _time(sim.ut)))
         self._refresh_game()
         self._refresh_board_tab()
         self._refresh_node()
         self.root.after(200, self._refresh)
+
+    @staticmethod
+    def _sas_text(sim, v) -> str:
+        if not sim.game["sas"]:
+            return "SAS off" + ("" if v.steered else ", launch guidance")
+        mode = SAS_MODES[sim.sas_mode - 1]
+        if isinstance(v.autopilot, tuple) and math.isfinite(v.sas_error):
+            return "SAS %s, %.1f deg off" % (mode, v.sas_error)
+        return "SAS %s (holding)" % mode
 
     def run(self) -> None:
         self.root.mainloop()

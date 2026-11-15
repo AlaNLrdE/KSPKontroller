@@ -60,7 +60,9 @@ The window
   turning with the surface, and KSP shows the same values.
 * **Controls**: while ControlPackets arrive the board drives the vessel and the window only mirrors what it
   sends (throttle, SAS, RCS, lights, gear, brakes, action groups, pitch/roll/yaw). Without the board, or
-  3 s after it goes quiet, the window's own throttle, switches and STAGE button take over.
+  3 s after it goes quiet, the window's own throttle, switches, STAGE button and *Stick (hold)* buttons
+  (pitch / yaw / roll at full deflection while held) take over. The *Vessel* box shows the attitude
+  (pitch, heading, roll) and what steers it: the launch guidance, SAS off, or the SAS mode and its error.
   *Use the board's throttle* (on by default; ``--no-board-throttle``) can be unticked: the engine then
   follows the window's slider while everything else still comes from the board. A throttle axis that
   does not rest at 0 % (the panel's reads about 19 %) otherwise keeps the engine burning, as it would in KSP.
@@ -91,14 +93,41 @@ The flight model
 
 ``physics.py`` is deliberately small: a planar orbit around Kerbin (real radius, gravitational parameter,
 rotation and 70 km atmosphere), RK4 integration, exponential air density with drag, a rotating surface to
-stand on and land on, and three identical stages of about 4.8 km/s each. Thrust follows a fixed ascent
-guidance (straight up, a gradual turn to the horizon by 45 km, then prograde), so a launch needs only the
-throttle: full throttle from the pad reaches orbit. The STAGE bit stages on its rising edge, like the plugin.
+stand on and land on, and three identical stages of about 4.8 km/s each. The STAGE bit stages on its rising
+edge, like the plugin.
+
+Attitude is a full 3D orientation (the vessel's forward and top axes in the inertial frame) even though the
+orbit is planar. The rule for what points the vessel and its engine:
+
+* Until the vessel is **steered** it follows a fixed ascent guidance (straight up, a gradual turn to the
+  horizon by 45 km, then prograde), so a launch needs only the throttle: full throttle from the pad reaches
+  orbit unattended. The vessel becomes steered, until the next scenario load, as soon as SAS is on (game
+  state) or a pitch / yaw / roll input exceeds 5 % (board axes or the window's stick buttons).
+* Once steered, the engine thrusts along the nose. Only the part in the orbital plane acts, so a normal or
+  anti-normal burn changes nothing but the attitude (the inclination is reported, not modelled).
+* **SAS on** slews to the selected mode's direction at up to 20 deg/s, accelerating and braking at 20 deg/s2
+  (a 180 degree turn takes about 10 s), and keeps the roll. Stability assist stops the rotation and holds.
+  Prograde / retrograde follow the NavBall speed mode (``speed_mode`` 0 orbit, 1 surface, 2 target:
+  ``relative_*``); normal (south for these eastward orbits, as ``TransformDirection``) and radial follow that
+  prograde. Target / anti-target use ``target_*`` and maneuver uses the node's burn vector; without a target or
+  node they hold. Mode numbers are ``Simulator.sas_mode`` 1-10 (KSP ``AutopilotMode`` + 1), mapped to the kRPC
+  ``SASMode`` enum by ``Control.get_SASMode``.
+* **Stick input** (overrides SAS while held, as in KSP) applies 40 deg/s2 per full axis; without SAS the
+  rotation is damped (about 27 deg/s at full input, stopping within 2 s after release). Landed, the attitude
+  turns with the surface; on rails (a tick longer than 10 s) there is no rotation and SAS snaps to its
+  direction.
+* ``Vessel.report()`` gives pitch / heading / roll relative to the surface (NavBall); kRPC's
+  ``Flight.rotation`` is ``attitude_rotation`` of them (vessel axes right, forward, down in the surface
+  frame up, north, east) and VesselData carries them in ``Pitch`` / ``Roll`` / ``Heading``, with
+  ``ProgradePitch/Heading`` (speed-mode prograde), ``NormalHeading``, ``ManeuverPitch/Heading`` and
+  ``MNTime`` / ``MNDeltaV`` (node) and ``TargetPitch/Heading`` / ``TargetDist`` / ``TargetV`` as the plugin
+  fills them. SAS on/off, mode changes, "on target" (within 1 degree) and the switch from guidance to
+  steering are logged to ``build/kspsim.log``.
 SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``ActionGroups`` from the game state
 (above), which is what the board's LEDs show.
 
-Not modelled: other bodies and sphere of influence changes, attitude (pitch/roll/yaw are shown, not
-applied), targets (sent as 0), electric charge use beyond a slow drain. A maneuver node has a fixed UT (it
+Not modelled: other bodies and sphere of influence changes, torque from RCS or reaction wheels (one fixed
+rotation rate), real targets (``target_*`` values only), electric charge use beyond a slow drain. A maneuver node has a fixed UT (it
 counts down) and prograde / normal / radial-out delta-v; its ``Node.orbit`` is the reported state coasted to
 the node by 3D Kepler propagation (``physics.propagate3``) plus that delta-v along KSP's node axes.
 
