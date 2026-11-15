@@ -72,6 +72,25 @@ void expect_handshake() {
     HandShakePacket reply{0, 3, 1, 4};
     check(Serial.tx == frame(reinterpret_cast<byte*>(&reply), sizeof reply), "handshake response must be 3/1/4");
 }
+template <typename Packet>
+void reject_unknown_after(const Packet& packet, Packet& destination) {
+    Serial.feed(frame(reinterpret_cast<const byte*>(&packet), sizeof packet));
+    check(input() == packet.id, "known packet must be accepted before unknown ID test");
+    std::vector<byte> before(reinterpret_cast<byte*>(&destination), reinterpret_cast<byte*>(&destination) + sizeof packet);
+    const uint16_t good = dbgRxOk, bad = dbgRxBadSize;
+    const unsigned long received = dbgLastRxMs, deadline = deadtimeOld;
+    std::vector<byte> unknown(sizeof packet, 0x55);
+    unknown[0] = 99;
+    clockMs += 10;
+    Serial.feed(frame(unknown.data(), unknown.size()));
+    check(input() == -1, "unknown ID must be rejected even with a matching length and valid checksum");
+    check(memcmp(&destination, before.data(), sizeof packet) == 0, "unknown ID must not overwrite the previous destination");
+    check(dbgRxOk == good && dbgRxBadSize == static_cast<uint16_t>(bad + 1), "unknown ID must count as invalid, not valid");
+    check(dbgLastRxMs == received && deadtimeOld == deadline, "unknown ID must not renew link liveness");
+    check(rx_len == 0 && address == nullptr, "unknown ID must clear the receive destination");
+    expect_handshake();  // skip the rejected payload and accept the next valid frame
+}
+
 int main() {
     try {
         expect_handshake();
@@ -94,7 +113,10 @@ int main() {
         clockMs += 100;
         Serial.feed(std::vector<byte>(bytes.begin() + 12, bytes.end()));
         check(input() == 1 && Connected, "partial telemetry below the timeout must survive");
-        std::puts("PASS firmware receiver: expired partial telemetry, immediate handshake, ordinary fragmentation");
+        reject_unknown_after(VesselData{1}, VData);
+        reject_unknown_after(HandShakePacket{0, 1, 2, 3}, HPacket);
+        reject_unknown_after(DisplayCommand{2, 1}, DCmd);
+        std::puts("PASS firmware receiver: timeouts, fragmentation, unknown IDs preserve all destinations and liveness");
         return 0;
     } catch (const std::exception& e) { std::fprintf(stderr, "FAIL firmware receiver: %s\n", e.what()); return 1; }
 }

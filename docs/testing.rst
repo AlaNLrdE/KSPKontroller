@@ -65,7 +65,10 @@ Firmware native regression tests
 and ``HandShake.ino`` functions with fake serial, clock and indicator peripherals. Packet declarations
 are extracted from the production sketch, including their size assertions. Tests cover incomplete telemetry
 expiring after two seconds, the immediate next handshake (including bytes queued before expiry is checked),
-and ordinary fragmentation below the timeout. Requires a native C++17 compiler; artifacts stay under
+and ordinary fragmentation below the timeout. Unknown-ID tests first receive each supported packet type,
+then send a checksum-valid ID 99 frame of the same length: the previous structure and link timestamps
+must remain unchanged, only the invalid counter advances, and a following handshake must work.
+Requires a native C++17 compiler; artifacts stay under
 ``build/firmware-tests``. The same command runs ``matrix.ino`` data-page tests with UBSan (including
 float-to-int overflow checks): infinity and NaN show three dashes, finite extremes saturate before conversion,
 and ordinary numbers retain decimals and unit dots. Matrix tests require a compiler with UBSan support;

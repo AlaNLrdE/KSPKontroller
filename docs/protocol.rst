@@ -143,7 +143,7 @@ with the reset cause (a watchdog reset sets bit 8 or 9 of ``reset``).
      - Board uptime and completed loop iterations.
    * - ``rx_ok``, ``rx_bad_cs``, ``rx_bad_size``
      - uint16
-     - Valid packets, packets with a wrong checksum, packets with a wrong size.
+     - Valid packets, packets with a wrong checksum, packets with a wrong size or unsupported ID.
    * - ``tx``
      - uint32
      - Packets the board has sent.

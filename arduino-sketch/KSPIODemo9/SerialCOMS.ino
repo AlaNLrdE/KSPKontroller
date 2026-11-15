@@ -29,7 +29,7 @@ void KSPBoardResetReceiver() {
  * Non-blocking: call it repeatedly. It first looks for the 0xBE 0xEF header and reads the size and
  * id, then accumulates payload bytes across calls until the whole frame has arrived, verifies the
  * checksum and copies the payload into HPacket or VData (selected by the id).
- * A frame whose size does not match the expected struct, or whose checksum fails, is dropped.
+ * An unknown id, a size that does not match the expected struct, or a failed checksum is rejected.
  *
  * @return true when a complete, valid packet was stored; the packet id is left in the global @c id.
  */
@@ -59,6 +59,11 @@ boolean KSPBoardReceiveData() {
         structSize = sizeof(DCmd);
         address = (byte*)&DCmd;
         break;
+      default:
+        // Never reuse the previous packet's destination for an unsupported ID.
+        KSPBoardResetReceiver();
+        dbgRxBadSize++;
+        return false;
       }
     }
 

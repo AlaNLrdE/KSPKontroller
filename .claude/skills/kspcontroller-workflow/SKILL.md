@@ -94,6 +94,11 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   data shows three dashes without unit dots. `--firmware-only` runs the real matrix renderer with fake
   peripherals under UBSan, including float-cast-overflow checks across all five data fields.
 
+- Reject unsupported receive IDs explicitly before accepting any payload. Leaving address/structSize from
+  the prior packet lets a checksum-valid unknown ID of the same length overwrite that destination. Clear
+  the receive state, count it in dbgRxBadSize, and do not renew valid-packet counters or link timestamps.
+  Native receiver tests cover all three destinations plus the next handshake.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer

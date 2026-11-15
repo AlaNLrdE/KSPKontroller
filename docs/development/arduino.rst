@@ -61,7 +61,10 @@ Packet and state ownership
 * ``Connected`` gates normal control/diagnostic traffic. A valid inbound packet updates the receive
   timestamp and turns the link LED on.
 
-The receiver selects a known destination structure, accumulates partial input, checks the expected
+The receiver accepts only packet IDs 0 (handshake), 1 (telemetry) and 2 (display command). An unknown ID
+clears the receive destination and increments ``dbgRxBadSize`` without copying data, incrementing
+``dbgRxOk`` or renewing link timestamps. For a known ID, it selects the destination structure,
+accumulates partial input, checks the expected
 size and XOR, and only then copies into shared state. After the idle timeout, ``input()`` resets the
 receiver's length, index and destination before parsing new bytes. This abandons partial telemetry without
 flushing unread serial data, so the next handshake is not consumed as its payload. A fragmented packet
