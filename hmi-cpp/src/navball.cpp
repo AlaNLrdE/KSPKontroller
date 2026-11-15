@@ -386,7 +386,8 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     const Color off{108, 118, 121};
     c.text("RCS", 2.4, n.rcs ? GREEN : off, cx - 14 * u, box.centery(), Anchor::Center);
     c.text("SAS", 2.4, n.sas ? GREEN : off, cx + 14 * u, box.centery(), Anchor::Center);
-    c.text(fmt::str("HDG %03lld\xC2\xB0", pymod(py_round(n.heading), 360)), 2.8, GREEN, cx, cy + r + 2.2 * u,
+    // Just under the rim, so it keeps clear of the SAS mode row below at every screen size.
+    c.text(fmt::str("HDG %03lld\xC2\xB0", pymod(py_round(n.heading), 360)), 2.8, GREEN, cx, cy + r + .9 * u,
            Anchor::MidTop);
 
     // Throttle and G-force arcs, placed like the stock navball bezel.
@@ -442,7 +443,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
         {"stability_assist", "HOLD"}, {"prograde", "PRO"}, {"retrograde", "RET"}, {"normal", "N+"},
         {"anti_normal", "N-"},        {"radial", "R+"},    {"anti_radial", "R-"}, {"target", "TGT"},
         {"anti_target", "ANTI"},      {"maneuver", "NODE"}};
-    double y = rect.bottom() - 9.1 * u, gap = .4 * u;
+    double y = rect.bottom() - 8.5 * u, gap = .4 * u;
     double width = std::min(6.1 * u, (rect.w - 4 * u - 9 * gap) / 10);
     double start = rect.centerx() - (10 * width + 9 * gap) / 2;
     for (int i = 0; i < 10; ++i) {

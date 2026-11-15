@@ -4,6 +4,7 @@
     ./ci sim --port COM5         a given serial port
     ./ci sim --no-board          only the Pi;  --no-krpc: only the board
     ./ci sim --headless          no window, status lines in the console
+    ./ci sim --sas normal        start with SAS on in that mode (the vessel slews to it)
 """
 from __future__ import annotations
 
@@ -83,6 +84,8 @@ def main(argv=None) -> int:
     ap.add_argument("--node", metavar="DV[,SECONDS]",
                     help="start with a prograde maneuver node of DV m/s, SECONDS (default 300) ahead: the HMI's "
                          "dashed orbit (the window's Maneuver node tab changes or deletes it)")
+    sas_names = [m.replace(" ", "-") for m in physics.SAS_MODES]
+    ap.add_argument("--sas", choices=sas_names, help="start with SAS on in this mode")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
@@ -96,6 +99,9 @@ def main(argv=None) -> int:
     if args.node:
         dv, _, seconds = args.node.partition(",")
         sim.set_node(float(dv), float(seconds or 300))
+    if args.sas:
+        sim.set_game(sas=True)
+        sim.sas_mode = sas_names.index(args.sas) + 1
     server = None if args.no_krpc else KrpcServer(sim, args.address, args.rpc_port, args.stream_port)
     board = None if args.no_board else BoardLink(sim, args.port, args.refresh)
     if server:

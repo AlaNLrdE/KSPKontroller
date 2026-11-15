@@ -1,10 +1,16 @@
 """A small flight model so the board and the HMI see believable, changing data without KSP.
 
 The vessel moves in the plane of its orbit around Kerbin (2D, inertial frame, body centre at the origin):
-gravity, an exponential atmosphere with drag, a rotating surface to land on, and one engine whose thrust
-follows a simple ascent guidance (straight up, a gradual turn to the horizon, then prograde). The board's
+gravity, an exponential atmosphere with drag, a rotating surface to land on, and one engine. The board's
 throttle drives the engine; its SAS / RCS / lights / gear / brakes / action group bits are kept as vessel
 state and echoed back in VesselData, so the LEDs follow them exactly as with the real plugin.
+
+The orbit stays planar but the attitude is a full 3D orientation (forward and top axes in the inertial frame).
+Until the vessel is *steered* (SAS on, or a pitch / yaw / roll input, since the scenario loaded) it points
+along a simple ascent guidance (straight up, a gradual turn to the horizon, then prograde), so the launch
+scenarios still reach orbit unattended. Once steered, SAS slews it towards the selected mode's direction and
+the stick axes apply angular acceleration; the engine then thrusts along the vessel's nose (only the part in
+the orbital plane acts: an out-of-plane burn changes nothing but the attitude).
 """
 from __future__ import annotations
 
@@ -29,6 +35,20 @@ BURN_TIME = 300.0        # seconds of full throttle per stage (about 4.8 km/s)
 STAGES = 3
 
 
+# Attitude model (radians, seconds)
+SAS_RATE = math.radians(20)      # SAS slew rate limit
+SAS_ACCEL = math.radians(20)     # SAS angular acceleration limit (smooth start and stop)
+SAS_GAIN = 2.0                   # 1/s, final approach rate per radian of error
+STICK_ACCEL = math.radians(40)   # angular acceleration at full pitch / yaw / roll input
+STICK_DAMPING = 1.5              # 1/s, rotation damping without SAS (full input settles at about 27 deg/s)
+STICK_DEADZONE = 0.05            # axis inputs below this are noise, not steering
+ATTITUDE_STEP = 0.05             # s, attitude integration step
+RAILS_STEPS = 200                # more attitude steps than this per tick = on rails: SAS snaps, no rotation
+HOLD = "hold"                    # sas_target(): keep the current attitude (stability assist, or no direction)
+# Simulator.sas_mode 1-10 (KSP AutopilotMode + 1)
+SAS_MODES = ("stability assist", "prograde", "retrograde", "normal", "anti-normal", "radial in", "radial out",
+             "target", "anti-target", "maneuver")
+
 SITUATIONS = ("pre_launch", "orbiting", "sub_orbital", "escaping", "flying", "landed", "splashed", "docked")
 
 # What the simulator reports to the board and the HMI: (key, label, unit shown in the window, unit -> SI factor).
@@ -51,14 +71,14 @@ REPORTED_FIELDS = (
 )
 
 # Additional HMI values are numeric so the existing manual-value editor exposes every one.
-NAV_DEFAULTS = dict(roll=0.0, speed_mode=0.0, target_enabled=0.0, target_up=0.0, target_north=20.0,
+NAV_DEFAULTS = dict(speed_mode=0.0, target_enabled=0.0, target_up=0.0, target_north=20.0,
                     target_east=40.0, relative_up=0.0, relative_north=0.0, relative_east=12.0,
                     node_enabled=0.0, node_dv=120.0, node_remaining=114.0, node_time=300.0,
                     node_prograde=120.0, node_normal=0.0, node_radial=0.0,
                     burn_up=.2, burn_north=0.0, burn_east=1.0,
                     mass=10000.0, available_thrust=160000.0, specific_impulse=300.0)
 REPORTED_FIELDS += tuple((key, key.replace('_', ' ').title(), '', 1.0)
-                        for key in ('pitch', 'heading', *NAV_DEFAULTS))
+                        for key in ('pitch', 'heading', 'roll', *NAV_DEFAULTS))
 RESOURCE_KEYS = ('electric_charge', 'electric_capacity', 'liquid_fuel', 'liquid_capacity',
                  'oxidizer', 'oxidizer_capacity', 'monopropellant', 'monoprop_capacity',
                  'solid_fuel', 'solid_capacity', 'xenon_gas', 'xenon_capacity',
@@ -79,6 +99,43 @@ def attitude_rotation(pitch, heading, roll):
     q = multiply((math.sin(h), 0, 0, math.cos(h)), (0, -math.sqrt(.5), 0, math.sqrt(.5)))
     q = multiply(q, (-math.sin(p), 0, 0, math.cos(p)))
     return multiply(q, (0, -math.sin(r), 0, math.cos(r)))
+
+
+def attitude_axes(pitch, heading, roll):
+    """(forward, top) unit vectors in surface components (up, north, east) of the attitude in degrees; the
+    same orientation as attitude_rotation (vessel axes right, forward, down; top = -down)."""
+    p, h, r = (math.radians(a) for a in (pitch, heading, roll))
+    forward = (math.sin(p), math.cos(p) * math.cos(h), math.cos(p) * math.sin(h))
+    top0 = (math.cos(p), -math.sin(p) * math.cos(h), -math.sin(p) * math.sin(h))
+    right0 = (0.0, -math.sin(h), math.cos(h))
+    return forward, tuple(top0[i] * math.cos(r) + right0[i] * math.sin(r) for i in range(3))
+
+
+def attitude_angles(forward, top):
+    """(pitch, heading 0-360, roll -180..180) in degrees of surface-component axes; inverse of attitude_axes.
+    Pointing straight up or down the heading comes from the top axis and the roll is 0."""
+    pitch = math.asin(max(-1.0, min(1.0, forward[0])))
+    if math.hypot(forward[1], forward[2]) > 1e-6:
+        h = math.atan2(forward[2], forward[1])
+        top0 = (math.cos(pitch), -math.sin(pitch) * math.cos(h), -math.sin(pitch) * math.sin(h))
+        right0 = (0.0, -math.sin(h), math.cos(h))
+        roll = math.atan2(_dot(top, right0), _dot(top, top0))
+    else:
+        s = 1.0 if forward[0] > 0 else -1.0
+        h, roll = math.atan2(-top[2] * s, -top[1] * s), 0.0
+    return math.degrees(pitch), math.degrees(h) % 360.0, math.degrees(roll)
+
+
+def _rotate(v, axis, angle):
+    """Rodrigues rotation of v about the unit axis."""
+    c, s = math.cos(angle), math.sin(angle)
+    k = _cross(axis, v)
+    d = _dot(axis, v) * (1 - c)
+    return tuple(v[i] * c + k[i] * s + axis[i] * d for i in range(3))
+
+
+def _angle(a, b) -> float:
+    return math.atan2(math.sqrt(_dot(_cross(a, b), _cross(a, b))), _dot(a, b))
 
 
 @dataclass
@@ -253,6 +310,13 @@ class Vessel:
     drag_accel: float = 0.0
     heat: float = 0.0            # 0..1, rises with aerodynamic heating
     _stage_was: bool = False
+    # attitude, in the inertial frame (x, y orbital plane, z = r x v of a prograde orbit = south)
+    forward: tuple | None = None
+    top: tuple | None = None
+    omega: tuple = (0.0, 0.0, 0.0)   # angular velocity, rad/s
+    steered: bool = False            # SAS or stick input since the scenario loaded: guidance off
+    autopilot: object = None         # set by the Simulator each tick: None = SAS off, HOLD, or a unit vector
+    sas_error: float = float("nan")  # degrees between the nose and the SAS direction
 
     # ------------------------------------------------------------------------------------- derived
     @property
@@ -294,9 +358,9 @@ class Vessel:
     def report(self) -> dict:
         """Every value sent to the board and the HMI, computed from the flight model (see REPORTED_FIELDS)."""
         el = self.elements()
-        pitch, heading = self.attitude()
+        pitch, heading, roll = self.attitude()
         return dict(NAV_DEFAULTS,
-            pitch=pitch, heading=heading,
+            pitch=pitch, heading=heading, roll=roll,
             electric_charge=self.electric, electric_capacity=150, monopropellant=self.monoprop, monoprop_capacity=30,
             liquid_fuel=self.liquid_fuel + LIQUID_FUEL * self.stage, liquid_capacity=LIQUID_FUEL * (self.stage + 1),
             oxidizer=self.oxidizer + OXIDIZER * self.stage, oxidizer_capacity=OXIDIZER * (self.stage + 1),
@@ -314,15 +378,154 @@ class Vessel:
     def g_force(self) -> float:
         return 1.0 if self.landed and self.thrust_accel == 0 else (self.thrust_accel + self.drag_accel) / G0
 
-    def attitude(self) -> tuple[float, float]:
-        """(pitch above the horizon, heading) in degrees of the thrust direction the guidance holds."""
-        ux, uy = self.thrust_direction()
-        rx, ry = self.x / self.radius, self.y / self.radius
-        up = ux * rx + uy * ry
-        return math.degrees(math.asin(max(-1.0, min(1.0, up)))), 90.0
+    def frame(self):
+        """(up, north, east) unit vectors at the vessel, in the inertial frame. North is -z: the planar orbits
+        are prograde equatorial, so their normal (r x v, +z) points south, as krpcserver.TransformDirection."""
+        r = self.radius or 1.0
+        rx, ry = self.x / r, self.y / r
+        return (rx, ry, 0.0), (0.0, 0.0, -1.0), (-ry, rx, 0.0)
+
+    def to_une(self, v) -> tuple[float, float, float]:
+        return tuple(_dot(v, b) for b in self.frame())
+
+    def from_une(self, v) -> tuple[float, float, float]:
+        u, n, e = self.frame()
+        return tuple(v[0] * u[i] + v[1] * n[i] + v[2] * e[i] for i in range(3))
+
+    def axes(self):
+        """(forward, top) in the inertial frame: the stored attitude once steered, else the guidance's."""
+        if self.steered and self.forward is not None:
+            return self.forward, self.top
+        ux, uy = self.guidance_direction()
+        u, _, _ = self.frame()
+        pitch = math.degrees(math.asin(max(-1.0, min(1.0, ux * u[0] + uy * u[1]))))
+        f, t = attitude_axes(pitch, 90.0, 0.0)
+        return self.from_une(f), self.from_une(t)
+
+    def attitude(self) -> tuple[float, float, float]:
+        """(pitch above the horizon, heading, roll) in degrees, relative to the local surface (NavBall)."""
+        f, t = self.axes()
+        return attitude_angles(self.to_une(f), self.to_une(t))
+
+    def sas_target(self, mode: int, r: dict):
+        """The inertial unit vector SAS mode ``mode`` (Simulator.sas_mode 1-10) points at, or HOLD. ``r`` is
+        Simulator.reported(): speed_mode (0 orbit, 1 surface, 2 target) picks the prograde of the NavBall as in
+        KSP, normal and radial follow it; target and maneuver use target_* / burn_* (up, north, east) and hold
+        when there is no target or node."""
+        if mode == 1:
+            return HOLD
+        if mode in (8, 9):
+            if not r.get("target_enabled"):
+                return HOLD
+            d = self.from_une(tuple(r["target_" + a] for a in ("up", "north", "east")))
+            n = math.sqrt(_dot(d, d))
+            return tuple((1 if mode == 8 else -1) * c / n for c in d) if n > 1e-9 else HOLD
+        if mode == 10:
+            if not r.get("node_enabled"):
+                return HOLD
+            d = self.from_une(tuple(r["burn_" + a] for a in ("up", "north", "east")))
+            n = math.sqrt(_dot(d, d))
+            return tuple(c / n for c in d) if n > 1e-9 else HOLD
+        speed_mode = int(r.get("speed_mode", 0))
+        if speed_mode == 2 and r.get("target_enabled"):
+            pro = self.from_une(tuple(r["relative_" + a] for a in ("up", "north", "east")))
+        elif speed_mode == 1:
+            pro = (*self.surface_velocity(), 0.0)
+        else:
+            pro = (self.vx, self.vy, 0.0)
+        if math.sqrt(_dot(pro, pro)) < 0.1:
+            return HOLD
+        pro = _unit(pro)
+        normal = _cross((self.x, self.y, 0.0), pro)
+        if _dot(normal, normal) < 1e-12:  # straight up or down: no orbital plane
+            return pro if mode == 2 else tuple(-c for c in pro) if mode == 3 else HOLD
+        normal = _unit(normal)
+        radial = _cross(pro, normal)  # radial out, perpendicular to the velocity
+        d = {2: pro, 3: tuple(-c for c in pro), 4: normal, 5: tuple(-c for c in normal),
+             6: tuple(-c for c in radial), 7: radial}.get(mode)
+        return d if d is not None else HOLD
+
+    def _steer(self, dt: float) -> None:
+        """Advance the attitude: stick input first (it overrides SAS, as in KSP), else SAS, else damping."""
+        c = self.controls
+        stick = (c.pitch, c.yaw, c.roll)
+        active = any(abs(a) > STICK_DEADZONE for a in stick)
+        if not self.steered and (active or self.autopilot is not None):
+            self.forward, self.top = self.axes()  # take over from the guidance where it points
+            self.steered = True
+        if not self.steered or dt <= 0:
+            return
+        if self.landed:  # held by the ground: turns with the surface
+            self.forward, self.top = (_rotate(v, (0.0, 0.0, 1.0), OMEGA * dt) for v in (self.forward, self.top))
+            self.omega = (0.0, 0.0, 0.0)
+            self.sas_error = float("nan")
+            return
+        n = max(1, int(math.ceil(dt / ATTITUDE_STEP)))
+        if n > RAILS_STEPS:  # time warp on rails: no rotation; SAS points at its direction
+            self.omega = (0.0, 0.0, 0.0)
+            d = self.autopilot
+            if isinstance(d, tuple):
+                axis = _cross(self.forward, d)
+                if _dot(axis, axis) > 1e-18:
+                    angle = _angle(self.forward, d)
+                    axis = _unit(axis)
+                    self.forward, self.top = (_rotate(v, axis, angle) for v in (self.forward, self.top))
+                self.sas_error = 0.0
+            return
+        for _ in range(n):
+            self._attitude_step(dt / n, stick if active else None)
+
+    def _attitude_step(self, h: float, stick) -> None:
+        f, t = self.forward, self.top
+        w = self.omega
+        d = self.autopilot
+        if stick is not None:
+            pitch, yaw, roll = stick
+            right = _cross(t, f)
+            axes = (_cross(f, t), _cross(f, right), tuple(-x for x in f))  # nose up, nose right, right wing down
+            acc = tuple(STICK_ACCEL * (pitch * axes[0][i] + yaw * axes[1][i] + roll * axes[2][i]) for i in range(3))
+            w = tuple(w[i] + (acc[i] - STICK_DAMPING * w[i]) * h for i in range(3))
+            self.sas_error = _angle(f, d) * 180 / math.pi if isinstance(d, tuple) else float("nan")
+        elif d is None:
+            k = max(0.0, 1 - STICK_DAMPING * h)
+            w = tuple(x * k for x in w)
+            self.sas_error = float("nan")
+        else:
+            desired = (0.0, 0.0, 0.0)
+            self.sas_error = 0.0
+            if isinstance(d, tuple):
+                theta = _angle(f, d)
+                axis = _cross(f, d)
+                if _dot(axis, axis) < 1e-18:
+                    axis = _cross(f, t) if theta > 1 else (0.0, 0.0, 0.0)  # opposite: turn nose up
+                if _dot(axis, axis) > 0:
+                    rate = min(SAS_RATE, math.sqrt(1.6 * SAS_ACCEL * theta), SAS_GAIN * theta)
+                    desired = tuple(rate * x for x in _unit(axis))  # no roll rate: SAS keeps the roll
+                self.sas_error = math.degrees(theta)
+            dw = tuple(desired[i] - w[i] for i in range(3))
+            size = math.sqrt(_dot(dw, dw))
+            limit = SAS_ACCEL * h
+            if size > limit:
+                dw = tuple(x * limit / size for x in dw)
+            w = tuple(w[i] + dw[i] for i in range(3))
+        self.omega = w
+        rate = math.sqrt(_dot(w, w))
+        if rate > 0:
+            axis = tuple(x / rate for x in w)
+            f, t = _rotate(f, axis, rate * h), _rotate(t, axis, rate * h)
+        f = _unit(f)
+        t = _unit(tuple(t[i] - f[i] * _dot(t, f) for i in range(3)))
+        self.forward, self.top = f, t
 
     # ------------------------------------------------------------------------------------- dynamics
     def thrust_direction(self) -> tuple[float, float]:
+        """Where the engine pushes in the orbital plane: the vessel's nose once steered (its in-plane part, so a
+        normal burn has no effect on the planar orbit), else the guidance."""
+        if self.steered and self.forward is not None:
+            return self.forward[0], self.forward[1]
+        return self.guidance_direction()
+
+    def guidance_direction(self) -> tuple[float, float]:
         """Straight up below 1 km, a gradual turn to the horizon until 45 km, then along the orbital velocity."""
         r = self.radius
         rx, ry = self.x / r, self.y / r
@@ -363,6 +566,7 @@ class Vessel:
     def step(self, dt: float) -> None:
         """Advance ``dt`` seconds of game time (RK4, at most 0.5 s per sub-step)."""
         throttle = max(0.0, min(1.0, self.controls.throttle))
+        self._steer(dt)
         n = max(1, int(math.ceil(dt / 0.5)))
         h = dt / n
         for _ in range(n):
