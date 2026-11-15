@@ -42,6 +42,9 @@ Source map
    * - ``telemetry.*`` / ``model.hpp``
      - Live/demo sources, stream groups and immutable display snapshots.
      - No SDL calls from telemetry workers.
+   * - ``shipreport.*``
+     - VAB ship report model and parser (format v1 from ``KSPHMI.ShipReport``), percent decoding, labels.
+     - Reject unknown versions and malformed fields; ignore unknown line kinds (later phases).
    * - ``vec.*``, ``navmath.*``, ``orbitview.cpp``
      - Quaternions, frame transforms and conic projection/geometry.
      - Explicit frame and unit conventions.
@@ -183,3 +186,9 @@ Adding a displayed value
 #. Add meaningful value/geometry or clipping tests; inspect screenshots at supported sizes and both skins.
 #. Run the actual C++ client against the stand-in. Use real KSP for API behavior the simulator cannot
    establish, and the real Pi for driver behavior and performance.
+
+Values from the editor do not come from ``SpaceCenter``: they are fields of the ``KSPHMI`` ship report
+(``KSPSerialIO.Hmi.dll``). Add them to the plugin's ``ShipReportFormat``, ``shipreport.cpp``,
+``tools/kspsim/ships.py`` and the fixture ``hmi-cpp/tests/data/ship_report_v1.txt`` together; ``ShipReportPoller``
+in ``telemetry.cpp`` already fetches the text only when ``KSPHMI.Revision`` changes. The ``[vab]`` settings
+(target and destinations) are read by ``Display``, so the apollo panel art depends only on size and config.

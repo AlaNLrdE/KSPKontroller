@@ -103,6 +103,18 @@ configured ports in initial and supervisor modes, stale/other candidates, no-han
 probe, empty configuration, normal verified fallback and cancellation. Every test stops the plugin's reader
 and sender workers. The stand-ins remain under the test project/build directories and are never deployed.
 
+Ship report format tests
+------------------------
+
+``./ci verify`` (``check_ship_report_contract``) builds and runs ``tools/plugin-shipreport-tests`` with the .NET 8
+SDK: it compiles the plugin's ``ShipReportFormat.cs`` without KSP or kRPC and requires its output for a sample ship
+to equal ``hmi-cpp/tests/data/ship_report_v1.txt`` byte for byte (under a comma-decimal culture), plus escaping,
+the pending report and revision rules. The same fixture is parsed by ``ship_report_parses_the_shared_sample``
+(ctest) and written by kspsim's formatter (``ShipReportTest``), so the three implementations cannot drift apart.
+The check also requires the service name, procedures, Editor scene and version to agree in plugin, HMI and
+simulator, and ``KSPSerialIO.dll`` to stay free of kRPC. The rest of ``KSPSerialIO.Hmi.dll`` (KSP events and
+``VesselDeltaV``) is only verified in the game: compare the Pi's numbers with KSP's delta-v app in the VAB.
+
 Button event regression tests
 -----------------------------
 

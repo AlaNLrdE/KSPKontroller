@@ -140,6 +140,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   near-circular RCS impulses can flip apsis direction without moving the vessel's position.
 
 
+- Only `KSPSerialIO.Hmi.dll` (kRPC service KSPHMI, the Pi's VAB report) may reference kRPC; it targets .NET 4.7.1
+  because kRPC 0.7 is a .NET 4 assembly, and builds against the install's Managed + GameData/kRPC (read-only). The
+  report format v1 has four copies that must agree (plugin, hmi-cpp, kspsim, shared fixture): see the skills.
+
 - Control packets use a latest-value buffer, but STAGE/SAS/RCS presses are events: capture their edges and
   receipt times on the serial reader before replacing that buffer. Decode/apply game controls only on Unity's
   thread; a latch in the main-thread decoder cannot recover packets already overwritten by the reader.

@@ -13,6 +13,11 @@ The kRPC mod is a separate dependency for the Pi path. Adding HMI telemetry gene
 C++ kRPC client, not the serial ``VesselData`` structure. KSPSerialIO's UDP context fills a scene
 identity gap; it does not forward vessel telemetry to the HMI.
 
+``KSPSerialIO/KSPSerialIO.Hmi/`` builds a second artifact, ``KSPSerialIO.Hmi.dll`` (.NET 4.7.1, installed in
+``GameData/KSPSerialIO/Plugins``): the kRPC service ``KSPHMI`` with the editor ship report for the Pi's VAB
+screen. It is the only code that references kRPC; keep it that way, so a missing kRPC disables only that DLL.
+:doc:`../plugin` describes its events, data sources and build constraints.
+
 Components and lifecycle
 ------------------------
 
@@ -110,6 +115,20 @@ eligible names. Bluetooth modem ports are skipped where registry metadata identi
 is rebuilt on retries because a reset can change USB enumeration. The compatibility handshake, not
 the COM number, establishes board identity. See :doc:`../protocol` for the reconnect state diagram.
 
+Editor ship report service
+--------------------------
+
+``EditorShipReport`` (``KSPAddon.Startup.EditorAny``) subscribes in ``Start`` and unsubscribes every event in
+``OnDestroy``, which also clears ``ShipReportCache``. It reads KSP objects only inside event handlers on the main
+thread; ``HmiService``'s procedures run in kRPC's update and only read the cache under its lock, so the RPC path
+never touches ``ShipConstruct`` or ``VesselDeltaV``. A failed build of the report is logged once per distinct
+message and leaves the previous report in place. ``ShipReportFormat`` holds the text format (version 1) and has no
+game types; change it together with ``hmi-cpp/src/shipreport.cpp``, ``tools/kspsim/ships.py`` and the shared
+fixture ``hmi-cpp/tests/data/ship_report_v1.txt``, and bump ``v`` for anything an old Pi would misread.
+
+.. uml:: ../diagrams/seq_vab_report.puml
+   :caption: Editor ship report from editor events to the Pi display.
+
 Scene context service
 ---------------------
 
@@ -138,7 +157,7 @@ actual deploy, close KSP, coordinate the shared installation, verify before/afte
 ``GameData/KSPSerialIO``. Every deployed plugin change requires matching assembly/changelog versions.
 
 Use ``[PORT]`` for serial setup, ``[CTRL]`` for applied controls, ``[BOARD]`` for firmware diagnostics,
-``[LINK]`` for supervision and ``[HMI]`` for scene-service failures. Performance lines distinguish
+``[LINK]`` for supervision and ``[HMI]`` for scene-service failures and editor ship report changes. Performance lines distinguish
 main-thread queueing from worker write duration. Save game logs before a new launch overwrites them.
 
 When extending the mod
@@ -147,6 +166,8 @@ When extending the mod
 * New physical controls need a documented edge/level policy and a safe startup/reconnect baseline.
 * New serial fields need coordinated C#/firmware/simulator layout changes and field documentation.
 * New facility events need symmetrical subscribe/unsubscribe, simulator support and an HMI view.
+* New ship report fields go into all three implementations and the shared fixture; kRPC types stay in
+  ``KSPSerialIO.Hmi``.
 * New worker behavior needs explicit ownership, bounded work, shutdown behavior and main-thread logging.
 
 Keep tests at the correct boundary: kspsim validates compatible protocol peers, but runs a stand-in

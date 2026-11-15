@@ -48,3 +48,11 @@ want COM5 and port 50000 (it checks).
   `tools/merge_agent.py NAME`.
 - A log-monitor agent waits for KSP with a background shell loop and streams KSP.log with the Monitor tool;
   it must not be started for a session whose prerequisites are missing (see the raspberry-pi-hmi skill).
+
+- KSPHMI service (2026-11-15): `Simulator.ship` / `set_ship` / `--ship` / the window's *VAB ship* box pick a sample
+  from `ships.py` (`kerbal_x`, `pending`, `heavy`, `""` = no service, as without KSPSerialIO.Hmi.dll); each change
+  is a new revision. The stand-in serves it only in `vab`/`sph` (else kRPC's "not available in game scene").
+  A third-party service has no generated Python stubs: `services_message` must declare its procedures with
+  `return_type` (UINT32, STRING) or the krpc client cannot decode the results. `--scene` starts in any scene.
+- In a Linux VM (2026-11-15) `test_krpc_client_end_to_end` failed at "closed ports refuse connections" before any
+  change (sandbox socket behaviour); every other test passed. Do not chase it there; run it on Windows (./ci test_sim).

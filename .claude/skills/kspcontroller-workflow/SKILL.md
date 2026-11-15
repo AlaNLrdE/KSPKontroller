@@ -126,3 +126,20 @@ KSP's in-game debug console creates TextMeshPro UI objects per log line; off the
 (Access Violation in Mesh.Internal_Create, seen in 10 crash reports). All plugin logging uses `KSPLogQueue.Log`
 (direct on the main thread, queued and drained from `Update` otherwise); `./ci verify` check `no direct Debug.Log` enforces it.
 In a fresh worktree copy `build/refasm` from the main checkout before `./ci build_KSPSerialIO`.
+
+## KSPSerialIO.Hmi.dll and kRPC (2026-11-15)
+
+- kRPC 0.7.0's DLLs are built for the .NET 4 runtime (mscorlib 4.0, checked with `dnfile`): anything referencing
+  `KRPC.Core.dll` cannot target .NET 3.5. KSPSerialIO.Hmi targets v4.7.1 (`build/refasm-net471`) and compiles
+  against the install's `KSP_x64_Data/Managed` (the repo's `Includes/` are pre-1.7: no `VesselDeltaV`).
+- kRPC 0.7.0 has `GameScene.Editor` (= EditorVAB | EditorSPH); service attributes are in `KRPC.Core.dll`
+  (`KRPC.Service.Attributes`). kRPC declares no `KSPAssembly`, so no `KSPAssemblyDependency` on it. Its own
+  validation can be run outside KSP: load the DLL and call `KRPC.Service.Scanner.Scanner.GetServices(errors)` by
+  reflection under mono (it accepted KSPHMI: Editor scene, Revision/ShipReport). Leave the service `Id` unset.
+- Not yet seen in the game: the Windows build against KSP 1.12's real assemblies, the editor events, and whether
+  the situation/body inference (`EditorShipReport.Option/BodyName`) matches KSP's delta-v app. Check
+  `KSPSerialIO[HMI] ship report rev N` in KSP.log and compare the Pi with the app in the VAB.
+- Linux VM without root: `apt-get -o Dir::State::Lists=... -o Dir::Cache=... update/download` + `dpkg -x` gives
+  SDL2 dev files and `mono-mcs`; `pip install --user cmake`. The repo is LF in git (`text=auto`): a Linux checkout
+  is LF, so new files must be LF there (CRLF exists only in the Windows working tree). The VM has no git identity:
+  pass `GIT_AUTHOR_*`/`GIT_COMMITTER_*` from `git log -1` instead of changing config.

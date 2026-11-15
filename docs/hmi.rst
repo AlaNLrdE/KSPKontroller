@@ -92,7 +92,8 @@ node/engine parameters.
 
 Outside flight, dedicated preparation checklists are shown for Space Center, VAB, SPH, Mission Control,
 Astronaut Complex, Research & Development, Administration and Tracking Station. These are contextual guides,
-not live contract or crew lists. Flight data resumes automatically after launching or switching to a vessel.
+not live contract or crew lists; in the VAB a live ship report replaces them when the game serves one
+(`VAB ship report`_). Flight data resumes automatically after launching or switching to a vessel.
 
 KSPSerialIO 0.19.3.15 adds a read-only UDP context responder on port 50002. The Pi sends ``KSPHMI/1`` once per
 non-flight sample; the response is ``KSPHMI/1 <scene>``. Facility spawn/despawn events distinguish buildings
@@ -156,6 +157,80 @@ signals the worker without waiting for a system DNS lookup; its shared state sur
 
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
+
+VAB ship report
+---------------
+
+In the VAB the static cards are replaced by a live engineering report of the ship being built, when the game
+serves one. It comes from ``KSPSerialIO.Hmi.dll`` (KSPSerialIO 0.19.4.0), a separate assembly that adds the kRPC
+service ``KSPHMI`` (see :doc:`plugin`). The Pi uses its existing kRPC connection: no new port, no Arduino.
+
+.. uml:: diagrams/seq_vab_report.puml
+   :caption: Editor events build and cache the report; the Pi polls the revision and fetches the text on change.
+
+* ``KSPHMI.Revision() -> uint`` increases whenever the report's contents change. While the UDP context says
+  ``vab``, the telemetry thread calls it about twice a second (``ShipReportPoller``) and calls
+  ``KSPHMI.ShipReport() -> string`` only when it differs from the revision last fetched.
+* Both procedures exist only in the editor scene (kRPC ``GameScene.Editor``). A missing service (DLL not
+  installed, no kRPC), another scene or a report that does not parse leaves ``Snapshot.ship`` empty: the static
+  VAB cards stay, the session is not affected, and server errors are retried after 5 s. The log says
+  ``ship report unavailable (static VAB cards): ...`` once per distinct reason and
+  ``ship report: revision N, <name>, K stages`` when a report arrives. The SPH keeps its cards until phase 3.
+
+Report text, format version 1 (``hmi-cpp/include/shipreport.hpp``; the shared fixture is
+``hmi-cpp/tests/data/ship_report_v1.txt``):
+
+.. code-block:: text
+
+   v=1 rev=57 facility=vab name=Kerbal%20X sit=kerbin_asl
+   mass=18.40 dry=6.10 cost=23400 funds=41200 parts=42 crew=1 seats=3 size=11.2,3.8 engines=5
+   st=2,1720,1960,1.63,48,engines:3,clamps:1
+   st=1,1890,2010,1.41,71,engines:1,decouplers:1
+   st=0,1210,1340,0.62,52,engines:1,decouplers:1,chutes:1
+
+* One ``key=value`` group per field, separated by single spaces; one line per group kind. Line 1: version,
+  revision, facility, name, delta-v situation (``<body>_<asl|alt|vac>``). Line 2: wet and dry mass (t), cost,
+  funds (absent outside career games), parts, crew and seats, height and width (m), engines.
+* ``st=`` lines in firing order: stage number, delta-v in the situation of KSP's editor delta-v app, delta-v in
+  vacuum (m/s), TWR in that situation, burn time (s), then ``kind:count`` for what the stage fires (engines,
+  decouplers, chutes, clamps, fairings). Until KSP finishes its first delta-v calculation the report has a single
+  ``dv=pending`` line instead, and the screen says it is calculating.
+* Text values are percent-encoded UTF-8: every byte outside ``A-Z a-z 0-9 . _ ~ -`` becomes ``%XX``, so spaces,
+  ``=``, ``,`` and ``%`` never appear raw (``Kerbal X`` is ``Kerbal%20X``). Numbers use ``.`` as the decimal
+  separator; ``nan`` is an unknown value.
+* The Pi rejects any ``v`` other than 1 and any malformed known field (the whole report: a half-read report
+  could mislead), and ignores keys and line kinds it does not know: phase 2 adds ``chk=`` and ``lim=`` lines.
+
+The screen (both skins): the delta-v total in the report's situation (also in the header) against the selected
+destination, with the margin; a stacked bar of the stages' delta-v with the target as a tick; the stage table
+(delta-v, vacuum delta-v, TWR, burn time, what fires; a launch-stage TWR below 1 is red); every destination as
+reachable (green) or not (red), the target outlined; and the vehicle summary. Totals are the sum of the stages'
+delta-v in the report's situation, as KSP's own app adds them. The apollo skin keeps all of its static art (eight
+stage rows, destination lamp housings, the target ring) in the cached panel texture, so it is rebuilt only when the
+size or the ``[vab]`` settings change.
+
+Destinations and the highlighted target are settings (``[vab]`` in ``config.toml``; ``config.local.toml`` may add
+destinations or change their delta-v):
+
+.. code-block:: toml
+
+   [vab]
+   target = "mun_landing"
+
+   [vab.destinations]          # m/s from the Kerbin launch pad, at most 12
+   kerbin_orbit = 3400
+   mun_flyby = 4310
+   minmus_landing = 4670
+   mun_landing = 5150
+
+Names use ``a-z``, ``0-9`` and ``_`` (shown upper case, ``_`` as a space); values must be between 0 and 100000.
+A target that is not a destination is a configuration error naming the key and the file. The shipped table also
+has ``minmus_flyby``, ``duna_flyby``, ``minmus_orbit``, ``keostationary`` and ``mun_orbit`` (community delta-v
+map, cumulative, no aerobraking).
+
+Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``heavy``, ``none``) serves sample ships
+(:doc:`simulator`). Review screenshots of both skins: ``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes
+``classic_vab*.png`` and ``apollo_vab*.png`` from the shared sample (sample data, not the game).
 
 Settings
 --------
