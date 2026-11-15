@@ -193,3 +193,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - End to end without the game: kspsim `--scene vab --ship heavy|kerbal_x|pending|none` and
   `ksphmi --address 127.0.0.1 --config <toml with discovery = false and the sim ports> --screenshot`.
 - The TOML subset now accepts dotted tables (`[vab.destinations]`); destinations are `name = m/s`, max 12.
+- TWR colours (2026-11-15): `twr_level()` in shipreport.cpp is the one rule for both skins and the apollo LAUNCH TWR /
+  UPPER TWR lamps (`[vab] launch_twr_min/launch_twr_warn/upper_twr_warn`); only stages with delta-v are judged. The
+  apollo VAB header uses its own lamp table (`VAB_LAMPS`, fitted on its own so the flight lamps keep their size);
+  `ApolloSkin::on_lamp` reports every lamp evaluated live for tests.

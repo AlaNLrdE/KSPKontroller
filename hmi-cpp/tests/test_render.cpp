@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 
 #include "apollo.hpp"
@@ -722,6 +724,31 @@ TEST(vab_without_a_report_keeps_the_static_cards) {
         s.display->draw(sph, monotonic());
         CHECK_EQ(panels, 0);
     }
+}
+
+TEST(apollo_vab_header_shows_only_link_and_twr_lamps) {
+    Screen s(1920, 1080, "apollo", repo_config());
+    s.display->draw(vab(sample_ship()), monotonic());  // creates the skin
+    std::map<std::string, const Color*> seen;
+    std::map<std::string, Color> colors;
+    s.display->apollo()->on_lamp = [&](const std::string& legend, const Color* lit) {
+        seen[legend] = lit;
+        if (lit) colors[legend] = *lit;
+    };
+    s.display->draw(vab(sample_ship("heavy")), monotonic());
+    std::set<std::string> legends;
+    for (const auto& kv : seen) legends.insert(kv.first);
+    CHECK(legends == (std::set<std::string>{"UPLINK", "NO DATA", "NO LINK", "LAUNCH TWR", "UPPER TWR"}));
+    CHECK(seen["UPLINK"] != nullptr);
+    CHECK(seen["LAUNCH TWR"] != nullptr && colors["LAUNCH TWR"] == Color({246, 66, 48}));  // 0.74 < 1.0: red
+    CHECK(seen["UPPER TWR"] != nullptr && colors["UPPER TWR"] == Color({255, 178, 42}));   // 0.62 < 0.8: amber
+    seen.clear();
+    s.display->draw(vab(sample_ship("pending")), monotonic());
+    CHECK(seen.count("LAUNCH TWR") && seen["LAUNCH TWR"] == nullptr && seen["UPPER TWR"] == nullptr);
+    // flight keeps its annunciators
+    seen.clear();
+    s.display->draw(demo(), monotonic());
+    CHECK(seen.count("SAS") && seen.count("PE ATMO") && seen.count("ESCAPE") && !seen.count("LAUNCH TWR"));
 }
 
 TEST(vab_report_software_render_time) {

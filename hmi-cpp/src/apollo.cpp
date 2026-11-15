@@ -286,6 +286,10 @@ void tile(Canvas& c, bool art, Display& d, const Rect& r, const char* name, cons
 
 // Header: name plate (left), universal time (middle), caution and warning lamps (right).
 constexpr int LAMP_COLS = 5;
+// In the VAB only the link lamps and the stage TWR lamps mean something; the blank housings are left for the
+// phase-2 checklist lamps (NO CHUTE, PARTS LIMIT, ...).
+constexpr const char* VAB_LAMPS[2][LAMP_COLS] = {{"UPLINK", "NO DATA", "NO LINK", "", ""},
+                                                 {"LAUNCH TWR", "UPPER TWR", "", "", ""}};
 constexpr const char* LAMPS[2][LAMP_COLS] = {{"UPLINK", "NO DATA", "NO LINK", "SAS", "RCS"},
                                              {"PE ATMO", "PE SURF", "LOW PWR", "LOW FUEL", "ESCAPE"}};
 
@@ -297,7 +301,7 @@ struct HeaderGeo {
     float lamp_units;
 };
 
-HeaderGeo header_geo(Canvas& c) {
+HeaderGeo header_geo(Canvas& c, bool vab) {
     const double u = c.u, w = c.w;
     HeaderGeo g;
     g.plate = Rect::f(2.5 * u, 1.4 * u, w * .44 - 3.2 * u, 8.2 * u);
@@ -309,7 +313,7 @@ HeaderGeo header_geo(Canvas& c) {
         for (int col = 0; col < LAMP_COLS; ++col)
             g.lamps[row][col] = Rect::f(x0 + col * (lw + gap), 1.5 * u + row * (lh + gap), lw, lh);
     std::vector<std::string> legends;
-    for (auto& row : LAMPS)
+    for (const auto& row : vab ? VAB_LAMPS : LAMPS)  // each table fits on its own: flight is unchanged
         for (const char* l : row) legends.push_back(l);
     g.lamp_units = fit(c, legends, 1.5f, lw - 1.6 * u);
     return g;
@@ -405,7 +409,7 @@ void ApolloSkin::draw(const Snapshot& s, double now) {
 
 void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int screen) {
     const double u = c.u;
-    const HeaderGeo g = header_geo(c);
+    const HeaderGeo g = header_geo(c, screen == VAB);
     const Rect& p = g.plate;
     if (art) {
         c.rounded_rect(p.inflate(.4 * u, .4 * u), rnd(.7 * u), Color{84, 86, 87});
@@ -424,7 +428,8 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
                       Anchor::MidTop, DIM_INK, true, .06f);
         }
         for (int row = 0; row < 2; ++row)
-            for (int col = 0; col < LAMP_COLS; ++col) lamp(c, g.lamps[row][col], LAMPS[row][col], g.lamp_units, true, nullptr);
+            for (int col = 0; col < LAMP_COLS; ++col)
+                lamp(c, g.lamps[row][col], (screen == VAB ? VAB_LAMPS : LAMPS)[row][col], g.lamp_units, true, nullptr);
         groove(c, 0, c.w, 10.9 * u);
         return;
     }
@@ -452,12 +457,23 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
     }
     // lamps
     const bool is_stale = stale(s, now), flight_now = s.state == State::Flight;
+    const auto& legends = screen == VAB ? VAB_LAMPS : LAMPS;
     auto show = [&](int row, int col, bool on, Color color) {
-        if (on) lamp(c, g.lamps[row][col], LAMPS[row][col], g.lamp_units, false, &color);
+        if (on_lamp) on_lamp(legends[row][col], on ? &color : nullptr);
+        if (on) lamp(c, g.lamps[row][col], legends[row][col], g.lamp_units, false, &color);
     };
     show(0, 0, s.state != State::Connecting && !is_stale, L_GREEN);
     show(0, 1, is_stale, L_AMBER);
     show(0, 2, s.state == State::Connecting, L_RED);
+    if (screen == VAB) {  // no flight annunciators in the editor
+        const TwrLimits& limits = d_.config().vab.twr;
+        auto twr_lamp = [&](int col, TwrLevel level) {
+            show(1, col, level == TwrLevel::Warn || level == TwrLevel::Bad, level == TwrLevel::Bad ? L_RED : L_AMBER);
+        };
+        twr_lamp(0, s.ship ? launch_twr_level(*s.ship, limits) : TwrLevel::None);
+        twr_lamp(1, s.ship ? upper_twr_level(*s.ship, limits) : TwrLevel::None);
+        return;
+    }
     show(0, 3, flight_now && s.nav && s.nav->sas, L_WHITE);
     show(0, 4, flight_now && s.nav && s.nav->rcs, L_WHITE);
     show(1, 0, flight_now && s.periapsis >= 0 && s.periapsis < s.atmosphere_depth, L_AMBER);
@@ -889,12 +905,13 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
         for (int i = 0; !pending && i < static_cast<int>(r->stages.size()) && i < ROWS; ++i) {
             const StageReport& st = r->stages[i];
             const float y = float(row0 + i * pitch);
-            const bool heavy = i == 0 && std::isfinite(st.twr) && st.twr < 1.0;  // cannot leave the pad
+            const TwrLevel level = twr_level(*r, static_cast<size_t>(i), d_.config().vab.twr);
+            const Color twr_color = level == TwrLevel::Bad ? seg::RED : level == TwrLevel::Warn ? seg::AMBER : seg::GREEN;
             seg::draw(c, float(cx_stage), y, stage, fmt::str("%02d", std::min(st.stage, 99)), seg::GREEN);
             seg::draw(c, float(cx_dv), y, dv, clamp_dv(st.delta_v), seg::GREEN);
             seg::draw(c, float(cx_vac), y, dv, clamp_dv(st.delta_v_vac), seg::GREEN);
             seg::draw(c, float(cx_twr), y, twr, std::isfinite(st.twr) ? fmt::str("%.2f", std::min(st.twr, 99.99)) : "----",
-                      heavy ? seg::RED : seg::GREEN);
+                      twr_color);
             seg::draw(c, float(cx_burn), y, burn, std::isfinite(st.burn) ? fmt::str("%.0f", std::min(st.burn, 9999.0)) : "----",
                       seg::GREEN);
             const std::string ev = events_text(st);

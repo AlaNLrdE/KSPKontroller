@@ -203,11 +203,18 @@ Report text, format version 1 (``hmi-cpp/include/shipreport.hpp``; the shared fi
 
 The screen (both skins): the delta-v total in the report's situation (also in the header) against the selected
 destination, with the margin; a stacked bar of the stages' delta-v with the target as a tick; the stage table
-(delta-v, vacuum delta-v, TWR, burn time, what fires; a launch-stage TWR below 1 is red); every destination as
+(delta-v, vacuum delta-v, TWR, burn time, what fires); every destination as
 reachable (green) or not (red), the target outlined; and the vehicle summary. Totals are the sum of the stages'
 delta-v in the report's situation, as KSP's own app adds them. The apollo skin keeps all of its static art (eight
 stage rows, destination lamp housings, the target ring) in the cached panel texture, so it is rebuilt only when the
 size or the ``[vab]`` settings change.
+
+TWR colours follow the ``[vab]`` thresholds. Only stages with delta-v are judged; the launch stage is the first one
+in firing order with delta-v. Launch stage: red below ``launch_twr_min`` (1.0, it cannot leave the pad), amber below
+``launch_twr_warn`` (1.2). Upper stages: amber below ``upper_twr_warn`` (0.8). Apollo shows them as red/amber
+segment digits and, in the VAB header, as the LAUNCH TWR and UPPER TWR lamps. The flight annunciators (SAS, RCS,
+PE ATMO, LOW FUEL, ...) are not shown in the VAB: only UPLINK / NO DATA / NO LINK and the two TWR lamps; the other
+housings stay blank for the phase-2 checklist lamps.
 
 Destinations and the highlighted target are settings (``[vab]`` in ``config.toml``; ``config.local.toml`` may add
 destinations or change their delta-v):
@@ -216,6 +223,9 @@ destinations or change their delta-v):
 
    [vab]
    target = "mun_landing"
+   launch_twr_min = 1.0        # launch stage red below
+   launch_twr_warn = 1.2       # launch stage amber below
+   upper_twr_warn = 0.8        # upper stages amber below
 
    [vab.destinations]          # m/s from the Kerbin launch pad, at most 12
    kerbin_orbit = 3400
@@ -224,7 +234,8 @@ destinations or change their delta-v):
    mun_landing = 5150
 
 Names use ``a-z``, ``0-9`` and ``_`` (shown upper case, ``_`` as a space); values must be between 0 and 100000.
-A target that is not a destination is a configuration error naming the key and the file. The shipped table also
+A target that is not a destination is a configuration error naming the key and the file, as is a TWR threshold
+that is not a number between 0 and 100 or a ``launch_twr_min`` above ``launch_twr_warn``. The shipped table also
 has ``minmus_flyby``, ``duna_flyby``, ``minmus_orbit``, ``keostationary`` and ``mun_orbit`` (community delta-v
 map, cumulative, no aerobraking).
 

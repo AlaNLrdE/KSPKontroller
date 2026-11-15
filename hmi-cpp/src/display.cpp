@@ -397,8 +397,9 @@ void Display::vab_report(const Snapshot& snap) {
             c_.text(fmt::str("+%d more stages", static_cast<int>(r.stages.size()) - rows + 1), 2.2, MUTED, c_stage, y + .6 * u);
             break;
         }
-        // TWR below 1 cannot leave the pad (launch stage); later stages are judged in phase 2's checklist
-        const Color twr_color = i == 0 && std::isfinite(st.twr) && st.twr < 1.0 ? BAD : VALUE;
+        // [vab] TWR thresholds: launch stage red / amber, upper stages amber (stages without delta-v not judged)
+        const TwrLevel level = twr_level(r, static_cast<size_t>(i), cfg_.vab.twr);
+        const Color twr_color = level == TwrLevel::Bad ? BAD : level == TwrLevel::Warn ? WARN : VALUE;
         c_.text(std::to_string(st.stage), 3.0, ACCENT, c_stage, y);
         c_.text(std::isfinite(st.delta_v) ? fmt::str("%.0f", st.delta_v) : "--", 3.0, VALUE, c_dv, y, Anchor::TopRight);
         c_.text(std::isfinite(st.delta_v_vac) ? fmt::str("%.0f", st.delta_v_vac) : "--", 2.4, LABEL, c_vac, y + .5 * u,

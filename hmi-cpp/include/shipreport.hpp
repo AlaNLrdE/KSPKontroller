@@ -46,6 +46,24 @@ struct ShipReport {
     std::string situation_label() const;
 };
 
+/// TWR thresholds of the VAB report ([vab] launch_twr_min, launch_twr_warn, upper_twr_warn in config.toml).
+struct TwrLimits {
+    double launch_bad = 1.0;   ///< launch stage: red below (cannot leave the pad)
+    double launch_warn = 1.2;  ///< launch stage: amber below
+    double upper_warn = 0.8;   ///< upper stages: amber below
+};
+
+/// None = not judged: a stage without delta-v (no thrust) or with an unknown TWR.
+enum class TwrLevel { None, Ok, Warn, Bad };
+
+/// Index in `stages` of the launch stage: the first one in firing order with delta-v; -1 without one.
+int launch_stage_index(const ShipReport& report);
+/// The level of stage `index` (launch thresholds for the launch stage, upper-stage threshold for later ones).
+TwrLevel twr_level(const ShipReport& report, size_t index, const TwrLimits& limits);
+/// Worst level of the launch stage, and of all upper stages (apollo LAUNCH TWR / UPPER TWR lamps).
+TwrLevel launch_twr_level(const ShipReport& report, const TwrLimits& limits);
+TwrLevel upper_twr_level(const ShipReport& report, const TwrLimits& limits);
+
 /// Parse a report; nullopt (and `error`) for an empty text, a missing or unknown version, or a malformed known field.
 std::optional<ShipReport> parse_ship_report(const std::string& text, std::string* error = nullptr);
 

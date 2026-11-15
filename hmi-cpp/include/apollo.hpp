@@ -9,6 +9,7 @@
 
 #include <SDL.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,9 @@ public:
     void draw(const Snapshot& s, double now);
     /// How often the static panel art was rebuilt (tests: once per screen kind, not per frame).
     int builds = 0;
+    /// Called for every header lamp evaluated live: its legend, and the lit colour or nullptr when unlit
+    /// (the flight LOW PWR / LOW FUEL lamps are only reported when their resource is low).
+    std::function<void(const std::string&, const Color*)> on_lamp;
 
 private:
     enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL, VAB };

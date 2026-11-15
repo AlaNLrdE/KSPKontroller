@@ -154,6 +154,17 @@ void apply_vab(Config& c, const TomlValues& m) {
     std::sort(c.vab.destinations.begin(), c.vab.destinations.end(), [](const Destination& a, const Destination& b) {
         return a.delta_v != b.delta_v ? a.delta_v < b.delta_v : a.key < b.key;
     });
+    // TWR colours of the stage table (and the apollo TWR lamps): finite, positive, red limit <= amber limit
+    TwrLimits twr = c.vab.twr;
+    for (auto [key, field] : {std::pair<const char*, double*>{"vab.launch_twr_min", &twr.launch_bad},
+                              {"vab.launch_twr_warn", &twr.launch_warn}, {"vab.upper_twr_warn", &twr.upper_warn}}) {
+        const double v = to_double(m, key, *field);
+        if (!std::isfinite(v) || v <= 0 || v > 100) throw std::runtime_error(std::string(key) + " must be a TWR between 0 and 100");
+        *field = v;
+    }
+    if (twr.launch_bad > twr.launch_warn)
+        throw std::runtime_error("vab.launch_twr_min must not exceed vab.launch_twr_warn");
+    c.vab.twr = twr;
     c.vab.target = to_string(m, "vab.target", c.vab.target);
     if (!c.vab.target.empty() &&
         std::none_of(c.vab.destinations.begin(), c.vab.destinations.end(),

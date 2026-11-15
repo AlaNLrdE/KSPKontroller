@@ -3,6 +3,7 @@
 #pragma once
 
 #include <map>
+#include "shipreport.hpp"
 #include <string>
 #include <vector>
 
@@ -44,6 +45,7 @@ struct Config {
     struct {
         std::string target;
         std::vector<Destination> destinations;
+        TwrLimits twr;  ///< launch_twr_min, launch_twr_warn, upper_twr_warn
     } vab;
     std::vector<std::string> loaded;  ///< files read, in order
 };

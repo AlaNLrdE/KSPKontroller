@@ -1162,6 +1162,67 @@ TEST(ship_report_rejects_unknown_versions_and_malformed_lines) {
     CHECK(r && r->revision == 9 && r->name == "X" && r->stages.empty());
 }
 
+TEST(ship_report_twr_levels_follow_the_vab_thresholds) {
+    // launch stage = first in firing order with delta-v; the clamp-only stage before it is not judged
+    auto twr_report = [](double launch, double upper, double last) {
+        return *parse_ship_report(fmt::str("v=1 rev=1\nst=4,0,0,0.00,0,clamps:1\nst=3,1500,1700,%.2f,60\n"
+                                           "st=2,1800,1900,%.2f,90\nst=1,900,950,%.2f,40\nst=0,0,0,0.00,0,chutes:1\n",
+                                           launch, upper, last));
+    };
+    const TwrLimits limits;  // 1.0 red / 1.2 amber at launch, 0.8 amber above
+    ShipReport r = twr_report(0.99, 0.79, 0.80);
+    CHECK_EQ(launch_stage_index(r), 1);
+    CHECK(twr_level(r, 0, limits) == TwrLevel::None);  // no delta-v: no thrust to judge
+    CHECK(twr_level(r, 1, limits) == TwrLevel::Bad);
+    CHECK(twr_level(r, 2, limits) == TwrLevel::Warn);
+    CHECK(twr_level(r, 3, limits) == TwrLevel::Ok);    // 0.80 is not below 0.8
+    CHECK(twr_level(r, 4, limits) == TwrLevel::None);
+    CHECK(twr_level(r, 9, limits) == TwrLevel::None);
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Bad);
+    CHECK(upper_twr_level(r, limits) == TwrLevel::Warn);
+    r = twr_report(1.00, 0.80, 2.5);  // the limits themselves pass the lower bands
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Warn);
+    CHECK(upper_twr_level(r, limits) == TwrLevel::Ok);
+    r = twr_report(1.20, 1.0, 1.0);
+    CHECK(launch_twr_level(r, limits) == TwrLevel::Ok);
+    // configurable: a stricter pad rule turns the same ship red
+    TwrLimits strict{1.3, 1.5, 1.1};
+    CHECK(launch_twr_level(r, strict) == TwrLevel::Bad);
+    CHECK(upper_twr_level(r, strict) == TwrLevel::Warn);
+    // the shared sample: launch 1.63 fine, last stage 0.62 amber; a pending report judges nothing
+    auto sample = parse_ship_report(golden_ship_report());
+    CHECK(sample && launch_twr_level(*sample, limits) == TwrLevel::Ok && twr_level(*sample, 2, limits) == TwrLevel::Warn);
+    sample->delta_v_pending = true;
+    CHECK(launch_twr_level(*sample, limits) == TwrLevel::None && upper_twr_level(*sample, limits) == TwrLevel::None);
+}
+
+TEST(config_vab_twr_thresholds_are_validated) {
+    Config cfg;
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    apply_toml(cfg, parse_toml(buf.str()));
+    CHECK_EQ(cfg.vab.twr.launch_bad, 1.0);
+    CHECK_EQ(cfg.vab.twr.launch_warn, 1.2);
+    CHECK_EQ(cfg.vab.twr.upper_warn, 0.8);
+    apply_toml(cfg, parse_toml("[vab]\nlaunch_twr_min = 1.1\nlaunch_twr_warn = 1.4\nupper_twr_warn = 0.5\n"));
+    CHECK_EQ(cfg.vab.twr.launch_bad, 1.1);
+    CHECK_EQ(cfg.vab.twr.launch_warn, 1.4);
+    CHECK_EQ(cfg.vab.twr.upper_warn, 0.5);
+    for (const char* bad : {"[vab]\nlaunch_twr_min = 0\n", "[vab]\nupper_twr_warn = -1\n", "[vab]\nlaunch_twr_warn = \"high\"\n",
+                            "[vab]\nupper_twr_warn = 1000\n", "[vab]\nlaunch_twr_min = 2\nlaunch_twr_warn = 1.5\n"}) {
+        Config c2 = cfg;
+        bool threw = false;
+        try {
+            apply_toml(c2, parse_toml(bad));
+        } catch (const std::runtime_error& e) {
+            threw = std::string(e.what()).find("vab.") != std::string::npos;
+        }
+        CHECK(threw);
+        CHECK_EQ(c2.vab.twr.launch_bad, 1.1);  // a rejected file leaves the thresholds as they were
+    }
+}
+
 TEST(config_vab_destinations_and_target) {
     Config cfg;
     std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");

@@ -1,5 +1,6 @@
 #include "shipreport.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -108,6 +109,39 @@ std::string destination_label(const std::string& key) {
     std::string out = key;
     for (char& c : out) c = c == '_' ? ' ' : static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return out;
+}
+
+int launch_stage_index(const ShipReport& report) {
+    if (report.delta_v_pending) return -1;
+    for (size_t i = 0; i < report.stages.size(); ++i)
+        if (std::isfinite(report.stages[i].delta_v) && report.stages[i].delta_v > 0) return static_cast<int>(i);
+    return -1;
+}
+
+TwrLevel twr_level(const ShipReport& report, size_t index, const TwrLimits& limits) {
+    if (report.delta_v_pending || index >= report.stages.size()) return TwrLevel::None;
+    const StageReport& st = report.stages[index];
+    if (!std::isfinite(st.twr) || !std::isfinite(st.delta_v) || st.delta_v <= 0) return TwrLevel::None;
+    const int launch = launch_stage_index(report);
+    if (static_cast<int>(index) == launch) {
+        if (st.twr < limits.launch_bad) return TwrLevel::Bad;
+        return st.twr < limits.launch_warn ? TwrLevel::Warn : TwrLevel::Ok;
+    }
+    // stages fired before the launch stage cannot have delta-v (it is the first with some): only later ones here
+    return st.twr < limits.upper_warn ? TwrLevel::Warn : TwrLevel::Ok;
+}
+
+TwrLevel launch_twr_level(const ShipReport& report, const TwrLimits& limits) {
+    const int launch = launch_stage_index(report);
+    return launch < 0 ? TwrLevel::None : twr_level(report, static_cast<size_t>(launch), limits);
+}
+
+TwrLevel upper_twr_level(const ShipReport& report, const TwrLimits& limits) {
+    TwrLevel worst = TwrLevel::None;
+    const int launch = launch_stage_index(report);
+    for (size_t i = static_cast<size_t>(launch + 1); launch >= 0 && i < report.stages.size(); ++i)
+        worst = std::max(worst, twr_level(report, i, limits));
+    return worst;
 }
 
 std::string events_text(const StageReport& stage) {

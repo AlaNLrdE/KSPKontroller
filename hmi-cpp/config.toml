@@ -30,6 +30,9 @@ day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth ti
 
 [vab]
 target = "mun_landing"   # destination the VAB ship report measures the delta-v margin against
+launch_twr_min = 1.0     # launch stage TWR shown red below this (it cannot leave the pad)
+launch_twr_warn = 1.2    # launch stage TWR shown amber below this
+upper_twr_warn = 0.8     # upper stages: TWR shown amber below this (long burns, hard circularisation)
 
 # Delta-v from the Kerbin launch pad, m/s (community delta-v map, cumulative, no aerobraking). The VAB report shows
 # each one as reachable or not; config.local.toml may add destinations (a-z, 0-9, _) or change these, at most 12.
