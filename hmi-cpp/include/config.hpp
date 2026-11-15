@@ -3,10 +3,14 @@
 #pragma once
 
 #include <map>
+#include "shipreport.hpp"
 #include <string>
 #include <vector>
 
 namespace ksphmi {
+
+/// Most destinations the VAB screens have room for.
+constexpr int MAX_DESTINATIONS = 12;
 
 struct Config {
     std::string source = "krpc";  // krpc | demo
@@ -31,13 +35,22 @@ struct Config {
     struct {
         int day_hours = 6;
     } format;
+    /// [vab]: the highlighted destination and [vab.destinations] (key = m/s), sorted by delta-v then key.
+    struct {
+        std::string target;
+        std::vector<Destination> destinations;
+        TwrLimits twr;  ///< launch_twr_min, launch_twr_warn, upper_twr_warn
+        /// m/s of ascent counted at Kerbin sea level before later stages count in vacuum (mission delta-v)
+        double atmosphere_dv = 1200;
+    } vab;
     std::vector<std::string> loaded;  ///< files read, in order
 };
 
 /// Flat view of a TOML document: "table.key" -> raw scalar (strings unquoted, numbers and booleans as text).
 using TomlValues = std::map<std::string, std::string>;
 
-/// Parse the TOML subset the settings use: [tables], key = "string" | 'literal' | number | true/false, comments.
+/// Parse the TOML subset the settings use: [tables] (dotted names too, [vab.destinations]), key = "string" |
+/// 'literal' | number | true/false, comments.
 /// Throws std::runtime_error with the line number on anything else.
 TomlValues parse_toml(const std::string& text);
 

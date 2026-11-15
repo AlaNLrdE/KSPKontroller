@@ -29,6 +29,10 @@ Channel inventory
      - TCP 50001
      - HMI opens second connection
      - Server publishes registered stream results.
+   * - Editor ship report
+     - kRPC service ``KSPHMI`` on TCP 50000
+     - HMI calls ``KSPSerialIO.Hmi.dll`` through kRPC
+     - VAB ship report: revision polled at 2 Hz, text fetched on change (format v1, :doc:`hmi`).
    * - HMI context
      - UDP 50002
      - HMI requests; KSPSerialIO replies
@@ -115,6 +119,10 @@ The default TCP timeout is five seconds. The entire two-connection handshake has
 deadline; accepting TCP does not prove that the server will answer RPC. The source retries after its
 configured delay (default three seconds) and can discover a new host when enabled. Optional telemetry
 streams retry individually so unavailable data on the pad does not restart the whole connection.
+
+Besides ``SpaceCenter``, the HMI calls the project's own service ``KSPHMI`` (``Revision``, ``ShipReport``) in the
+VAB, provided by ``KSPSerialIO.Hmi.dll`` and registered for the editor scene only. Any ``RpcError`` from it (the
+service is missing, or the game is in another scene) only hides the VAB report; it never ends the session.
 
 The implementation is an HMI-oriented subset of kRPC, not a replacement for every kRPC client feature.
 ``tools/kspsim/krpcserver.py`` is likewise a stand-in for the procedures the project exercises. Add

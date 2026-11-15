@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 
-from . import physics
+from . import physics, ships
 
 log = logging.getLogger("kspsim")
 
@@ -30,6 +30,10 @@ class Simulator:
         self.vessel_uid = 9  # object ids derive from it; a new vessel gets a new uid, as a switch in KSP does
         self.scene = "flight"
         self.skin = ""  # HMI look sent on the UDP context channel: "" = none (the HMI's [display] skin decides)
+        # Editor ship served by the KSPHMI kRPC service in the VAB/SPH (ships.NAMES; "" = no service, as without
+        # KSPSerialIO.Hmi.dll). Every change is a new revision, as the plugin's onEditorShipModified.
+        self.ship = "kerbal_x"
+        self.ship_revision = 1
         self.warp = warp
         self.ut = 0.0
         self.tick = tick
@@ -247,6 +251,20 @@ class Simulator:
         for f in self.listeners:
             f(scene)
         log.info("scene %s", scene)
+
+    def set_ship(self, name: str) -> None:
+        """Put a sample ship in the editor (ships.NAMES), or "" to answer as if KSPSerialIO.Hmi.dll were missing."""
+        ships.ship(name)  # raises for an unknown name
+        with self.lock:
+            self.ship = name
+            self.ship_revision += 1
+        log.info("editor ship %s (revision %d)", name or "none: no KSPHMI service", self.ship_revision)
+
+    def ship_report(self) -> str:
+        """What KSPHMI.ShipReport() answers now ("" when the sample has no ship)."""
+        with self.lock:
+            sample = ships.ship(self.ship)
+            return ships.report_text(self.ship_revision, sample) if sample else ""
 
     def set_skin(self, skin: str) -> None:
         """Ask the Raspberry Pi HMI for a look ("classic", "apollo"), or "" to leave it to its config."""

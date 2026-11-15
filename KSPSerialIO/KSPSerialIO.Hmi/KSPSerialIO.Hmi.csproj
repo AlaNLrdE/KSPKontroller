@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KSPSerialIO.Hmi.dll: kRPC service KSPHMI (editor ship report for the Raspberry Pi HMI).
+  Built by ./ci build_KSPSerialIO after KSPSerialIO.dll, never from KSPSerialIO.sln (that one targets .NET 3.5).
+  kRPC 0.7 assemblies are .NET 4 (mscorlib 4.0), so this project targets v4.7.1, the profile of KSP 1.12's Unity
+  2019 Mono. References come read-only from the KSP install: -p:KSPDIR=<install> (KSP_x64_Data/Managed and
+  GameData/kRPC/KRPC.Core.dll); ./ci passes FrameworkPathOverride with the downloaded v4.7.1 reference assemblies.
+-->
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{8E3B5F2A-4C1D-4E6B-9A7F-2D5C8B1E0F34}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>KSPSerialIO.Hmi</RootNamespace>
+    <AssemblyName>KSPSerialIO.Hmi</AssemblyName>
+    <TargetFrameworkVersion>v4.7.1</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <KSPManaged>$(KSPDIR)\KSP_x64_Data\Managed</KSPManaged>
+    <KRPCDir>$(KSPDIR)\GameData\kRPC</KRPCDir>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>none</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+    <PlatformTarget>anycpu</PlatformTarget>
+    <DebugSymbols>false</DebugSymbols>
+    <!-- kRPC reads KSPSerialIO.Hmi.xml next to the DLL for its service documentation (installed by ./ci install) -->
+    <DocumentationFile>$(OutputPath)KSPSerialIO.Hmi.xml</DocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="netstandard" Condition="Exists('$(FrameworkPathOverride)\Facades\netstandard.dll')">
+      <HintPath>$(FrameworkPathOverride)\Facades\netstandard.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(KSPManaged)\Assembly-CSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(KSPManaged)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(KSPManaged)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(KSPManaged)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="KRPC.Core">
+      <HintPath>$(KRPCDir)\KRPC.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="ShipReportFormat.cs" />
+    <Compile Include="EditorShipReport.cs" />
+    <Compile Include="HmiService.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Target Name="CheckKspReferences" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(KSPDIR)' == ''" Text="KSPDIR is not set: build with ./ci build_KSPSerialIO, or pass -p:KSPDIR=&lt;KSP install&gt;" />
+    <Error Condition="!Exists('$(KSPManaged)\Assembly-CSharp.dll')" Text="$(KSPManaged)\Assembly-CSharp.dll not found (KSPDIR=$(KSPDIR))" />
+    <Error Condition="!Exists('$(KRPCDir)\KRPC.Core.dll')" Text="$(KRPCDir)\KRPC.Core.dll not found: install kRPC 0.7.0 (docs/hmi.rst)" />
+  </Target>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

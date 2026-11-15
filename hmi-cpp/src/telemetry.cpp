@@ -508,6 +508,73 @@ private:
 
 }  // namespace
 
+// ================================================================================================ ShipReportPoller
+void ShipReportPoller::reset() {
+    report_.reset();
+    revision_.reset();
+    retry_at_ = -1e9;
+    problem_.clear();
+}
+
+void ShipReportPoller::fail(const std::string& why, bool log_warning) {
+    if (why != problem_) {
+        if (log_warning) log::warning(LOG, "ship report: " + why);
+        else log::info(LOG, "ship report unavailable (static VAB cards): " + why);
+    }
+    problem_ = why;
+    report_.reset();
+}
+
+std::shared_ptr<const ShipReport> ShipReportPoller::poll(Client& c, double now) {
+    if (now < retry_at_) return report_;
+    uint32_t revision;
+    try {
+        revision = pb::dec_uint32(c.invoke(Call{"KSPHMI", "Revision", {}}).data);
+    } catch (const RpcError& e) {  // no such service (DLL or kRPC missing), or not in the editor
+        fail(short_error(e), false);
+        revision_.reset();
+        retry_at_ = now + retry_seconds_;
+        return nullptr;
+    } catch (const pb::DecodeError& e) {
+        fail(std::string("bad revision: ") + e.what(), true);
+        revision_.reset();
+        retry_at_ = now + retry_seconds_;
+        return nullptr;
+    }
+    if (revision_ && *revision_ == revision) return report_;
+    revision_ = revision;
+    std::string text;
+    try {
+        ++fetches;
+        text = get_string(c, Call{"KSPHMI", "ShipReport", {}});
+    } catch (const RpcError& e) {
+        fail(short_error(e), false);
+        revision_.reset();
+        retry_at_ = now + retry_seconds_;
+        return nullptr;
+    } catch (const pb::DecodeError& e) {
+        fail(std::string("bad report value: ") + e.what(), true);
+        return nullptr;
+    }
+    if (text.empty()) {  // the editor has not reported a ship yet
+        fail("no ship reported yet", false);
+        return nullptr;
+    }
+    std::string error;
+    auto parsed = parse_ship_report(text, &error);
+    if (!parsed) {  // kept until the revision changes: the same text would fail again
+        fail(fmt::str("revision %u rejected: ", revision) + error, true);
+        return nullptr;
+    }
+    // one line per newly fetched revision (the revision only moves when the report changes)
+    log::info(LOG, fmt::str("ship report: revision %u, %s, %s, %d stages%s", revision, parsed->name.c_str(),
+                            parsed->situation.c_str(), static_cast<int>(parsed->stages.size()),
+                            parsed->delta_v_pending ? " (delta-v pending)" : ""));
+    problem_.clear();
+    report_ = std::make_shared<const ShipReport>(std::move(*parsed));
+    return report_;
+}
+
 // ================================================================================================ KrpcSource
 KrpcSource::KrpcSource(Options options) : Source("KrpcSource"), options_(std::move(options)) {
     period_ = 1.0 / std::max(options_.rate_hz, 0.5);
@@ -606,6 +673,7 @@ void KrpcSource::run() {
 }
 
 void KrpcSource::session(Client& conn) {
+    ship_.reset();
     while (!stopping()) {
         uint64_t vessel = 0;
         std::string why = "no active vessel";
@@ -624,10 +692,14 @@ void KrpcSource::session(Client& conn) {
                 log::info(LOG, "context skin: " + (ctx.skin.empty() ? std::string("none (the [display] setting)") : ctx.skin));
             context_skin_ = ctx.skin;
             context_at_ = monotonic();
+            // The VAB shows the editor ship report when KSPSerialIO.Hmi.dll serves it; polled about twice a second.
+            const bool vab = s.scene == "vab";
+            if (vab) s.ship = ship_.poll(conn, monotonic());
+            else ship_.reset();
             s.detail = why;
             s.received = monotonic();
             publish(s);
-            wait(1.0);
+            wait(vab ? 0.5 : 1.0);
             continue;
         }
         try {

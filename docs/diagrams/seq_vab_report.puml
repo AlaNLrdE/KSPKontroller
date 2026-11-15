@@ -1,0 +1,48 @@
+@startuml seq_vab_report
+title VAB ship report: built on editor events, cached, polled by revision
+skinparam sequenceMessageAlign left
+participant "GameEvents\n(editor, delta-v)" as Game
+participant "EditorShipReport\nUnity main thread" as Addon
+participant "ShipReportCache" as Cache
+participant "kRPC server\nservice KSPHMI" as Krpc
+participant "KrpcSource worker\nShipReportPoller" as HMI
+participant "Display thread" as UI
+activate Game
+Game -> Addon : onEditorShipModified /\nonDeltaVCalcsCompleted
+activate Addon
+Addon -> Addon : collect ShipConstruct and\nVesselDeltaV into ShipFacts
+Addon -> Cache : Publish(facts)
+activate Cache
+Cache --> Addon : true: text changed, revision + 1
+deactivate Cache
+Addon --> Game : handler returns
+deactivate Addon
+deactivate Game
+activate HMI
+HMI -> Krpc : KSPHMI.Revision()
+activate Krpc
+Krpc -> Cache : Revision
+activate Cache
+Cache --> Krpc : 58
+deactivate Cache
+Krpc --> HMI : 58
+deactivate Krpc
+alt revision differs from the last one fetched
+  HMI -> Krpc : KSPHMI.ShipReport()
+  activate Krpc
+  Krpc -> Cache : Report
+  activate Cache
+  Cache --> Krpc : "v=1 rev=58 ..."
+  deactivate Cache
+  Krpc --> HMI : report text
+  deactivate Krpc
+  HMI -> HMI : parse_ship_report (rejects v != 1)
+end
+HMI -> HMI : publish Snapshot.ship
+deactivate HMI
+activate UI
+UI -> UI : read latest Snapshot\ndraw the VAB report, or the static\ncards when Snapshot.ship is null
+deactivate UI
+note over HMI : Polled every 0.5 s while the context scene is vab.\nRpcError (no service, other scene): ship null, retry after 5 s.
+note over Addon : RPCs never touch KSP objects:\nthey only read the cache.
+@enduml

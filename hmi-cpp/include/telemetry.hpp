@@ -50,6 +50,29 @@ private:
 /// First line of an error, at most 160 characters (telemetry.py _short).
 std::string short_error(const std::exception& e);
 
+/// The VAB ship report over kRPC: KSPHMI.Revision() on every poll (about twice a second), KSPHMI.ShipReport()
+/// only when the revision changes. A server error (no KSPHMI service: KSPSerialIO.Hmi.dll or kRPC missing, wrong
+/// scene) or a report that does not parse clears the report, so the display keeps its static cards; a server error
+/// is retried after `retry_seconds`. Link errors (krpc::ConnectionError) propagate: the session reconnects as usual.
+class ShipReportPoller {
+public:
+    explicit ShipReportPoller(double retry_seconds = 5.0) : retry_seconds_(retry_seconds) {}
+    std::shared_ptr<const ShipReport> poll(krpc::Client& c, double now);
+    /// Forget the report and the revision (scene left, new connection).
+    void reset();
+    /// Why there is no report ("" while there is one or before the first poll).
+    const std::string& problem() const { return problem_; }
+    int fetches = 0;  ///< ShipReport calls made (tests)
+
+private:
+    void fail(const std::string& why, bool log_warning);
+    double retry_seconds_;
+    std::shared_ptr<const ShipReport> report_;
+    std::optional<uint32_t> revision_;
+    double retry_at_ = -1e9;
+    std::string problem_;
+};
+
 class KrpcSource : public Source {
 public:
     struct Options {
@@ -86,6 +109,7 @@ private:
     /// Skin field of the last context reply, refreshed about once a second in every state (telemetry thread).
     std::string context_skin_;
     double context_at_ = -1e9;
+    ShipReportPoller ship_;
 };
 
 constexpr double KERBIN_MU = 3.5316e12;

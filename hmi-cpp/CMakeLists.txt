@@ -38,6 +38,7 @@ add_library(ksphmi_core STATIC
   src/orbitview.cpp
   src/pb.cpp
   src/scenes.cpp
+  src/shipreport.cpp
   src/telemetry.cpp
   src/vec.cpp)
 target_include_directories(ksphmi_core PUBLIC include)
@@ -68,6 +69,7 @@ add_executable(ksphmi_render_tests tests/test_render.cpp)
 target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)
 add_test(NAME render COMMAND ksphmi_render_tests)
 target_compile_definitions(ksphmi_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(ksphmi_render_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(ksphmi_tests PRIVATE -Wno-missing-field-initializers)
 
 # setup-kiosk.sh edits the Pi's boot files with python3 (present on Raspberry Pi OS): test that part when we can.

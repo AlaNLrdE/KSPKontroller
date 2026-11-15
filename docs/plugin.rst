@@ -238,3 +238,71 @@ State exposed to other code
      - Latest decoded controls. ``VControlsOld`` holds what was already applied.
    * - ``KSPSerialPort.ControlReceived``
      - A new control packet is waiting to be applied.
+
+Editor ship report (``KSPSerialIO.Hmi.dll``)
+--------------------------------------------
+
+Since 0.19.4.0 the mod ships a second assembly, ``GameData/KSPSerialIO/Plugins/KSPSerialIO.Hmi.dll``, for the
+Raspberry Pi's VAB screen (:doc:`hmi`, *VAB ship report*). It adds the kRPC service ``KSPHMI`` and is the only
+part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has no kRPC dependency
+(``./ci verify`` checks the sources and the built DLL). Without kRPC in the game only the new DLL fails to load.
+
+* ``EditorShipReport`` (``KSPAddon`` for the editors) builds the report on Unity's main thread on
+  ``onEditorShipModified``, a craft load, a new craft, ``onDeltaVCalcsCompleted`` (KSP finished the stock
+  ``VesselDeltaV`` of ``EditorLogic.fetch.ship``) and ``onDeltaVAppAtmosphereChanged``, and stores it in
+  ``ShipReportCache``. The revision increases only when the text changes, and once more when the editor is left
+  (the report is then empty).
+* ``HmiService`` (``[KRPCService(Name = "KSPHMI", GameScene = GameScene.Editor)]``) has ``Revision() -> uint``
+  and ``ShipReport() -> string``. They only read the cache: no RPC touches KSP objects. No service ``Id`` is set,
+  so kRPC assigns one and cannot clash with another mod's.
+* ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
+  ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.
+
+Stage values come from ``DeltaVStageInfo``. The situation and body are the delta-v app's own
+(``DeltaVGlobals.fetch.deltaVAppValues``: ``body``, ``situation``), and each stage's delta-v and TWR are picked the
+way the app's ``GetSituationDeltaV`` / ``GetSituationTWR`` pick them: ``deltaVatASL`` / ``TWRASL`` for sea level,
+``deltaVActual`` / ``TWRActual`` for altitude, ``deltaVinVac`` / ``TWRVac`` for vacuum (0.19.4.0 always read the
+"actual" fields, which do not follow a vacuum selection: with Duna vacuum it reported 2328 m/s and TWR 5.15 for the
+Kerbal X's Poodle stage that the app showed as 2452 and 5.42). Burn time is ``stageBurnTime`` (fuel flow does not
+depend on pressure). Without app values (``DeltaVGlobals`` not ready) the old inference remains: the situation
+from ``onDeltaVAppAtmosphereChanged`` or the first stage with thrust, the body from ``thrust / (mass * TWR)``.
+
+The ``kasl=`` line (0.19.4.1) gives each stage's delta-v at Kerbin sea level whatever the app shows: each burn
+segment of ``deltaVCalcs`` scales its ``dVinVac`` by the flow-weighted specific impulse of its ``activeEngines`` at
+1 atm (``atmosphereCurve.Evaluate(1)``) over their vacuum Isp; KSP keeps propellant flow fixed, so the same masses
+burn and delta-v scales with Isp (``ShipMath.AtPressure``, tested with the Kerbal X's engines: 257, 2764 and
+631 m/s). When the app's body is the home body the plugin compares it with KSP's ``deltaVatASL`` and logs
+``ship report check: stage N Kerbin ASL x vs KSP y`` if they differ by more than 2 m/s.
+
+Stage events (what each stage fires) follow KSP's staging list (``StageManager.Instance.Stages``: each group's
+``inverseStageIndex`` and the parts of its icons, symmetry counterparts of grouped icons included), so a part
+fires where the player sees it; parts without an icon (a heat shield with staging off) fire nothing. The kind comes
+from the modules (engines, launch clamps, decouplers, parachutes, fairings), else from ``Part.stagingIcon``
+(``PARACHUTES``, ``DECOUPLER_*``, ``*_ENGINE``, ...). 0.19.4.0 used every part's ``inverseStage`` and missed the
+Kerbal X's stage-0 parachute; the root cause was not confirmed in the game, so a part whose staging-list stage
+differs from its ``inverseStage`` is logged once (``ship report check: <part> (chutes) staged in 0, inverseStage
+N``). Without a staging list (it is built a frame after a change) the parts' ``inverseStage`` is used.
+
+Crew counts only the editor crew manifest's kerbals in parts of the current ship (``PartCrewManifest.PartID``
+against ``Part.craftID``), at most each part's capacity: after New, KSP keeps the previous ship's manifest, and
+0.19.4.0 reported ``crew=3`` for an empty ship. If no manifest entry matches a part, the manifest's crew capped at
+the seats is used (``ShipMath.CrewAboard``).
+
+The facility is ``EditorDriver.editorFacility``, the building the player is in, as for the UDP context
+(``HmiContext``). Loading a craft from the other building's tab (``EditorLogic.ShipToLoadSelected`` calls
+``EditorLogic.SwitchEditor``, which re-inits the editor in ``VehicleAssemblyBuilding`` or ``SpaceplaneHangar``)
+moves the player to that building: kRPC logs ``Game scene switched to ... EditorVAB`` without a KSP scene change,
+and both the context and the report then say ``vab``. The Pi shows the SPH static cards only while the facility
+is ``sph`` (phase 1).
+
+The build writes ``KSPSerialIO.Hmi.xml`` (XML documentation of the service and procedures) next to the DLL, and
+``./ci install`` copies it to ``Plugins/``: kRPC reads it for its service documentation and otherwise warns
+``No documentation found for ...KSPSerialIO.Hmi.dll`` at every launch. ``./ci verify`` (*ship report: installed*)
+compares both files with the build.
+
+The project targets .NET 4.7.1, not 3.5 like ``KSPSerialIO.dll``: kRPC 0.7.0's assemblies are built for the
+.NET 4 runtime (``mscorlib`` 4.0), and KSP 1.12's Unity runs .NET 4.x code. It compiles against the install's
+``KSP_x64_Data/Managed`` (the old ``Includes/`` predate the stock delta-v API) and ``GameData/kRPC/KRPC.Core.dll``,
+read-only. There is deliberately no ``KSPAssemblyDependency`` on kRPC: kRPC declares no ``KSPAssembly``
+attribute, so KSP could refuse to load the DLL even with kRPC installed. The log tag is ``KSPSerialIO[HMI]``
+(``ship report rev N: ...`` on each change; a failure is logged once per distinct message).

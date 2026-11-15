@@ -84,6 +84,8 @@ std::string enc_sint32(int32_t v) {
     return varint(static_cast<uint32_t>((static_cast<uint32_t>(v) << 1) ^ static_cast<uint32_t>(v >> 31)));
 }
 
+std::string enc_uint32(uint32_t v) { return varint(v); }
+
 std::string enc_tuple(const std::vector<double>& values) {
     Writer w;
     for (double v : values) w.field_bytes(1, enc_double(v));
@@ -126,6 +128,14 @@ int32_t dec_sint32(std::string_view v) {
     size_t used;
     auto n = static_cast<uint32_t>(read_varint(v, used));
     return static_cast<int32_t>((n >> 1) ^ (~(n & 1) + 1));
+}
+
+uint32_t dec_uint32(std::string_view v) {
+    if (v.empty()) return 0;
+    size_t used;
+    uint64_t n = read_varint(v, used);
+    if (n > 0xFFFFFFFFu) throw DecodeError("uint32 value out of range");
+    return static_cast<uint32_t>(n);
 }
 
 std::vector<std::string> dec_items(std::string_view v) {

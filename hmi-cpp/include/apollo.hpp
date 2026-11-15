@@ -9,6 +9,7 @@
 
 #include <SDL.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -31,9 +32,12 @@ public:
     void draw(const Snapshot& s, double now);
     /// How often the static panel art was rebuilt (tests: once per screen kind, not per frame).
     int builds = 0;
+    /// Called for every header lamp evaluated live: its legend, and the lit colour or nullptr when unlit
+    /// (the flight LOW PWR / LOW FUEL lamps are only reported when their resource is low).
+    std::function<void(const std::string&, const Color*)> on_lamp;
 
 private:
-    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL };
+    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL, VAB };
     struct Key {
         int w = 0, h = 0, screen = -1;
         std::string scene;
@@ -53,6 +57,8 @@ private:
     /// NavBall zone: white group frame, the globe in a round metal bezel, segment readouts and SAS mode lamps.
     void navball(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void facility(Canvas& c, bool art, const Snapshot& s);
+    /// VAB editor ship report (Snapshot::ship): DELTA-V group, stage table, destination lamps, VEHICLE readouts.
+    void vab(Canvas& c, bool art, const Snapshot& s);
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
 
     Display& d_;

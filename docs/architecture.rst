@@ -84,6 +84,17 @@ The HMI has its own model; ``Snapshot`` is not a wire struct. Optional values di
 data from valid zero values. A failed optional marker or stage delta-v must not tear down a healthy
 vessel session. A flight snapshot older than three seconds is considered stale by the model helper.
 
+Editor ship to HMI
+~~~~~~~~~~~~~~~~~~
+
+#. In the VAB/SPH, ``KSPSerialIO.Hmi.dll`` builds a text report of the ship on editor and delta-v events,
+   on Unity's main thread, and caches it with a revision number.
+#. The kRPC mod serves it as the ``KSPHMI`` service (editor scene only); its procedures only read the cache.
+#. While the UDP context says ``vab``, the HMI's source thread polls ``KSPHMI.Revision`` twice a second over
+   the same RPC connection, fetches ``KSPHMI.ShipReport`` when the revision changes and publishes the parsed
+   report in ``Snapshot.ship``.
+#. The display draws it instead of the VAB cards; without it (no DLL, no kRPC, parse error) the cards stay.
+
 Execution and synchronization
 -----------------------------
 
@@ -147,6 +158,8 @@ Compatibility and design constraints
   field schema: changing a layout requires coordinated changes and size checks.
 * The kRPC protocol version is 1 for the supported 0.7.0 client/server pairing. The C++ implementation
   encodes protobuf directly and uses the subset needed by the HMI.
+* The ship report text has its own version (``v=1``); the Pi rejects other versions and ignores unknown line
+  kinds, so fields can be added without breaking an older display. Only ``KSPSerialIO.Hmi.dll`` depends on kRPC.
 * The serial transport can control the game. The HMI's UDP service is read-only context/discovery.
   The kRPC server is a wider external API; the HMI's read-only behavior does not restrict other clients.
 * Rendering must fit the target hardware budget. Static art and glyphs are cached; target measurements

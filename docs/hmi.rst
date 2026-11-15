@@ -92,7 +92,8 @@ node/engine parameters.
 
 Outside flight, dedicated preparation checklists are shown for Space Center, VAB, SPH, Mission Control,
 Astronaut Complex, Research & Development, Administration and Tracking Station. These are contextual guides,
-not live contract or crew lists. Flight data resumes automatically after launching or switching to a vessel.
+not live contract or crew lists; in the VAB a live ship report replaces them when the game serves one
+(`VAB ship report`_). Flight data resumes automatically after launching or switching to a vessel.
 
 KSPSerialIO 0.19.3.15 adds a read-only UDP context responder on port 50002. The Pi sends ``KSPHMI/1`` once per
 non-flight sample; the response is ``KSPHMI/1 <scene>``. Facility spawn/despawn events distinguish buildings
@@ -156,6 +157,171 @@ signals the worker without waiting for a system DNS lookup; its shared state sur
 
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
+
+VAB ship report
+---------------
+
+In the VAB the static cards are replaced by a live engineering report of the ship being built, when the game
+serves one. It comes from ``KSPSerialIO.Hmi.dll`` (KSPSerialIO 0.19.4.0), a separate assembly that adds the kRPC
+service ``KSPHMI`` (see :doc:`plugin`). The Pi uses its existing kRPC connection: no new port, no Arduino.
+
+.. uml:: diagrams/seq_vab_report.puml
+   :caption: Editor events build and cache the report; the Pi polls the revision and fetches the text on change.
+
+* ``KSPHMI.Revision() -> uint`` increases whenever the report's contents change. While the UDP context says
+  ``vab``, the telemetry thread calls it about twice a second (``ShipReportPoller``) and calls
+  ``KSPHMI.ShipReport() -> string`` only when it differs from the revision last fetched.
+* Both procedures exist only in the editor scene (kRPC ``GameScene.Editor``). A missing service (DLL not
+  installed, no kRPC), another scene or a report that does not parse leaves ``Snapshot.ship`` empty: the static
+  VAB cards stay, the session is not affected, and server errors are retried after 5 s. The log says
+  ``ship report unavailable (static VAB cards): ...`` once per distinct reason and
+  ``ship report: revision N, <name>, <situation>, K stages`` at INFO for every newly fetched revision (one line per
+  revision, so a live session leaves a trace of each change). The SPH keeps its cards until phase 3.
+
+Report text, format version 1 (``hmi-cpp/include/shipreport.hpp``; the shared fixture is
+``hmi-cpp/tests/data/ship_report_v1.txt``):
+
+.. code-block:: text
+
+   v=1 rev=57 facility=vab name=Kerbal%20X sit=kerbin_asl
+   mass=18.40 dry=6.10 cost=23400 funds=41200 parts=42 crew=1 seats=3 size=11.2,3.8 engines=5
+   st=2,1720,1960,1.63,48,engines:3,clamps:1
+   st=1,1890,2010,1.41,71,engines:1,decouplers:1
+   st=0,1210,1340,0.62,52,engines:1,decouplers:1,chutes:1
+
+* One ``key=value`` group per field, separated by single spaces; one line per group kind. Line 1: version,
+  revision, facility, name, delta-v situation (``<body>_<asl|alt|vac>``). Line 2: wet and dry mass (t), cost,
+  funds (absent outside career games), parts, crew and seats, height and width (m), engines.
+* ``st=`` lines in firing order: stage number, delta-v in the situation of KSP's editor delta-v app, delta-v in
+  vacuum (m/s), TWR in that situation, burn time (s), then ``kind:count`` for what the stage fires (engines,
+  decouplers, chutes, clamps, fairings). Until KSP finishes its first delta-v calculation the report has a single
+  ``dv=pending`` line instead, and the screen says it is calculating.
+* ``kasl=stage:dv,...`` (plugin 0.19.4.1 and later, optional): each stage's delta-v at Kerbin sea level, computed
+  independently of the situation selected in KSP's delta-v app, so the mission delta-v below never depends on the
+  body the player is looking at. Older plugins do not send it; a malformed ``kasl=`` rejects the report.
+* Text values are percent-encoded UTF-8: every byte outside ``A-Z a-z 0-9 . _ ~ -`` becomes ``%XX``, so spaces,
+  ``=``, ``,`` and ``%`` never appear raw (``Kerbal X`` is ``Kerbal%20X``). Numbers use ``.`` as the decimal
+  separator; ``nan`` is an unknown value.
+* The Pi rejects any ``v`` other than 1 and any malformed known field (the whole report: a half-read report
+  could mislead), and ignores keys and line kinds it does not know: phase 2 adds ``chk=`` and ``lim=`` lines.
+
+The screen (both skins): the delta-v total in the report's situation (also in the header), exactly as KSP's own
+app adds the stages, so it can be compared with the game; the stage table (delta-v, vacuum delta-v, TWR, burn time,
+what fires); the destinations; and the vehicle summary.
+
+**Mission delta-v.** Summing every stage in one situation badly understates upper stages (the Kerbal X's stage 2
+has 631 m/s at sea level and 2452 m/s in vacuum), so destinations, the target margin and the target tick use a
+mission delta-v instead: stages in firing order count at Kerbin sea level while the sea-level delta-v already
+counted is below ``[vab] atmosphere_dv`` (1200 m/s, the ascent through the lower atmosphere), and in vacuum after
+that. For the stock Kerbal X: 257 + 304 + 372 + 2764 (sea level) + 2452 (vacuum) = 6149 m/s, against KSP's 4328 at
+sea level. The sea-level figures come from the ``kasl=`` line, whatever body the app shows; with an older plugin
+(no ``kasl=``) the app's situation values stand in, which is exact on Kerbin sea level, and the screen says
+``NO KERBIN ASL DATA``. Both skins label the basis (``MISSION ΔV 6149 · ASCENT KERBIN ASL, UPPER STAGES VAC``);
+apollo shows it as the MISSION ΔV readout beside TOTAL ΔV and paints the stage-stack bands as each stage's share
+of it, classic as a line beside the vacuum total and above the destinations.
+
+**Target.** It follows KSP's delta-v app: on Kerbin it is the configured ``[vab] target``; on another body it is
+that body's ``<body>_landing`` for sea level or altitude and ``<body>_orbit`` for vacuum, else the other one of that
+body, else the configured target. The screen says why (``TARGET DUNA ORBIT · FROM KSP ΔV APP`` or
+``· FROM CONFIG``). Reachable destinations are green, the others red, the target outlined.
+
+**Empty craft and calculating.** KSP never computes delta-v for a ship without parts (the editor after New), so
+``parts=0`` with ``dv=pending`` shows ``EMPTY CRAFT · add parts to see the delta-v report`` instead of a
+calculating state that would never end. While KSP computes a real ship, a framed amber ``CALCULATING ΔV`` plate
+covers the stage table (and apollo lights its ΔV CALC lamp).
+
+The apollo skin keeps its static art (eight stage rows, destination lamp housings, the target ring and the target
+caption) in the cached panel texture, rebuilt only when the size, the ``[vab]`` settings or the chosen target
+change.
+
+TWR colours follow the ``[vab]`` thresholds. Only stages with delta-v are judged; the launch stage is the first one
+in firing order with delta-v. Launch stage: red below ``launch_twr_min`` (1.0, it cannot leave the pad), amber below
+``launch_twr_warn`` (1.2). Upper stages: amber below ``upper_twr_warn`` (0.8). Apollo shows them as red/amber
+segment digits and, in the VAB header, as the LAUNCH TWR and UPPER TWR lamps. The flight annunciators (SAS, RCS,
+PE ATMO, LOW FUEL, ...) are not shown in the VAB: only UPLINK / NO DATA / NO LINK and the two TWR lamps; the other
+housings stay blank for the phase-2 checklist lamps.
+
+Destinations and the highlighted target are settings (``[vab]`` in ``config.toml``; ``config.local.toml`` may add
+destinations or change their delta-v):
+
+.. code-block:: toml
+
+   [vab]
+   target = "mun_landing"      # while the app shows Kerbin
+   launch_twr_min = 1.0        # launch stage red below
+   launch_twr_warn = 1.2       # launch stage amber below
+   upper_twr_warn = 0.8        # upper stages amber below
+   atmosphere_dv = 1200        # mission delta-v: sea-level ascent before stages count in vacuum
+
+   [vab.destinations]          # m/s from the Kerbin launch pad, at most 12
+   kerbin_orbit = 3400
+   minmus_orbit = 4490
+   mun_orbit = 4570
+   minmus_landing = 4670
+   ike_orbit = 4940
+   duna_orbit = 5090
+   mun_landing = 5150
+   ike_landing = 5330
+   eve_orbit = 5850
+   dres_orbit = 6260
+   duna_landing = 6540
+   dres_landing = 6690
+
+Names use ``a-z``, ``0-9`` and ``_`` (shown upper case, ``_`` as a space); values must be between 0 and 100000, as
+must ``atmosphere_dv`` (0 counts every stage in vacuum). A target that is not a destination is a configuration
+error naming the key and the file, as is a TWR threshold that is not a number between 0 and 100 or a
+``launch_twr_min`` above ``launch_twr_warn``.
+
+The shipped values are cumulative from the pad, from the widely used community delta-v map of the Kerbol system
+(KSP 1.x, by u/Kowgan and contributors), **without aerobraking**: low Kerbin orbit 3400; Mun transfer 860, low orbit
+310, landing 580; Minmus transfer 930, low orbit 160, landing 180; Kerbin escape 950, then Duna transfer 130,
+capture 250, low orbit 360, landing 1450 (Ike from the Duna capture: 30, low orbit 180, landing 390); Eve transfer
+90, capture 80, low orbit 1330; Dres transfer 610, low orbit 1300, landing 430. Aerobraking at Duna or Eve saves most
+of their capture and landing figures. Each body other than Kerbin has an orbit and a landing entry (Eve only its
+orbit: landing there means aerobraking), so the app-driven target always finds one. The earlier table's
+``mun_flyby = 4310`` did not match the map (3400 + 860 = 4260); the flybys and keostationary were dropped to stay
+within the twelve destinations both skins lay out.
+
+Without the game: ``./ci sim --scene vab --ship kerbal_x`` (or ``pending``, ``heavy``, ``empty``, ``none``) serves sample ships
+(:doc:`simulator`). Review screenshots of both skins: ``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes
+``classic_vab*.png`` and ``apollo_vab*.png`` from the shared sample and from the live stock Kerbal X reports in
+``hmi-cpp/tests/data/ship_report_kerbal_x*.txt`` (app on Kerbin sea level and on Duna vacuum; the latter with the
+values KSP's app showed), plus the empty-craft and calculating states.
+
+Facility screens roadmap
+------------------------
+
+Three facility screens were designed and approved on 2026-11-15 (proposals with mockups of both skins, written
+in Spanish: `VAB <https://claude.ai/artifact/5FMkLW25dQJmWzRf6r291g>`_, `Tracking Station
+<https://claude.ai/artifact/8KnQXpYxJKR2x4R8dCPerd>`_, `Astronaut Complex
+<https://claude.ai/artifact/BMZVd6PmfMXHEiUBtaFhsv>`_). All three extend the same kRPC service ``KSPHMI`` in
+``KSPSerialIO.Hmi.dll``; each report carries a format version and a revision, and the Pi falls back to the static
+cards when a procedure is missing. Implement them in this order, each merged before the next starts:
+
+#. **VAB, phase 1** (this section above). Phase 2: live pre-launch checklist (control, power, parachute, antenna,
+   decouplers, TWR) and facility limits (parts, mass, height, width vs. VAB/launch pad level; cost vs. funds),
+   with the apollo lamps NO CHUTE / UPPER TWR / PARTS LIMIT. Phase 3: thrust offset and CoM shift full to dry,
+   and the SPH variant (CoM vs. CoL).
+#. **VAB screens per editor mode** (decided by the user 2026-11-15; a proposal with mockups of both skins is still
+   to be made and approved). One Pi screen per KSP editor mode: *Construction* (the current delta-v report),
+   *Action groups* (custom groups 1-10 and the stock groups Stage, Gear, Lights, Brakes, Abort, SAS, RCS with
+   their actions, and which Arduino panel control drives each in flight), *Crew* (seats per part, assigned kerbals
+   with role and level, free seats) and *Cargo* (inventories: stored parts, mass and volume against capacity).
+   Navigation: the Pi follows the editor mode automatically (EditorLogic's editor screen), and the Arduino SAS and
+   RCS buttons step to the next / previous screen while in the VAB. That needs the plugin to open the serial link
+   in the editor too (today ``KSPIO`` runs only in ``Startup.Flight``), so it must be tested with the board. Order:
+   after VAB phase 1 is merged, before Tracking Station phase 1.
+#. **Tracking Station, phase 1**: ``FleetRevision``/``FleetReport`` (next events of every vessel by absolute UT:
+   maneuver nodes with delta-v, Ap/Pe, SOI changes, stock alarms; fleet alerts: Pe in atmosphere or under the
+   terrain, no CommNet link, low or empty EC, stranded crew; debris excluded) and
+   ``SelectionRevision``/``SelectionReport`` (selected vessel with the ORBIT diagram). The Pi computes
+   countdowns from the game clock, so the report does not change every second. Phase 2: selected body, transfer
+   windows, fleet counts, delta-v left only when KSP has computed it. Thresholds, event count and transfer
+   targets in ``config.toml``. To confirm in game: SOI patches of unloaded vessels and the selection event.
+#. **Astronaut Complex, phase 1**: ``CrewRevision``/``CrewReport`` in the Space Center scene (roster with role,
+   level, XP to next level and status or vessel; free crew by role; best available per role with a fixed table of
+   what each stock level unlocks; capacity vs. complex level, next hire cost, applicants; lamps CREW LOST,
+   CREW CAP, NO PILOT). Phase 2: kerbals close to the next level, XP pending recovery, suggested mission.
 
 Settings
 --------

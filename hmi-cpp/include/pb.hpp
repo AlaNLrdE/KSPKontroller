@@ -61,6 +61,7 @@ std::string enc_bool(bool v);
 std::string enc_string(std::string_view s);
 std::string enc_object(uint64_t id);
 std::string enc_sint32(int32_t v);
+std::string enc_uint32(uint32_t v);
 std::string enc_tuple(const std::vector<double>& values);  // Tuple of doubles
 
 double dec_double(std::string_view v);
@@ -69,6 +70,7 @@ bool dec_bool(std::string_view v);
 std::string dec_string(std::string_view v);
 uint64_t dec_object(std::string_view v);  // 0 = null
 int32_t dec_sint32(std::string_view v);
+uint32_t dec_uint32(std::string_view v);  // an empty value is 0
 /// Items of a List or Tuple message, each still encoded.
 std::vector<std::string> dec_items(std::string_view v);
 std::vector<double> dec_tuple(std::string_view v);  // Tuple of doubles

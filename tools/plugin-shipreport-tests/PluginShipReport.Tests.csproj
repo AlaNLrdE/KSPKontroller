@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The editor ship report text (KSPSerialIO.Hmi) without KSP or kRPC: ShipReportFormat.cs has no game types. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\ShipReportFormat.cs" Link="ShipReportFormat.cs" />
+  </ItemGroup>
+</Project>
