@@ -359,7 +359,10 @@ ApolloSkin::Key ApolloSkin::key_for(const Snapshot& s) const {
         }
         if (!s.systems) k.resources.push_back(-1);
     } else if (s.state == State::NoVessel && s.scene == "vab" && s.ship) {
-        k.screen = VAB;  // the art depends only on the size and the [vab] config, never on the ship
+        // the art depends on the size, the [vab] config and the highlighted destination (engraved), never on the rest
+        k.screen = VAB;
+        const TargetChoice t = d_.vab_target(s.ship.get());
+        if (t.destination) k.scene = t.destination->key + (t.from_app ? "@app" : "@config");
     } else if (s.state == State::NoVessel && find_view(s.scene)) {
         k.screen = FACILITY, k.scene = s.scene;
     } else {
@@ -813,10 +816,14 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
     const double left_w = c.w * 0.44, x0 = 2.5 * u, metric_gap = .8 * u;
     const double col_w = (left_w - x0 - metric_gap) / 2, row_h = 7 * u;
     const double x1 = left_w + 2.4 * u, right_r = c.w - 2.5 * u, rw = right_r - x1;
-    const Destination* target = d_.vab_target();
+    const TargetChoice choice = d_.vab_target(r);
+    const Destination* target = choice.destination;
     const auto& dests = d_.config().vab.destinations;
     const bool pending = r && r->delta_v_pending;
-    const double total = r ? r->total_delta_v() : 0, vac = r ? r->total_delta_v_vac() : 0;
+    // TOTAL is KSP's own figure (the app's situation); the mission delta-v judges target, margin and destinations
+    const double total = r ? r->total_delta_v() : 0;
+    const MissionDeltaV mission = r ? mission_delta_v(*r, d_.config().vab.atmosphere_dv) : MissionDeltaV{};
+    const double mtotal = mission.total;
     auto clamp_dv = [](double v) { return std::isfinite(v) ? fmt::str("%.0f", std::min(std::fabs(v), 99999.0)) : "-----"; };
 
     // ---- DELTA-V group: totals, target and margin
@@ -824,17 +831,17 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
     if (art) frame(c, dv_frame, "DELTA-V");
     else if (d_.on_vab_panel) d_.on_vab_panel("delta-v", dv_frame);
     Color total_color = theme::VALUE;
-    if (!pending && target) total_color = total >= target->delta_v ? theme::GOOD : theme::BAD;
+    if (!pending && target) total_color = mtotal >= target->delta_v ? theme::GOOD : theme::BAD;
     const std::string target_name = target ? "TARGET " + destination_label(target->key) : "NO TARGET";
     tile(c, art, d_, Rect::f(x0, top, col_w, row_h), "TOTAL \xCE\x94V", "888888",
-         {pending ? "-----" : clamp_dv(total), "M/S"}, pending ? theme::WARN : total_color);
-    tile(c, art, d_, Rect::f(x0 + col_w + metric_gap, top, col_w, row_h), "VACUUM \xCE\x94V", "888888",
-         {pending ? "-----" : clamp_dv(vac), "M/S"}, pending ? theme::WARN : theme::VALUE);
+         {pending ? "-----" : clamp_dv(total), "M/S"}, pending ? theme::WARN : theme::VALUE);
+    tile(c, art, d_, Rect::f(x0 + col_w + metric_gap, top, col_w, row_h), "MISSION \xCE\x94V", "888888",
+         {pending ? "-----" : clamp_dv(mtotal), "M/S"}, pending ? theme::WARN : total_color);
     const double y2 = top + row_h + metric_gap;
     tile(c, art, d_, Rect::f(x0, y2, col_w, row_h), target_name.c_str(), "888888",
          {target ? clamp_dv(target->delta_v) : "-----", "M/S"}, target ? theme::VALUE : theme::WARN);
     std::string margin = "-----";
-    if (!pending && target) margin = (total < target->delta_v ? "-" : "") + clamp_dv(total - target->delta_v);
+    if (!pending && target) margin = (mtotal < target->delta_v ? "-" : "") + clamp_dv(mtotal - target->delta_v);
     tile(c, art, d_, Rect::f(x0 + col_w + metric_gap, y2, col_w, row_h), "MARGIN", "888888", {margin, "M/S"},
          pending || !target ? theme::WARN : total_color);
 
@@ -848,18 +855,19 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
         c.rect(well, WELL);
         lamp(c, calc, "\xCE\x94V CALC", 1.3f, true, nullptr);
     } else {
-        if (pending) {
+        if (pending && !r->empty_craft()) {
             Color amber = L_AMBER;
             lamp(c, calc, "\xCE\x94V CALC", 1.3f, false, &amber);
         }
-        const double scale = std::max({total, target ? target->delta_v : 0.0, 1.0}) * 1.08;
-        if (!pending && total > 0) {
+        // the bands are each stage's share of the mission delta-v, so the target pointer compares like with like
+        const double scale = std::max({mtotal, target ? target->delta_v : 0.0, 1.0}) * 1.08;
+        if (!pending && mtotal > 0) {
             static const Color bands[] = {seg::GREEN, seg::AMBER, Color{120, 200, 255}, L_WHITE, Color{230, 140, 230}};
             double x = well.x;
             int index = 0;
-            for (const auto& st : r->stages) {
-                if (!std::isfinite(st.delta_v) || st.delta_v <= 0) continue;
-                const double w = well.w * st.delta_v / scale;
+            for (double share : mission.per_stage) {
+                if (share <= 0) continue;
+                const double w = well.w * share / scale;
                 c.fill_rect(float(x), float(well.y + .4 * u), float(std::max(1.0, w - .25 * u)), float(well.h - .8 * u),
                             mix(bands[index++ % 5], WELL, .25));
                 x += w;
@@ -896,9 +904,18 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
         }
     }
     if (!art) {
-        if (pending) {
-            label(c, "KSP IS CALCULATING THE STAGE DELTA-V", fit(c, {"KSP IS CALCULATING THE STAGE DELTA-V"}, 1.7f, left_w - x0),
-                  (x0 + left_w) / 2, row0 + ROWS * pitch + .6 * u, Anchor::MidTop, L_AMBER, false);
+        if (pending) {  // a plate over the empty stage rows, so the state cannot be missed
+            const bool empty = r->empty_craft();
+            const std::string head = empty ? "EMPTY CRAFT" : "CALCULATING \xCE\x94V",
+                              note = empty ? "ADD PARTS TO SEE THE DELTA-V REPORT" : "KSP IS COMPUTING THE STAGE DELTA-V";
+            const Rect plate = Rect::f(x0, row0 + .5 * pitch, left_w - x0 - .6 * u, 3 * pitch);
+            const float edge = std::max(2.0f, rnd(.2 * u));
+            c.rounded_rect(plate, rnd(.6 * u), empty ? DIM_INK : L_AMBER);
+            c.rounded_rect(plate.inflate(-edge, -edge), rnd(.5 * u), Color{24, 25, 26});
+            label(c, head, std::min(3.2f, fit(c, {head}, 3.2f, plate.w - 2 * u)), plate.centerx(), plate.y + .9 * pitch,
+                  Anchor::Center, empty ? INK : L_AMBER, false);
+            label(c, note, std::min(1.7f, fit(c, {note}, 1.7f, plate.w - 2 * u)), plate.centerx(), plate.y + 2.1 * pitch,
+                  Anchor::Center, empty ? DIM_INK : INK, false);
         } else if (r->stages.empty()) {
             label(c, "NO STAGES", 1.7f, (x0 + left_w) / 2, row0 + ROWS * pitch + .6 * u, Anchor::MidTop, DIM_INK, false);
         }
@@ -928,7 +945,8 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
     const int n = std::min(static_cast<int>(dests.size()), MAX_DESTINATIONS);
     const double lamp_gap = .9 * u, lamp_w = (rw - 2.4 * u - (COLS - 1) * lamp_gap) / COLS, lamp_h = 4.0 * u;
     const double dest_top = top + 1.4 * u, dest_rows = std::max(1, (MAX_DESTINATIONS + COLS - 1) / COLS);
-    const Rect dest_frame = Rect::f(x1 - .8 * u, top - .9 * u, rw + 1.3 * u, 2.3 * u + dest_rows * (lamp_h + lamp_gap) + .4 * u);
+    const double notes_y = dest_top + dest_rows * (lamp_h + lamp_gap) + .2 * u;  // two live lines under the lamps
+    const Rect dest_frame = Rect::f(x1 - .8 * u, top - .9 * u, rw + 1.3 * u, 2.3 * u + dest_rows * (lamp_h + lamp_gap) + 5.0 * u);
     std::vector<std::string> legends;
     for (int i = 0; i < n; ++i) legends.push_back(destination_label(dests[i].key) + "  " + fmt::str("%.0f", dests[i].delta_v));
     const float legend_units = legends.empty() ? 1.4f : std::min(1.4f, fit(c, legends, 1.4f, lamp_w - 1.8 * u));
@@ -947,9 +965,18 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
     } else {
         if (d_.on_vab_panel) d_.on_vab_panel("destinations", dest_frame);
         for (int i = 0; i < n && !pending; ++i) {
-            Color lit = total >= dests[i].delta_v ? L_GREEN : L_RED;
+            Color lit = mtotal >= dests[i].delta_v ? L_GREEN : L_RED;
             lamp(c, lamp_rect(i), legends[i], legend_units, false, &lit);
         }
+        const double room = rw - .8 * u;
+        const std::string basis = "MISSION \xCE\x94V " + (pending ? std::string("-----") : clamp_dv(mtotal)) + " M/S  \xC2\xB7  " +
+                                  mission_basis(*r, mission);
+        label(c, basis, std::min(1.4f, fit(c, {basis}, 1.4f, room)), x1 + .4 * u, notes_y, Anchor::TopLeft,
+              mission.kerbin_asl ? INK : L_AMBER, false);
+        const std::string why = target ? "TARGET " + destination_label(target->key) +
+                                             (choice.from_app ? "  \xC2\xB7  FROM KSP \xCE\x94V APP" : "  \xC2\xB7  FROM CONFIG")
+                                       : std::string("NO TARGET  \xC2\xB7  SET [VAB] TARGET IN CONFIG.TOML");
+        label(c, why, std::min(1.4f, fit(c, {why}, 1.4f, room)), x1 + .4 * u, notes_y + 2.2 * u, Anchor::TopLeft, DIM_INK, false);
     }
 
     // ---- VEHICLE: segment readouts

@@ -165,6 +165,10 @@ void apply_vab(Config& c, const TomlValues& m) {
     if (twr.launch_bad > twr.launch_warn)
         throw std::runtime_error("vab.launch_twr_min must not exceed vab.launch_twr_warn");
     c.vab.twr = twr;
+    const double atmosphere = to_double(m, "vab.atmosphere_dv", c.vab.atmosphere_dv);
+    if (!std::isfinite(atmosphere) || atmosphere < 0 || atmosphere > 100000)
+        throw std::runtime_error("vab.atmosphere_dv must be a delta-v in m/s between 0 and 100000");
+    c.vab.atmosphere_dv = atmosphere;
     c.vab.target = to_string(m, "vab.target", c.vab.target);
     if (!c.vab.target.empty() &&
         std::none_of(c.vab.destinations.begin(), c.vab.destinations.end(),

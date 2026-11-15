@@ -648,12 +648,17 @@ TEST(apollo_review_screenshots_on_request) {
 // ------------------------------------------------------------------------------------------- VAB ship report
 namespace {
 std::shared_ptr<const ShipReport> sample_ship(const std::string& variant = "") {
-    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/ship_report_v1.txt");
+    // kerbalx / duna: the live stock Kerbal X with KSP's app on Kerbin sea level / Duna vacuum
+    const std::string file = variant == "kerbalx"  ? "ship_report_kerbal_x.txt"
+                             : variant == "duna"   ? "ship_report_kerbal_x_duna.txt"
+                                                   : "ship_report_v1.txt";
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/" + file);
     std::stringstream buf;
     buf << in.rdbuf();
     auto r = parse_ship_report(buf.str());
     if (!r) return nullptr;
     if (variant == "pending") r->delta_v_pending = true, r->stages.clear();
+    if (variant == "empty") r->delta_v_pending = true, r->stages.clear(), r->parts = 0, r->crew = 0, r->seats = 0;
     if (variant == "many") {  // more stages than rows, a long name, a big ship: everything must still fit
         r->name = "An extremely long ship name that is never going to fit on any header at all, really";
         for (int i = 3; i < 14; ++i) r->stages.push_back({i, 12345, 23456, 12.34, 9999, {{"engines", 12}, {"decouplers", 4}, {"chutes", 8}}});
@@ -681,7 +686,7 @@ TEST(vab_report_renders_inside_its_panels_in_both_skins) {
             s.display->on_vab_panel = [&](const std::string& name, const Rect& r) { panels.emplace_back(name, r); };
             std::vector<std::pair<std::string, Rect>> texts;
             s.canvas->on_text = [&](const std::string& label, const Rect& r) { texts.emplace_back(label, r); };
-            for (const char* variant : {"", "pending", "many", "heavy"}) {
+            for (const char* variant : {"", "pending", "many", "heavy", "kerbalx", "duna", "empty"}) {
                 panels.clear(), texts.clear();
                 s.display->draw(vab(sample_ship(variant)), monotonic());
                 CHECK(!panels.empty());
@@ -770,7 +775,7 @@ TEST(vab_review_screenshots_on_request) {
     if (!dir) return;
     for (const char* skin : {"classic", "apollo"}) {
         Screen s(2520, 1680, skin, repo_config());
-        for (const char* variant : {"", "pending", "heavy"}) {
+        for (const char* variant : {"", "pending", "heavy", "kerbalx", "duna", "empty"}) {
             s.display->draw(vab(sample_ship(variant)), monotonic());
             std::string name = std::string(dir) + "/" + skin + "_vab" + (*variant ? std::string("_") + variant : "") + ".png";
             CHECK(save_png(s.surface, name));

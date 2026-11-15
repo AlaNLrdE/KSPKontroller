@@ -77,6 +77,72 @@ double finite_sum(const std::vector<StageReport>& stages, double StageReport::*f
 double ShipReport::total_delta_v() const { return finite_sum(stages, &StageReport::delta_v); }
 double ShipReport::total_delta_v_vac() const { return finite_sum(stages, &StageReport::delta_v_vac); }
 
+namespace {
+size_t situation_split(const std::string& s) {
+    for (const char* suffix : {"_asl", "_alt", "_vac"})
+        if (s.size() > 4 && s.compare(s.size() - 4, 4, suffix) == 0) return s.size() - 4;
+    return std::string::npos;
+}
+}  // namespace
+
+std::string ShipReport::situation_body() const {
+    const size_t at = situation_split(situation);
+    return at == std::string::npos ? std::string() : situation.substr(0, at);
+}
+
+std::string ShipReport::situation_mode() const {
+    const size_t at = situation_split(situation);
+    return at == std::string::npos ? std::string() : situation.substr(at + 1);
+}
+
+MissionDeltaV mission_delta_v(const ShipReport& report, double atmosphere_dv) {
+    MissionDeltaV m;
+    m.kerbin_asl = report.has_kerbin_asl || report.situation == "kerbin_asl";
+    m.per_stage.assign(report.stages.size(), 0.0);
+    if (report.delta_v_pending) return m;
+    double ascent = 0;  // delta-v of the stages already counted at sea level
+    for (size_t i = 0; i < report.stages.size(); ++i) {
+        const StageReport& st = report.stages[i];
+        // without a kasl= value the situation value stands in (exact when the app shows Kerbin sea level)
+        double asl = std::isfinite(st.delta_v_kerbin_asl) ? st.delta_v_kerbin_asl : st.delta_v;
+        if (!std::isfinite(asl) || asl < 0) asl = 0;
+        const double vac = std::isfinite(st.delta_v_vac) && st.delta_v_vac > 0 ? st.delta_v_vac : 0;
+        if (asl <= 0 && vac <= 0) continue;  // a stage that burns nothing
+        double v = vac;
+        if (ascent < atmosphere_dv) {
+            v = asl;
+            ascent += asl;
+        }
+        m.per_stage[i] = v;
+        m.total += v;
+    }
+    return m;
+}
+
+std::string mission_basis(const ShipReport& report, const MissionDeltaV& mission) {
+    if (mission.kerbin_asl) return "ASCENT KERBIN ASL, UPPER STAGES VAC";
+    return "ASCENT " + report.situation_label() + " (NO KERBIN ASL DATA), UPPER STAGES VAC";
+}
+
+TargetChoice choose_target(const ShipReport* report, const std::vector<Destination>& destinations,
+                           const std::string& configured) {
+    auto find = [&](const std::string& key) -> const Destination* {
+        for (const auto& d : destinations)
+            if (d.key == key) return &d;
+        return nullptr;
+    };
+    if (report) {
+        const std::string body = report->situation_body(), mode = report->situation_mode();
+        if (!body.empty() && body != "kerbin") {
+            const bool vac = mode == "vac";
+            const Destination* d = find(body + (vac ? "_orbit" : "_landing"));
+            if (!d) d = find(body + (vac ? "_landing" : "_orbit"));
+            if (d) return {d, true};
+        }
+    }
+    return {find(configured), false};
+}
+
 std::string ShipReport::situation_label() const {
     static const std::pair<const char*, const char*> suffixes[] = {
         {"_asl", "SEA LEVEL"}, {"_alt", "ALTITUDE"}, {"_vac", "VACUUM"}};
@@ -161,6 +227,7 @@ std::string events_text(const StageReport& stage) {
 
 std::optional<ShipReport> parse_ship_report(const std::string& text, std::string* error) {
     ShipReport r;
+    std::vector<std::pair<int, double>> kasl;
     try {
         if (text.empty()) throw Fail{"empty report"};
         std::vector<std::string> lines = split(text, '\n');
@@ -232,11 +299,26 @@ std::optional<ShipReport> parse_ship_report(const std::string& text, std::string
                         st.events.push_back({*kind, static_cast<int>(k)});
                     }
                     r.stages.push_back(std::move(st));
+                } else if (key == "kasl") {
+                    // stage:dv pairs, matched to the st= lines once the whole report is read
+                    for (const std::string& pair : split(value, ',')) {
+                        const size_t colon = pair.find(':');
+                        long long stage;
+                        double v;
+                        if (colon == std::string::npos || !integer(pair.substr(0, colon), 0, 1000, stage) ||
+                            !number(pair.substr(colon + 1), v))
+                            throw bad();
+                        kasl.emplace_back(static_cast<int>(stage), v);
+                    }
+                    r.has_kerbin_asl = true;
                 }
                 // anything else: a field or line kind of a later phase (chk=, lim=), ignored
             }
         }
         if (!header) throw Fail{"no version field"};
+        for (const auto& [stage, v] : kasl)
+            for (auto& st : r.stages)
+                if (st.stage == stage) st.delta_v_kerbin_asl = v;
         if (r.delta_v_pending && !r.stages.empty()) throw Fail{"dv=pending together with st= lines"};
     } catch (const Fail& f) {
         if (error) *error = f.what;

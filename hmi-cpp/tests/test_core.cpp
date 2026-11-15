@@ -1233,24 +1233,37 @@ TEST(config_vab_destinations_and_target) {
     CHECK(cfg.vab.destinations.size() >= 4 && static_cast<int>(cfg.vab.destinations.size()) <= MAX_DESTINATIONS);
     std::map<std::string, double> by_key;
     for (const auto& d : cfg.vab.destinations) by_key[d.key] = d.delta_v;
+    CHECK_EQ(static_cast<int>(cfg.vab.destinations.size()), MAX_DESTINATIONS);
+    CHECK_EQ(cfg.vab.atmosphere_dv, 1200.0);
+    // community delta-v map, cumulative from the pad, no aerobraking (config.toml comment, docs/hmi.rst)
     CHECK_EQ(by_key["kerbin_orbit"], 3400.0);
-    CHECK_EQ(by_key["mun_flyby"], 4310.0);
-    CHECK_EQ(by_key["minmus_landing"], 4670.0);
+    CHECK_EQ(by_key["mun_orbit"], 4570.0);
     CHECK_EQ(by_key["mun_landing"], 5150.0);
+    CHECK_EQ(by_key["minmus_orbit"], 4490.0);
+    CHECK_EQ(by_key["minmus_landing"], 4670.0);
+    CHECK_EQ(by_key["duna_orbit"], 5090.0);
+    CHECK_EQ(by_key["duna_landing"], 6540.0);
+    // every body other than Kerbin has an orbit and, except Eve (aerobraking), a landing for the app-driven target
+    for (const char* body : {"mun", "minmus", "duna", "ike", "dres"})
+        CHECK(by_key.count(std::string(body) + "_orbit") && by_key.count(std::string(body) + "_landing"));
     for (size_t i = 1; i < cfg.vab.destinations.size(); ++i)
         CHECK(cfg.vab.destinations[i - 1].delta_v <= cfg.vab.destinations[i].delta_v);  // sorted for display
     // a local file adds a destination, changes another and picks it as the target
-    apply_toml(cfg, parse_toml("[vab]\ntarget = \"duna_landing\"\n[vab.destinations]\nduna_landing = 5900\nmun_flyby = 4300\n"));
+    apply_toml(cfg, parse_toml("[vab]\ntarget = \"duna_landing\"\natmosphere_dv = 900\n[vab.destinations]\n"
+                               "duna_landing = 9000\nmun_orbit = 4300\n"));
     CHECK_EQ(cfg.vab.target, "duna_landing");
+    CHECK_EQ(cfg.vab.atmosphere_dv, 900.0);
     CHECK_EQ(cfg.vab.destinations.back().key, "duna_landing");
     by_key.clear();
     for (const auto& d : cfg.vab.destinations) by_key[d.key] = d.delta_v;
-    CHECK_EQ(by_key["mun_flyby"], 4300.0);
+    CHECK_EQ(by_key["mun_orbit"], 4300.0);
     // dotted table names are parsed part by part
     CHECK_EQ(parse_toml("[ vab . destinations ]\nx = 1\n").count("vab.destinations.x"), size_t(1));
     for (const char* bad : {"[vab]\ntarget = \"nowhere\"\n", "[vab.destinations]\nmoon = 0\n",
                             "[vab.destinations]\nmoon = -5\n", "[vab.destinations]\nmoon = \"far\"\n",
-                            "[vab.destinations]\nMoon = 100\n", "[vab.destinations]\nmoon = 1e9\n"}) {
+                            "[vab.destinations]\nMoon = 100\n", "[vab.destinations]\nmoon = 1e9\n",
+                            "[vab]\natmosphere_dv = -1\n", "[vab]\natmosphere_dv = 100001\n", "[vab]\natmosphere_dv = nan\n",
+                            "[vab]\natmosphere_dv = \"low\"\n"}) {
         Config c2 = cfg;
         bool threw = false;
         try {
@@ -1271,6 +1284,88 @@ TEST(config_vab_destinations_and_target) {
     }
     CHECK(threw);
     CHECK(Config().vab.destinations.empty());  // no config: the report shows no destinations, nothing breaks
+}
+
+namespace {
+std::optional<ShipReport> fixture_report(const std::string& name) {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/" + name);
+    std::stringstream buf;
+    buf << in.rdbuf();
+    return parse_ship_report(buf.str());
+}
+}  // namespace
+
+// The live Kerbal X (KSP 1.12.5, VAB): the app's total stays KSP's, the mission delta-v counts the ascent at
+// Kerbin sea level up to [vab] atmosphere_dv and the upper stages in vacuum.
+TEST(mission_delta_v_counts_the_ascent_at_sea_level_and_upper_stages_in_vacuum) {
+    auto asl = fixture_report("ship_report_kerbal_x.txt");
+    CHECK(asl && asl->has_kerbin_asl && asl->stages.size() == 8);
+    CHECK_EQ(asl->total_delta_v(), 4328.0);
+    CHECK_EQ(asl->stages.at(5).delta_v_kerbin_asl, 631.0);
+    MissionDeltaV m = mission_delta_v(*asl, 1200);
+    CHECK_EQ(m.total, 257.0 + 304 + 372 + 2764 + 2452);  // 6149
+    CHECK(m.kerbin_asl && m.per_stage.size() == 8 && m.per_stage.at(5) == 2452 && m.per_stage.at(3) == 2764);
+    CHECK_EQ(mission_basis(*asl, m), "ASCENT KERBIN ASL, UPPER STAGES VAC");
+    CHECK_EQ(events_text(asl->stages.back()), "CHUTE");
+    // another body in the app (Duna, vacuum): same mission delta-v from the kasl= line
+    auto duna = fixture_report("ship_report_kerbal_x_duna.txt");
+    CHECK(duna && duna->total_delta_v() == 6527);  // KSP shows 6528 (it sums unrounded stages)
+    CHECK_EQ(mission_delta_v(*duna, 1200).total, 6149.0);
+    // an older plugin without kasl=: the app's values stand in for the ascent, and the basis says so
+    ShipReport old = *duna;
+    old.has_kerbin_asl = false;
+    for (auto& st : old.stages) st.delta_v_kerbin_asl = std::numeric_limits<double>::quiet_NaN();
+    MissionDeltaV mo = mission_delta_v(old, 1200);
+    CHECK(!mo.kerbin_asl && mo.total == 6527);
+    CHECK(mission_basis(old, mo).find("NO KERBIN ASL DATA") != std::string::npos);
+    // ...but Kerbin sea level in the app is the ascent figure itself
+    ShipReport old_asl = *asl;
+    old_asl.has_kerbin_asl = false;
+    for (auto& st : old_asl.stages) st.delta_v_kerbin_asl = std::numeric_limits<double>::quiet_NaN();
+    CHECK(mission_delta_v(old_asl, 1200).kerbin_asl && mission_delta_v(old_asl, 1200).total == 6149);
+    // atmosphere_dv 0: every stage in vacuum; huge: everything at sea level (the app's total)
+    CHECK_EQ(mission_delta_v(*asl, 0).total, asl->total_delta_v_vac());
+    CHECK_EQ(mission_delta_v(*asl, 100000).total, 4328.0);
+    // pending: nothing
+    ShipReport pending = *asl;
+    pending.delta_v_pending = true;
+    CHECK_EQ(mission_delta_v(pending, 1200).total, 0.0);
+    // malformed kasl= is rejected like any known field
+    CHECK(!parse_ship_report("v=1 rev=1\nst=1,1,1,1,1\nkasl=1:x\n"));
+    CHECK(!parse_ship_report("v=1 rev=1\nst=1,1,1,1,1\nkasl=12\n"));
+}
+
+TEST(vab_target_follows_the_delta_v_app_body) {
+    std::vector<Destination> d = {{"kerbin_orbit", 3400}, {"mun_orbit", 4570}, {"mun_landing", 5150},
+                                  {"duna_orbit", 5090}, {"eve_orbit", 5850}, {"ike_landing", 5330}};
+    auto pick = [&](const std::string& sit) {
+        ShipReport r;
+        r.situation = sit;
+        TargetChoice t = choose_target(&r, d, "mun_landing");
+        return (t.destination ? t.destination->key : std::string("-")) + (t.from_app ? "@app" : "@config");
+    };
+    CHECK_EQ(pick("kerbin_asl"), "mun_landing@config");
+    CHECK_EQ(pick("kerbin_vac"), "mun_landing@config");
+    CHECK_EQ(pick("mun_asl"), "mun_landing@app");
+    CHECK_EQ(pick("mun_alt"), "mun_landing@app");
+    CHECK_EQ(pick("mun_vac"), "mun_orbit@app");
+    CHECK_EQ(pick("duna_vac"), "duna_orbit@app");
+    CHECK_EQ(pick("duna_asl"), "duna_orbit@app");  // no duna_landing configured: its orbit
+    CHECK_EQ(pick("eve_asl"), "eve_orbit@app");
+    CHECK_EQ(pick("ike_vac"), "ike_landing@app");
+    CHECK_EQ(pick("jool_vac"), "mun_landing@config");  // nothing for Jool: the configured target
+    CHECK_EQ(pick("odd"), "mun_landing@config");
+    CHECK(choose_target(nullptr, d, "nowhere").destination == nullptr);
+    ShipReport r;
+    r.situation = "sun_vac";
+    CHECK(r.situation_body() == "sun" && r.situation_mode() == "vac");
+    r.situation = "vac";
+    CHECK(r.situation_body().empty() && r.situation_mode().empty());
+    // an empty craft (New in the editor) is not "calculating"
+    auto empty = parse_ship_report("v=1 rev=25 facility=vab name=Untitled%20Space%20Craft sit=kerbin_vac\n"
+                                   "mass=0.00 dry=0.00 cost=0 parts=0 crew=0 seats=0 size=0.0,0.0 engines=0\ndv=pending\n");
+    CHECK(empty && empty->empty_craft() && empty->delta_v_pending);
+    CHECK(!fixture_report("ship_report_kerbal_x.txt")->empty_craft());
 }
 
 TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {

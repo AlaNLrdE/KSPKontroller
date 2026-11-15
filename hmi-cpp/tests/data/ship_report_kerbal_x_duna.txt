@@ -1,0 +1,11 @@
+v=1 rev=11 facility=vab name=Kerbal%20X sit=duna_vac
+mass=129.10 dry=36.22 cost=62444 funds=12022107 parts=73 crew=3 seats=3 size=20.2,5.2 engines=8
+st=7,301,301,7.34,13,engines:7,clamps:3
+st=6,350,350,7.19,16,decouplers:2
+st=5,418,418,6.98,19,decouplers:2
+st=4,3006,3006,6.67,97,decouplers:2
+st=3,0,0,0.00,0,decouplers:1
+st=2,2452,2452,5.42,110,engines:1
+st=1,0,0,0.00,0,decouplers:1
+st=0,0,0,0.00,0,chutes:1
+kasl=7:257,6:304,5:372,4:2764,3:0,2:631,1:0,0:0

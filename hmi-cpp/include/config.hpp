@@ -9,12 +9,6 @@
 
 namespace ksphmi {
 
-/// A mission the VAB report compares the ship's delta-v with: config key ("mun_landing") and m/s from the pad.
-struct Destination {
-    std::string key;
-    double delta_v = 0;
-};
-
 /// Most destinations the VAB screens have room for.
 constexpr int MAX_DESTINATIONS = 12;
 
@@ -46,6 +40,8 @@ struct Config {
         std::string target;
         std::vector<Destination> destinations;
         TwrLimits twr;  ///< launch_twr_min, launch_twr_warn, upper_twr_warn
+        /// m/s of ascent counted at Kerbin sea level before later stages count in vacuum (mission delta-v)
+        double atmosphere_dv = 1200;
     } vab;
     std::vector<std::string> loaded;  ///< files read, in order
 };

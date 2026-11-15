@@ -29,20 +29,32 @@ skin = "apollo"          # apollo = 1960s spacecraft panel (default); classic = 
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time
 
 [vab]
-target = "mun_landing"   # destination the VAB ship report measures the delta-v margin against
+target = "mun_landing"   # destination highlighted while KSP's delta-v app shows Kerbin; another body picks its own
 launch_twr_min = 1.0     # launch stage TWR shown red below this (it cannot leave the pad)
 launch_twr_warn = 1.2    # launch stage TWR shown amber below this
 upper_twr_warn = 0.8     # upper stages: TWR shown amber below this (long burns, hard circularisation)
+# Mission delta-v (what the destinations are judged with): stages in firing order count at Kerbin sea level until
+# this much ascent delta-v is spent (the lower atmosphere), later stages in vacuum. 0..100000 m/s.
+atmosphere_dv = 1200
 
-# Delta-v from the Kerbin launch pad, m/s (community delta-v map, cumulative, no aerobraking). The VAB report shows
-# each one as reachable or not; config.local.toml may add destinations (a-z, 0-9, _) or change these, at most 12.
+# Delta-v from the Kerbin launch pad, m/s, cumulative, from the community delta-v map of the Kerbol system
+# (KSP 1.x, "Delta-V map" by u/Kowgan and contributors), without aerobraking: low Kerbin orbit 3400; Mun transfer
+# 860, low orbit 310, landing 580; Minmus transfer 930, low orbit 160, landing 180; Kerbin escape 950, then Duna
+# transfer 130, capture 250, low orbit 360, landing 1450; Ike from the Duna capture 30, low orbit 180, landing 390;
+# Eve transfer 90, capture 80, low orbit 1330; Dres transfer 610, low orbit 1300, landing 430. Aerobraking at Duna
+# or Eve saves most of their capture and landing figures. When the app shows another body, the target is that
+# body's landing (sea level / altitude) or orbit (vacuum), so keep both for each body. config.local.toml may add
+# destinations (a-z, 0-9, _) or change these, at most 12 in all.
 [vab.destinations]
 kerbin_orbit = 3400
-mun_flyby = 4310
-minmus_flyby = 4330
-duna_flyby = 4480
 minmus_orbit = 4490
-keostationary = 4520
 mun_orbit = 4570
 minmus_landing = 4670
+ike_orbit = 4940
+duna_orbit = 5090
 mun_landing = 5150
+ike_landing = 5330
+eve_orbit = 5850
+dres_orbit = 6260
+duna_landing = 6540
+dres_landing = 6690

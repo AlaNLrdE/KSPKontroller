@@ -302,10 +302,8 @@ void outline(Canvas& c, const Rect& r, float t, Color color) {
 }
 }  // namespace
 
-const Destination* Display::vab_target() const {
-    for (const auto& d : cfg_.vab.destinations)
-        if (d.key == cfg_.vab.target) return &d;
-    return nullptr;
+TargetChoice Display::vab_target(const ShipReport* report) const {
+    return choose_target(report, cfg_.vab.destinations, cfg_.vab.target);
 }
 
 void Display::vab_report(const Snapshot& snap) {
@@ -315,8 +313,12 @@ void Display::vab_report(const Snapshot& snap) {
     const double left_r = c_.w * 0.44, x1 = left_r + gap, right_r = c_.w - 2.5 * u;
     const float line = std::max(1.0f, static_cast<float>(static_cast<int>(0.2 * u)));
     const bool pending = r.delta_v_pending;
+    // KSP's own totals (the app's situation) for comparison with the game; the mission delta-v judges destinations
     const double total = r.total_delta_v(), vac = r.total_delta_v_vac();
-    const Destination* target = vab_target();
+    const MissionDeltaV mission = mission_delta_v(r, cfg_.vab.atmosphere_dv);
+    const double mtotal = mission.total;
+    const TargetChoice choice = vab_target(&r);
+    const Destination* target = choice.destination;
 
     // ---- left: delta-v
     const Rect dvp = Rect::f(x0, top, left_r - x0, bottom - top);
@@ -326,27 +328,30 @@ void Display::vab_report(const Snapshot& snap) {
     c_.text("\xCE\x94v TOTAL", 2.4, LABEL, px, dvp.y + u);
     const std::string sit = r.situation_label();
     c_.text(sit, fit_units(c_, sit, 1.9f, pw * .55), MUTED, pr, dvp.y + 1.2 * u, Anchor::TopRight);
-    Color total_color = VALUE;
-    if (!pending && target) total_color = total >= target->delta_v ? GOOD : BAD;
-    c_.text(pending ? "--" : dv_text(total), 8, total_color, px, dvp.y + 4.2 * u);
+    Color total_color = VALUE;  // the mission delta-v against the target
+    if (!pending && target) total_color = mtotal >= target->delta_v ? GOOD : BAD;
+    c_.text(pending ? "--" : dv_text(total), 8, pending ? WARN : VALUE, px, dvp.y + 4.2 * u);
     c_.text(pending ? "vacuum --" : "vacuum " + dv_text(vac), 2.4, LABEL, px, dvp.y + 14 * u);
+    const std::string mission_text = pending ? "MISSION \xCE\x94v --" : "MISSION \xCE\x94v " + dv_text(mtotal);
+    c_.text(mission_text, fit_units(c_, mission_text, 2.4f, pw * .5), total_color, pr, dvp.y + 14 * u, Anchor::TopRight);
     if (target) {
-        const std::string want = "TARGET  " + destination_label(target->key) + "  " + dv_text(target->delta_v);
+        const std::string want = "TARGET  " + destination_label(target->key) + "  " + dv_text(target->delta_v) +
+                                 (choice.from_app ? "  \xC2\xB7 from KSP \xCE\x94v app" : "  \xC2\xB7 from config");
         c_.text(want, fit_units(c_, want, 2.1f, pw * .62), LABEL, px, dvp.y + 18.2 * u);
         if (!pending) {
-            const double margin = total - target->delta_v;
+            const double margin = mtotal - target->delta_v;
             const std::string m = margin >= 0 ? fmt::str("+%.0f m/s spare", margin) : fmt::str("%.0f m/s short", margin);
             c_.text(m, fit_units(c_, m, 2.6f, pw * .36), margin >= 0 ? GOOD : BAD, pr, dvp.y + 17.9 * u, Anchor::TopRight);
         }
     } else {
         c_.text("No target: set [vab] target in config.toml", 2.0, MUTED, px, dvp.y + 18.2 * u);
     }
-    // total against the target: a bar with the target as a tick
+    // mission delta-v against the target: a bar with the target as a tick
     const Rect bar = Rect::f(px, dvp.y + 22.4 * u, pw, 2.0 * u);
     c_.rect(bar, GRID);
-    const double scale = std::max({total, target ? target->delta_v : 0.0, 1.0}) * 1.08;
-    if (!pending && total > 0)
-        c_.fill_rect(float(bar.x), float(bar.y), float(bar.w * std::min(1.0, total / scale)), float(bar.h), total_color);
+    const double scale = std::max({mtotal, target ? target->delta_v : 0.0, 1.0}) * 1.08;
+    if (!pending && mtotal > 0)
+        c_.fill_rect(float(bar.x), float(bar.y), float(bar.w * std::min(1.0, mtotal / scale)), float(bar.h), total_color);
     if (target) {
         const float tx = float(bar.x + bar.w * target->delta_v / scale);
         c_.fill_rect(tx - line, float(bar.y - .6 * u), 2 * line, float(bar.h + 1.2 * u), VALUE);
@@ -384,7 +389,12 @@ void Display::vab_report(const Snapshot& snap) {
     c_.line({float(px), float(ty + 3 * u)}, {float(pr), float(ty + 3 * u)}, line, GRID);
     const double row0 = ty + 4 * u, pitch = 5.4 * u;
     const int rows = std::max(1, static_cast<int>((dvp.bottom() - 1.5 * u - row0) / pitch));
-    if (pending) {
+    if (pending && r.empty_craft()) {  // KSP never computes delta-v without parts: not "calculating"
+        c_.text("EMPTY CRAFT", 3.4, VALUE, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
+        c_.text("Add parts to see the delta-v report", 2.2, MUTED, dvp.centerx(), row0 + 9 * u, Anchor::MidTop);
+    } else if (pending) {
+        const Rect plate = Rect::f(px, row0 + 1.5 * u, pw, 12 * u);
+        outline(c_, plate, line * 2, WARN);
         c_.text("Calculating \xCE\x94v\xE2\x80\xA6", 3.4, WARN, dvp.centerx(), row0 + 3 * u, Anchor::MidTop);
         c_.text("KSP is computing the stage delta-v of this ship", 2.2, MUTED, dvp.centerx(), row0 + 9 * u, Anchor::MidTop);
     } else if (r.stages.empty()) {
@@ -414,19 +424,23 @@ void Display::vab_report(const Snapshot& snap) {
     // ---- right: destinations
     const int n = static_cast<int>(cfg_.vab.destinations.size());
     const int cols = 2, drows = std::max(1, (std::min(n, MAX_DESTINATIONS) + cols - 1) / cols);
-    const double dpitch = 4.4 * u, dest_h = 4.6 * u + 6 * dpitch;
+    const double dpitch = 4.4 * u, dest_h = 7.4 * u + 6 * dpitch;
     const Rect dp = Rect::f(x1, top, right_r - x1, dest_h);
     if (on_vab_panel) on_vab_panel("destinations", dp);
     panel(c_, dp);
     const double dx = dp.x + 1.3 * u, dw = dp.w - 2.6 * u, cell_w = (dw - u) / cols;
     c_.text("DESTINATIONS", 2.4, LABEL, dx, dp.y + u);
     c_.text("\xCE\x94v FROM THE PAD", 1.7, MUTED, dp.right() - 1.3 * u, dp.y + 1.3 * u, Anchor::TopRight);
+    // what the lamps are judged with: the mission delta-v and its basis
+    const std::string basis = (pending ? std::string("MISSION \xCE\x94v --") : "MISSION \xCE\x94v " + dv_text(mtotal)) +
+                              "  \xC2\xB7  " + mission_basis(r, mission);
+    c_.text(basis, fit_units(c_, basis, 1.8f, dw), mission.kerbin_asl ? LABEL : WARN, dx, dp.y + 4.0 * u);
     if (n == 0) c_.text("No destinations in config.toml [vab.destinations]", 2.0, MUTED, dp.centerx(), dp.centery(), Anchor::Center);
     for (int i = 0; i < n && i < MAX_DESTINATIONS; ++i) {
         const Destination& d = cfg_.vab.destinations[i];
         const int col = i / drows, row = i % drows;  // down the first column, then the second
-        const Rect cell = Rect::f(dx + col * (cell_w + u), dp.y + 4.4 * u + row * dpitch, cell_w, dpitch - .6 * u);
-        const bool reach = !pending && total >= d.delta_v;
+        const Rect cell = Rect::f(dx + col * (cell_w + u), dp.y + 7.2 * u + row * dpitch, cell_w, dpitch - .6 * u);
+        const bool reach = !pending && mtotal >= d.delta_v;
         if (target && d.key == target->key) outline(c_, cell.inflate(.3 * u, .2 * u), line, ACCENT);
         c_.circle(float(cell.x + 1.4 * u), float(cell.centery()), float(.8 * u), pending ? MUTED : reach ? GOOD : BAD);
         const std::string value = fmt::str("%.0f", d.delta_v);
