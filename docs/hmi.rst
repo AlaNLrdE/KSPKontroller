@@ -70,7 +70,9 @@ state and resource (``src/gauges.cpp`` holds the pure geometry); each frame draw
 the window digits and the labels. Quantities use KSP resource units. The queue shows the current stage number
 and up to four remaining activation stages with part counts and KSP's stage delta-v. Resource and stage streams
 refresh at 2 Hz, and their collections are rebuilt when the vessel's parts or staging queue changes (including
-docking/decoupling). These displays do not activate stages or transfer resources.
+docking/decoupling). If KSP temporarily rejects creation of a stage delta-v stream, only the missing
+streams are retried every 0.5 seconds; working resource and stage streams remain subscribed. These displays
+do not activate stages or transfer resources.
 
 The flight layout places compact orbital data on the left, a smaller ORBIT diagram at the upper right,
 and a stock-inspired NavBall below it. ``src/navball.cpp`` renders the blue/brown sphere and graduations
@@ -385,7 +387,7 @@ Tests (``hmi-cpp/tests``, ctest): ``core`` (formatting, Kepler solver, demo sour
 burn time, label projection and limb fade, front-hemisphere clipping, inertial orbit geometry (RCS cannot move
 the vessel ring), resource fractions, gauge geometry and layout, scene replies, discovery address filter and
 broadcast, settings layers, protobuf values, the kRPC client against an in-process server, the handshake timeout,
-reconnect discovery and the launch-pad errors), ``render`` (off-screen layout checks: ten metric tiles below 40 %
+reconnect discovery, launch-pad errors and recovery of temporarily rejected delta-v streams), ``render`` (off-screen layout checks: ten metric tiles below 40 %
 of the height, text inside its tile, dials inside the resources panel, ORBIT and NavBall never drawing outside
 their panels, apsis labels, facility views, the boot splash, the software frame time) and ``kiosk`` (the boot
 file edit of ``setup-kiosk.sh`` and the unit files, when ``python3`` is found).

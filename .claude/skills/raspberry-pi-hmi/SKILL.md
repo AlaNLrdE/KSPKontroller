@@ -106,6 +106,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - ORBIT's plot area is short (about 12 % of the screen height at 3:2): labels belong beside markers (side
   margins are reserved for them); labels above/below a marker at the view's edge leave the clip.
 
+- If AddStream itself rejects stage delta-v, no subscription exists to recover later. Retain the stage object
+  for a bounded retry (0.5 s), remove successful subscriptions from the pending set, and clear that set when
+  stage/parts topology changes. Do not rebuild working resource or stage streams just to retry delta-v.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the

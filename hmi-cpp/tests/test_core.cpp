@@ -690,6 +690,53 @@ TEST(launch_pad_errors_drop_only_the_failing_values) {
     CHECK(pad.count("Vessel_get_SurfaceSpeedReferenceFrame") <= 2 + static_cast<int>(elapsed / .5));  // retry 0.5 s
 }
 
+TEST(stage_delta_v_recovers_after_stream_creation_is_rejected) {
+    PadServer pad;
+    std::atomic<bool> available{false};
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>&) {
+        auto result = pad.answer(proc);
+        if (proc == "Stage_get_DeltaV" && available) return FakeResult{pb::enc_float(1250)};
+        return result;
+    });
+    server.fail_add_stream = true;
+    KrpcSource::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    o.discovery = false;
+    KrpcSource src(o);
+    src.start();
+    auto ready = [&] {
+        auto s = src.latest();
+        return s->state == State::Flight && s->systems && !s->systems->stages.empty();
+    };
+    double end = monotonic() + 5;
+    while (monotonic() < end && !ready()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    CHECK(ready());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    int rejected = pad.count("Stage_get_DeltaV");
+    CHECK(rejected >= 2);
+    CHECK(rejected <= 5);  // retry is bounded, not one AddStream per 10 Hz sample
+    available = true;  // same stage and parts; KSP has now computed delta-v
+    auto recovered = [&] {
+        auto s = src.latest();
+        return ready() && s->systems && !s->systems->stages.empty() && s->systems->stages[0].delta_v.has_value();
+    };
+    end = monotonic() + 3;
+    while (monotonic() < end && !recovered()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto snapshot = src.latest();
+    CHECK(recovered());
+    src.stop();
+    if (snapshot->systems && !snapshot->systems->stages.empty()) {
+        CHECK_NEAR(snapshot->systems->stages[0].delta_v.value_or(-1), 1250, 1e-6);
+        CHECK(snapshot->systems->stages[0].parts == 1);
+        CHECK_NEAR(snapshot->systems->resources[0].fraction().value_or(-1), .5, 1e-9);
+    }
+    CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // no session restart
+    CHECK_EQ(pad.count("Stage_get_Number"), 1);  // no topology rebuild
+    CHECK_EQ(pad.count("Vessel_get_Resources"), 1);  // working resource streams remain intact
+}
+
 namespace {
 /// The pad vessel with one maneuver node; Node.orbit answers in the body's non-rotating frame (object 11).
 struct NodeServer : PadServer {

@@ -67,6 +67,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   raises InvalidOperationException for the singular surface speed frame and for a stage without delta-v. Catch
   per value, retry after 0.5 s, never end the vessel session (`launch_pad_errors_drop_only_the_failing_values`).
 
+- If AddStream itself rejects stage delta-v, no subscription exists to recover later. Retain the stage object
+  for a bounded retry (0.5 s), remove successful subscriptions from the pending set, and clear that set when
+  stage/parts topology changes. Do not rebuild working resource or stage streams just to retry delta-v.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the

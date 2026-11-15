@@ -407,6 +407,8 @@ public:
             resources_.clear();
             stages_.clear();
             stage_numbers_.clear();
+            pending_delta_v_.clear();
+            delta_v_retry_at_ = 0;
             key_ = key;
             key_valid_ = true;
             try {
@@ -429,10 +431,7 @@ public:
                     if (current && number > *current) continue;
                     if (count++ == 4) break;
                     stages_.add(std::to_string(number) + ".parts", sc("Stage_get_Parts", {obj(stage)}), 2);
-                    // "Delta-v information is not available for activation stage N" (e.g. on the pad)
-                    optional_step([&] { stages_.add(std::to_string(number) + ".delta_v",
-                                                    sc("Stage_get_DeltaV", {obj(stage)}), 2); },
-                                  [] {});
+                    pending_delta_v_[number] = stage;
                     stage_numbers_.push_back(number);
                 }
             } catch (const krpc::ConnectionError&) {
@@ -440,6 +439,21 @@ public:
             } catch (const std::exception&) {  // docking or staging invalidated an object during setup
                 key_valid_ = false;
             }
+        }
+        if (key_valid_ && !pending_delta_v_.empty() && monotonic() >= delta_v_retry_at_) {
+            for (auto it = pending_delta_v_.begin(); it != pending_delta_v_.end();) {
+                const int number = it->first;
+                const uint64_t stage = it->second;
+                bool added = false;
+                // KSP can reject AddStream until it has computed this stage's delta-v.
+                optional_step([&] {
+                    stages_.add(std::to_string(number) + ".delta_v", sc("Stage_get_DeltaV", {obj(stage)}), 2);
+                    added = true;
+                }, [] {});
+                if (added) it = pending_delta_v_.erase(it);
+                else ++it;
+            }
+            delta_v_retry_at_ = monotonic() + .5;  // retry only absent streams; keep working collections intact
         }
         Systems s;
         s.current_stage = current;
@@ -486,6 +500,8 @@ private:
     uint64_t vessel_;
     Group common_, resources_, stages_;
     std::vector<int> stage_numbers_;
+    std::map<int, uint64_t> pending_delta_v_;
+    double delta_v_retry_at_ = 0;
     std::tuple<std::optional<int>, std::vector<uint64_t>, std::vector<uint64_t>> key_;
     bool key_valid_ = false;
 };
