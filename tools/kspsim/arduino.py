@@ -73,6 +73,7 @@ class FrameParser:
     def __init__(self) -> None:
         self.buf = bytearray()
         self.bad = 0
+        self.last_bad = b""   # the rejected frame plus the 16 bytes after it, for the log
 
     def feed(self, data: bytes) -> list[bytes]:
         self.buf += data
@@ -102,6 +103,7 @@ class FrameParser:
                 del self.buf[:total]
             else:
                 self.bad += 1
+                self.last_bad = bytes(self.buf[i: total + 16])
                 del self.buf[: i + 1]
 
 
@@ -413,7 +415,13 @@ class BoardLink:
                     ser.write(frame(encode_vessel(vessel, dt, self.sim.reported())))
                     st.sent += 1
                 next_send = now + self.refresh
-            for p in parser.feed(ser.read(256)):
+            bad_before = parser.bad
+            packets = parser.feed(ser.read(256))
+            if parser.bad != bad_before:
+                lb = parser.last_bad
+                log.warning("bad frame #%d (size byte %d, %d bytes kept): %s", parser.bad,
+                            lb[2] if len(lb) > 2 else -1, len(lb), lb.hex(" "))
+            for p in packets:
                 last_rx = time.monotonic()
                 if p[0] == ID_CONTROL and len(p) == CONTROL.size:
                     st.received += 1
