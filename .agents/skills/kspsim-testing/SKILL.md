@@ -22,6 +22,11 @@ want COM5 and port 50000 (it checks).
 
 ## Facts learned (2026-11-14)
 
+- The simulator logs to `build/kspsim.log` (rotated 3 x 2 MB) as well as the console: read it instead of asking
+  the user what the window shows. A status line (board state, detail, counters, DebugPacket, kRPC clients) is
+  written on every state change and every 30 s; a failed handshake logs the bytes received per attempt, and
+  "port completely silent" means the USB bridge delivers nothing (see kspcontroller-workflow, bridge stall).
+
 - The user expects the values to be controllable from the test app ("para eso es"): every value reported must be
   settable from the window. `Simulator.reported()` is the single source for both links; add new values to
   `physics.REPORTED_FIELDS` and `Vessel.report()` and the manual panel picks them up.
@@ -40,14 +45,29 @@ want COM5 and port 50000 (it checks).
   `root.destroy`, collect `report_callback_exception`, print the StringVars.
 - Heredocs with quotes break in the Bash tool: write edit scripts with Write and run them with the venv python.
 
+- Attitude (2026-11-14): the vessel has a 3D attitude (`Vessel.forward/top`, inertial, north = -z because the
+  planar orbit's normal r x v is south as in `TransformDirection`). It follows the launch guidance until
+  *steered* (SAS on or stick > 5 % since the scenario loaded), then SAS slews (`Vessel.sas_target`, modes
+  `Simulator.sas_mode` 1-10) or the stick rotates it, and the engine thrusts along the nose (in-plane part).
+  `physics.attitude_axes/attitude_angles` match `attitude_rotation` exactly (checked numerically: q maps the
+  vessel's (0,1,0) to forward). Drive it in tests with `Simulator.step_vessel(dt)` (sets the SAS direction
+  and logs "SAS on, mode X" / "SAS X: on target"); a headless check:
+  `sim.set_game(sas=True); sim.sas_mode = 4` then read `build/kspsim.log`.
+- `sed -i` in Git Bash rewrites a CRLF file as LF even when nothing matches: edit with the Python helper.
+
 ## Agents
 
 - Parallel agents on kspsim get a worktree. The Agent tool's `isolation: worktree` refused once (it reused a
   stale locked worktree based on an old commit, path case `c:` vs `C:`): create one by hand,
-  `git worktree add -b NAME .Codex/worktrees/NAME main`, and give the agent absolute paths there; merge with
+  `git worktree add -b NAME .claude/worktrees/NAME main`, and give the agent absolute paths there; merge with
   `tools/merge_agent.py NAME`.
 - A log-monitor agent waits for KSP with a background shell loop and streams KSP.log with the Monitor tool;
   it must not be started for a session whose prerequisites are missing (see the raspberry-pi-hmi skill).
+- Maneuver nodes: window tab "Maneuver node", `./ci sim --node DV,SECONDS`, or `Simulator.set_node(prograde,
+  seconds, normal, radial)` (fixed UT, counts down; None deletes); `node_preview()` gives the window's Ap/Pe line. `Node.orbit` is served as a separate
+  object (id uid*10000+6000, outside the uid*10 slots, all taken); `physics.propagate` is universal-variable
+  Kepler, so hyperbolic post-burn orbits work. For an HMI frame against the sim from WSL, run kspsim with
+  the Windows venv on PYTHONPATH (see raspberry-pi-hmi) and `ksphmi --address 127.0.0.1 --screenshot`.
 
 - KSPHMI service (2026-11-15): `Simulator.ship` / `set_ship` / `--ship` / the window's *VAB ship* box pick a sample
   from `ships.py` (`kerbal_x`, `pending`, `heavy`, `""` = no service, as without KSPSerialIO.Hmi.dll); each change

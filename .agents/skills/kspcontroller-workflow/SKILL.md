@@ -29,9 +29,9 @@ The user's time in the game is the expensive part. When they say they will open 
 
 ## Flashing while other sessions exist
 
-Other Codex sessions of this repo may be using the board. Before and after `./ci upload_sketch`, SendMessage each
+Other Claude sessions of this repo may be using the board. Before and after `./ci upload_sketch`, SendMessage each
 peer from `ListAgents` ("flashing COM5 now" / "flash done"). The firmware changes need the user's explicit OK
-for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is that OK.
+for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is that OK.
 
 ## Reading a game session
 
@@ -55,6 +55,23 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
 - The stage button must call only `StageManager.ActivateNextStage()`; toggling the Stage action group confused
   MechJeb's ascent autopilot.
 - `Serial.availableForWrite()` always reads 0 on this core: do not trust it.
+- On the UNO R4 **WiFi** (`unor4wifi` defines `-DNO_USB`) `Serial` is `_UART1_` at 115200 to the **ESP32-S3 USB
+  bridge**, which owns COM5; the RA4M1 native USB is not used (pin 21 is the USB mux). So "wedged USB" means the
+  bridge: `NVIC_SystemReset()`/watchdog reset only the RA4M1 and do not recover it (stage_dead: board rebooted 30 s
+  into a silence, link still dead 5 min). Only unplugging USB (power-cycles the ESP32-S3) recovers it.
+- 2026-11-14 19:50: a variant that unplugging did NOT fix: the sketch ran (matrix X, RX/TX LEDs blinking,
+  screens appeared while kspsim sent) but the PC received 0 bytes (kspsim log "port completely silent",
+  `verify --board` no handshake). `./ci upload_sketch` alone failed ("No device found on COM5"); double-tap
+  RESET (orange LED pulsing) then `./ci upload_sketch` succeeded and all `verify --board` checks passed.
+  Escalation: unplug 10 s -> double-tap RESET + upload_sketch -> ESP32-S3 bridge firmware update.
+- Bad frames board -> PC (kspsim "bad frame" lines, ~1 in 180): each was exactly ONE byte short, the checksum,
+  always where a ControlPacket and a DebugPacket were written in the same loop(). renesas_uno 1.6.0
+  `UART::write()` returns while the last byte is still shifting out. Fix c81d663: `delayMicroseconds(100)`
+  after each frame (not `Serial.flush()`, which spins without a timeout); 0 bad frames afterwards. The plugin
+  does not count PC-side bad frames, so check them with kspsim (`build/kspsim.log`).
+  The signature on the host: `write_avg_ms` ~19.7 with `rx_bytes=0` and COM5 still present.
+- Until 0.19.3.16 `CheckLink` measured silence from the last queued packet, so it never fired while flying
+  (board-dead-1923: `link_state=up` with `rx_age_ms` 400000+). `./ci verify` check `log: link loss detected`.
 - SAS (pin 2) and RCS (pin 9) are push buttons: each press sets the bit to the opposite of the reported AGSAS /
   AGRCS. A switch-level read (old RCS code) only held RCS on while pressed (fixed 2026-11-14).
 - Disabled inputs use `-1` pin defines with `#if PIN >= 0` around every use (STAGEPIN, THROTTLEPIN), and the
@@ -119,10 +136,24 @@ In a fresh worktree copy `build/refasm` from the main checkout before `./ci buil
   (`KRPC.Service.Attributes`). kRPC declares no `KSPAssembly`, so no `KSPAssemblyDependency` on it. Its own
   validation can be run outside KSP: load the DLL and call `KRPC.Service.Scanner.Scanner.GetServices(errors)` by
   reflection under mono (it accepted KSPHMI: Editor scene, Revision/ShipReport). Leave the service `Id` unset.
-- Not yet seen in the game: the Windows build against KSP 1.12's real assemblies, the editor events, and whether
-  the situation/body inference (`EditorShipReport.Option/BodyName`) matches KSP's delta-v app. Check
-  `KSPSerialIO[HMI] ship report rev N` in KSP.log and compare the Pi with the app in the VAB.
+- KSP 1.12 delta-v app (seen live 2026-11-15, read from Assembly-CSharp metadata): the app's body and situation
+  are `DeltaVGlobals.fetch.deltaVAppValues.body/.situation` (enum SeaLevel, Altitude, Vaccum). The app shows
+  `DeltaVStageInfo.GetSituationDeltaV(opt)` = deltaVatASL / deltaVActual / deltaVinVac (same for TWR*):
+  `deltaVActual` is the *altitude* value and does not follow Vacuum (Duna vac read 2328 for 2452). Fuel flow is
+  pressure-independent, so dv at a pressure = dv_vac * flow-weighted Isp(p) / Isp(vac) (`ShipMath.AtPressure`).
+- Editor facts: loading a craft from the other building's tab calls `EditorLogic.SwitchEditor` and moves the
+  player to that building (`EditorDriver.editorFacility` changes, kRPC logs a scene switch, no KSP scene change).
+  After New the crew manifest (`ShipConstruction.ShipManifest`) still holds the previous ship's crew. The staging
+  list is `StageManager.Instance.Stages` (`StageGroup.inverseStageIndex`, `.Icons[i].Part`).
+- To inspect KSP's API without decompilers: a tiny .NET 8 console using `System.Reflection.Metadata` (in the
+  shared framework, no NuGet) lists a type's fields/methods and an IL dump (ldfld/call targets) of one method.
+  Read the install's DLLs read-only; never write into the install.
+- Windows Python opens text as cp1252 by default: pass `encoding='utf-8'` in edit scripts (a non-cp1252
+  character makes `open(p,'w').write()` fail after truncating the file; restore it with `git checkout`).
 - Linux VM without root: `apt-get -o Dir::State::Lists=... -o Dir::Cache=... update/download` + `dpkg -x` gives
   SDL2 dev files and `mono-mcs`; `pip install --user cmake`. The repo is LF in git (`text=auto`): a Linux checkout
   is LF, so new files must be LF there (CRLF exists only in the Windows working tree). The VM has no git identity:
   pass `GIT_AUTHOR_*`/`GIT_COMMITTER_*` from `git log -1` instead of changing config.
+- `tools/verify.py` content checks must be newline-agnostic: the main checkout is CRLF (core.autocrlf), some
+  worktrees/CI checkouts are LF. `read()` uses universal newlines (it once used `newline=""`, so `^VERSION = 1$`
+  with re.M failed only in the main checkout). Read repo text through `read()`; `tools/test_verify.py` checks both.

@@ -46,6 +46,25 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - The text console (fbcon, tty1) blinks its cursor into the framebuffer. Only root can stop it: tmpfiles rule
   `w /sys/class/graphics/fbcon/cursor_blink - - - - 0` in `/etc/tmpfiles.d/ksphmi-cursor.conf`. The live
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
+- Kiosk boot (2026-11-14, `hmi-cpp/systemd/setup-kiosk.sh`, run by the user with sudo, `--undo` reverts): a
+  system `Type=simple` `ksphmi-splash.service` runs `ksphmi --splash` after `dev-fb0.device` (needs the udev rule
+  `TAG+="systemd"` on fb0, else the device unit never appears). Since 2026-11-15 it animates the boot (about
+  8 fps, probes at 2 Hz) until the HMI writes `$XDG_RUNTIME_DIR/ksphmi.ready` (`/run/user/<uid>/ksphmi.ready`
+  for the system unit) after its first presented frame; no `Before=` (a long-running unit ordered before
+  `systemd-user-sessions` would hold up SSH and the HMI). The Pi's fb0 is first the firmware's `simplefb`
+  (~4.5 s), replaced by `vc4drmfb` (~6.4 s): the udev rule matches `ATTR{name}=="vc4drmfb"` only and the splash
+  reopens fb0 when its inode or sysfs `name` changes. Review stages off-line with
+  `--splash --screenshot F --size 2520x1680 --splash-state system|network|offline|hmi|ready|failed`. **Never `console=ttynull`** (2026-11-15): it hung the Pi 4 early in boot
+  (black screen with backlight on, no ping, nothing in the journal); keep `console=tty1` and silence it with
+  `quiet loglevel=3 systemd.show_status=false` (verified: splash at ~7 s, HMI at ~12 s, no text). Never add
+  `fbcon=map:`/`nodefer`: with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies
+  it with `FBIOPUT_VSCREENINFO` + `FB_ACTIVATE_FORCE`. `./ci deploy_hmi` reruns the script (ssh -t, user types the
+  sudo password) when its sha256 differs from `/etc/ksphmi-kiosk.applied`; it never reboots.
+- Pi that boots to black and no ping: bisect `cmdline.txt` on the SD from Windows (FAT `bootfs` drive); keep the
+  known-good line as a backup file next to it. Change one variable per boot; `systemd.mask=UNIT` in cmdline.txt
+  disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means
+  the HDMI cable/monitor was not detected, not a software fault. `/dev/fb0` first appears as `simplefb` (~4.5 s)
+  and is replaced by `vc4drmfb` (~6.5 s).
 - Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (in WSL; the
   path is relative to the repo), then look at the PNG.
 - Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per
@@ -66,6 +85,37 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - Optional panels (NavBall marker groups, resources/staging) must fail on their own: on the launch pad kRPC
   raises InvalidOperationException for the singular surface speed frame and for a stage without delta-v. Catch
   per value, retry after 0.5 s, never end the vessel session (`launch_pad_errors_drop_only_the_failing_values`).
+
+- Maneuver orbit (2026-11-14): kRPC 0.7 has `Orbit_PositionAt` / `Orbit_VelocityAt(orbit, ut, frame)`: read
+  `Node.orbit` at `Node.ut` in the body's non-rotating frame, so the dashed conic shares ORBIT's view axes. Stream
+  only the node key (UT, prograde/normal/radial), refetch on change or every 2 s; cache the dashes per state and
+  quantised scale. Not yet seen in the real game: check the log line `maneuver orbit: periapsis ... agrees`.
+- Apollo skin (2026-11-14, proposal, `--skin apollo` / `[display] skin`): all static art (brushed grey written
+  straight into the surface pixels, frames, labels, lamp housings, segment windows with ghost segments, meter
+  scales, bezels) is one full-screen texture per size and screen kind; per frame only lit segments, lit lamps,
+  pointers and the plots. Measured 7.1 ms vs 8.6 ms classic (`--bench`, WSL). Segment glow is pre-mixed with the
+  glass colour (opaque): translucent triangles are slow on the software renderer. The NavBall keeps its whole
+  zone (an inset rect pushed HDG under the mode buttons): its bezel goes around it, in the gaps between zones.
+  `KSPHMI_SHOTS=DIR ./ci test_hmi` saves facility / no-vessel / caution screenshots that `--demo` cannot reach.
+- Skins switch at runtime (2026-11-14): `Snapshot.skin` comes from an optional ` skin=<name>` field of the UDP
+  50002 context reply (kspsim only; KSPSerialIO never sends it), read about once a second in every state from
+  `KrpcSource::publish` (telemetry thread). Known context skin > `[display] skin`. `ApolloSkin` is created the
+  first time it is shown and kept, so switching back reuses its panel texture (`builds` stays 1). Navball has
+  `chrome` (classic panel, readouts, buttons): apollo turns it off and draws its own around
+  `Navball::globe_geometry` (`globe` is already a free function in navball.cpp). `./ci test_hmi --sim` runs
+  kspsim with `--skin apollo` and requires `skin: apollo (context` in the HMI log.
+- NavBall layer cache (2026-11-14, `[display] layer_cache`, auto = GPU only): full draws go into a render target;
+  `Navball::before_globe` fires just before the globe so Display keeps the pixels under `globe_square()`;
+  `Display::animate()` = layer + those pixels + `Navball::redraw()` clipped to the square (globe and everything
+  drawn after it there: rim, markers, boresight, the classic speed box overlaps the top). SDL resets the clip
+  per target: use `Canvas::set_target` / `blit`, never raw `SDL_SetRenderTarget`. `Navball::hold` fixes the
+  attitude for pixel tests and `--bench N --bench-anim`. In software the NavBall is ~6.7 of 8.7 ms per frame, so
+  the cache saves little there (PC: 8.2 -> 5.5 ms classic, 4.5 ms apollo) and the full-screen copy costs ~1.5 ms.
+- WSL can fail with `Wsl/Service/E_UNEXPECTED` for minutes: wait with a background loop on
+  `wsl.exe -d Ubuntu -e true`; never `wsl --shutdown` (other agents use it). No PIL in the venv: crop PNGs
+  with a stdlib zlib script.
+- ORBIT's plot area is short (about 12 % of the screen height at 3:2): labels belong beside markers (side
+  margins are reserved for them); labels above/below a marker at the view's edge leave the clip.
 
 - If AddStream itself rejects stage delta-v, no subscription exists to recover later. Retain the stage object
   for a bounded retry (0.5 s), remove successful subscriptions from the pending set, and clear that set when
@@ -140,6 +190,10 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   per 2520x1680 frame on the PC). The GPU path keeps batched `SDL_RenderGeometry` with feathered edges.
 - Never type `cat > file` without a heredoc in a Bash call: it waits on stdin until the tool times out.
 - `hmi-cpp/` is LF (`.gitattributes`): it is built on the Pi; the kiosk script and the unit must stay LF.
+- Measure on the Pi GPU before keeping a render optimisation: the layer cache (render target + NavBall-only
+  frames) matched a full redraw pixel for pixel and helped in software, but on the V3D (kmsdrm/opengl, 2520x1680,
+  `--bench 300 [--bench-anim] --layer-cache on|off`) a full redraw took 2.8 ms draw + 11.8 ms present while cached
+  frames took 5.3 + 20.5 ms with the same CPU. Default `layer_cache = "off"`.
 
 ## Testing when the Pi is unavailable
 

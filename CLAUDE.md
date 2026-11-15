@@ -22,9 +22,12 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 ## Non-negotiable rules
 
 1. **KSP must be closed** before deploying into `GameData` or probing the board with scripts (it owns COM5):
-   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs. **Flashing the sketch is allowed with KSP
-   open** (user, 2026-11-14); it still needs the user's explicit OK. KSP may lose the port while the board resets:
-   check the log afterwards (the plugin reconnects by itself).
+   `tasklist | grep -i KSP_x64`. Never touch `GameData` while it runs. **Flashing the sketch and the board test
+   are allowed with KSP open but never in flight** (user, 2026-11-14/15): the plugin opens COM5 only in the flight
+   scene and closes it on leaving (`KSPSerialIO[PORT] closed`); check the last scene change in KSP.log first and ask
+   the user to stay out of flight. It still needs the user's explicit OK and the ksp-workbench OK (rule 2).
+   **Pi-only deploys (`./ci deploy_hmi`) need neither KSP closed nor an OK**: run them as soon as a Pi-only commit
+   is ready (user, 2026-11-15); the HMI reconnects to kRPC by itself.
 2. **The `wk-rea` KSP install is shared with another Claude session** (`ksp-workbench-*`, owns the other
    mods). Before `./ci deploy` or flashing: SendMessage it, wait for "OK deploy", tell it when done.
    We only write `GameData/KSPSerialIO`, never `--remove`, never touch other mods. `./ci verify` checks it.
@@ -53,7 +56,16 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   (the harness notifies when it ends). Never an agent polling.
 - Every lesson learned goes into a skill (`.claude/skills/*/SKILL.md`) or this file before the task is finished.
   Session handoffs (what is deployed, what is pending) go in commit messages or the docs, not in this file.
-- `AGENTS.md` (Codex) only points here: keep a single contract in this file.
+- `AGENTS.md` (Codex) only points here: keep a single contract in this file. `.agents/skills/` is an exact copy of
+  `.claude/skills/` for Codex: after editing a skill, copy it there (`cp .claude/skills/X/SKILL.md .agents/skills/X/`).
+- If the harness refuses `isolation: worktree` (it compares `c:` and `C:` paths), create the worktree yourself
+  (`git worktree add .claude/worktrees/NAME -b agent/NAME main`) and tell the agent to work only there with absolute
+  paths. A worktree created in another machine or VM points to its `/sessions/...` gitdir: `git worktree repair`.
+- Before deploying from a long-lived branch, merge `main` into it: an old branch ships old Pi scripts (an old
+  `setup-kiosk.sh` re-adds `console=ttynull`). While an agent still edits a branch, deploy its committed state from a
+  temporary `git worktree add --detach` copy, never from the folder the agent is changing.
+- `installed == built` compares bytes, and a DLL built in a worktree differs from the same commit built in the main
+  checkout (paths are embedded): after merging, reinstall from `main` with KSP closed before trusting that check.
 
 ## Documentation maintenance
 
@@ -64,7 +76,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - README screenshots must be captured from the actual apps, labelled with demo/simulator provenance, and
   stored under `docs/images/` with regeneration notes. Lossless recompression may preserve pixels; never
   present mockups as runtime evidence. `check_documentation` validates local README image references.
-- Validate `./ci diagrams` and `./ci sphinx` (warnings are errors). Doxygen inputs must cover both mod sources,
+- Validate `./ci diagrams` and `./ci sphinx` (warnings are errors) with a fresh build (`rm -rf build/sphinx` first):
+  an incremental build skips unchanged files and hides their warnings. Doxygen inputs must cover both mod sources,
   the firmware and C++ HMI headers/sources. Keep generated SVG/HTML under `build/`, out of commits.
 - `python3 tools/verify.py --docs-only` runs `check_documentation` for guide/UML/API coverage and balanced
   sequence activations without a game install. The documentation CI runs it and renders all PUML before Sphinx.
@@ -159,6 +172,19 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   Pi deploys and game sessions are always the user's.
 - `./ci verify` `log:` checks read the last saved KSP.log: after a deploy they stay FAIL (old plugin version, old
   link windows) until a new game session; judge only `installed == built` and `ship report: installed` then.
+  A session without flight has no board traffic, so passing board `log:` checks then prove nothing.
+- Game sessions: kRPC restarts its server on every scene change, so the Pi logs "kRPC session ended" and reconnects
+  ~15 s later; each kRPC client closes two connections (RPC and stream). Read the live ship report with the
+  venv's `krpc` client (`conn.ksphmi.ship_report()`, `127.0.0.1`) instead of asking the user for numbers.
+  Loading a VAB craft from the SPH's load dialog really moves the player to the VAB (KSP behaviour).
+  ModuleManager's cache replays the previous run's patch log (old timestamps, old DLL versions): trust the
+  `KSPSerialIO v...` lines near the top of KSP.log.
+- Pi screen going black for seconds while `ksphmi` keeps its PID and frame rate: watch
+  `/sys/class/drm/card1-HDMI-A-1/status` (flapping connected/disconnected = HDMI cable or connector). A "no
+  signal" monitor with `Cannot find any crtc or sizes` in dmesg means no monitor was detected at boot. The splash
+  must only use the DRM framebuffer (`vc4drmfb`): the firmware's `simplefb` is fb0 for ~2 s and then replaced.
+- A Pi that boots to black with no ping: bisect `cmdline.txt` from the SD card's FAT partition on Windows (keep the
+  good line as a backup file next to it), one change per boot; `systemd.mask=UNIT` in cmdline disables a unit.
 
 - Control packets use a latest-value buffer, but STAGE/SAS/RCS presses are events: capture their edges and
   receipt times on the serial reader before replacing that buffer. Decode/apply game controls only on Unity's
