@@ -22,6 +22,11 @@ want COM5 and port 50000 (it checks).
 
 ## Facts learned (2026-11-14)
 
+- The simulator logs to `build/kspsim.log` (rotated 3 x 2 MB) as well as the console: read it instead of asking
+  the user what the window shows. A status line (board state, detail, counters, DebugPacket, kRPC clients) is
+  written on every state change and every 30 s; a failed handshake logs the bytes received per attempt, and
+  "port completely silent" means the USB bridge delivers nothing (see kspcontroller-workflow, bridge stall).
+
 - The user expects the values to be controllable from the test app ("para eso es"): every value reported must be
   settable from the window. `Simulator.reported()` is the single source for both links; add new values to
   `physics.REPORTED_FIELDS` and `Vessel.report()` and the manual panel picks them up.

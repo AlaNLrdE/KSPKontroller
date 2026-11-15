@@ -226,6 +226,14 @@ def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -
     return VESSEL_DATA.pack(*(values[k] for k in VESSEL_FIELDS))
 
 
+def _line(ser, attr):
+    """A modem line or counter for the log; some drivers raise instead of answering."""
+    try:
+        return getattr(ser, attr)
+    except Exception as e:  # noqa: BLE001 - diagnostics only
+        return "?(%s)" % type(e).__name__
+
+
 @dataclass
 class BoardStatus:
     state: str = "idle"          # idle | searching | handshake | linked | error
@@ -312,11 +320,14 @@ class BoardLink:
                 continue
             ports = self._ports()
             if not ports:
+                if self.status.state != "searching":
+                    log.info("no Arduino USB port found (VIDs %s)", ", ".join("%04x" % v for v in sorted(ARDUINO_VIDS)))
                 self.status = BoardStatus("searching", detail="no Arduino USB port found")
                 self._stop.wait(2)
                 continue
             for name in ports:
                 try:
+                    log.info("opening %s at %d baud", name, self.baud)
                     with serial.Serial(name, self.baud, timeout=0.05, write_timeout=1) as ser:
                         self._session(ser, name)
                 except (serial.SerialException, OSError) as e:
@@ -327,13 +338,24 @@ class BoardLink:
             self._stop.wait(2)
 
     def _handshake(self, ser, parser: FrameParser) -> bool:
-        for _ in range(5):
-            ser.write(frame(bytes([ID_HANDSHAKE, 1, 2, 3])))
+        seen = bytearray()   # everything the board sent during the handshake, for the log
+        packets = []
+        for attempt in range(1, 6):
+            written = ser.write(frame(bytes([ID_HANDSHAKE, 1, 2, 3])))
             end = time.monotonic() + 0.7
             while time.monotonic() < end:
-                for p in parser.feed(ser.read(256)):
+                chunk = ser.read(256)
+                seen += chunk
+                for p in parser.feed(chunk):
+                    packets.append("id %d len %d" % (p[0], len(p)))
                     if p[0] == ID_HANDSHAKE and p[1:] == bytes([3, 1, 4]):
+                        log.info("handshake answered on attempt %d (%d bytes received)", attempt, len(seen))
                         return True
+            log.info("handshake attempt %d: wrote %s bytes, received %d bytes so far, packets %s, "
+                     "cts=%s dsr=%s in_waiting=%s", attempt, written, len(seen), packets[-5:] or "none",
+                     _line(ser, "cts"), _line(ser, "dsr"), _line(ser, "in_waiting"))
+        log.warning("no handshake reply after 5 attempts: %d bytes received%s, bad frames %d",
+                    len(seen), (" (first: %s)" % seen[:48].hex(" ")) if seen else " (port completely silent)", parser.bad)
         return False
 
     def _session(self, ser, name: str) -> None:
