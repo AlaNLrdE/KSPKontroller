@@ -32,6 +32,10 @@ want COM5 and port 50000 (it checks).
 - The krpc 0.7 client calls `KRPC.GetServices` at connect and uses its pre-generated stubs: the stand-in only has
   to declare the SpaceCenter classes and the VesselSituation enum, and answer the procedures the HMI calls (names
   and return types: `krpc/services/spacecenter.py` in the venv). An unknown call returns an error naming it.
+- `KrpcTest` drives the stand-in with the stock krpc 0.7 Python client over the procedures the C++ HMI
+  reads (`hmi-cpp/src/telemetry.cpp`) and the UDP 50002 context for every view in `hmi-cpp/src/scenes.cpp`.
+  The C++ client itself runs against kspsim only in `./ci test_hmi --sim` (Linux/WSL): when the HMI starts
+  calling a new procedure, add it to the stand-in and to `KrpcTest`.
 - Test GUI code without seeing it: build `App(sim, board, None)`, schedule `root.after(...)` actions and
   `root.destroy`, collect `report_callback_exception`, print the StringVars.
 - Heredocs with quotes break in the Bash tool: write edit scripts with Write and run them with the venv python.
