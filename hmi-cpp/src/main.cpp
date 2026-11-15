@@ -87,12 +87,22 @@ bool parse(int argc, char** argv, Args& a) {
 
 /// Where frames go: an SDL window (GPU renderer when available; kmsdrm on the Pi console), the Linux
 /// framebuffer, or memory only. The last two use SDL's software renderer on an ARGB8888 surface.
+/// Output "auto" (the Pi service) tries the GPU through SDL first and falls back to the framebuffer when SDL
+/// cannot open the display or only offers a software renderer: measured on the Pi 4 at 2520x1680, the V3D GPU
+/// draws a frame in 4.5 ms against 37 ms in software (present 6 ms against 9 ms).
 class Output {
 public:
     Output(const Config& cfg, const Args& args, int want_w, int want_h) {
         const char* env = std::getenv("KSPHMI_OUTPUT");
         std::string output = env && *env ? env : cfg.display.output;
         bool offscreen = args.offscreen || !args.screenshot.empty();
+        if (!offscreen && output == "auto" && !args.windowed) {
+            std::string why;
+            if (open_sdl(cfg, args, want_w, want_h, true, why)) return;
+            log::warning(LOG, "GPU output unavailable (" + why + "), using the framebuffer");
+            close_sdl();
+            output = "fbdev";
+        }
         if (offscreen || (output == "fbdev" && !args.windowed)) {
             if (!offscreen) {
                 fb_ = std::make_unique<Framebuffer>(cfg.display.fbdev);
@@ -109,37 +119,13 @@ public:
             w_ = want_w, h_ = want_h;
             return;
         }
-        if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) throw std::runtime_error(std::string("SDL video: ") + SDL_GetError());
-        video_ = true;
-        bool fullscreen = cfg.display.fullscreen && !args.windowed;
-        Uint32 flags = 0;
-        if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
-        if (want_w <= 0 || want_h <= 0) {
-            SDL_DisplayMode mode;
-            if (fullscreen && SDL_GetDesktopDisplayMode(0, &mode) == 0) want_w = mode.w, want_h = mode.h;
-            else want_w = 1280, want_h = 800;
-        }
-        window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, want_w, want_h, flags);
-        if (!window_) throw std::runtime_error(std::string("SDL window: ") + SDL_GetError());
-        renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
-        if (!renderer_) {
-            log::warning(LOG, std::string("no GPU renderer (") + SDL_GetError() + "), using software");
-            renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
-        }
-        if (!renderer_) throw std::runtime_error(std::string("SDL renderer: ") + SDL_GetError());
-        SDL_RendererInfo info;
-        SDL_GetRendererInfo(renderer_, &info);
-        accelerated_ = (info.flags & SDL_RENDERER_ACCELERATED) != 0;
-        SDL_GetRendererOutputSize(renderer_, &w_, &h_);
-        if (fullscreen) SDL_ShowCursor(SDL_DISABLE);
-        kind_ = std::string("SDL ") + SDL_GetCurrentVideoDriver() + " / " + info.name;
+        std::string why;
+        if (!open_sdl(cfg, args, want_w, want_h, false, why)) throw std::runtime_error(why);
     }
 
     ~Output() {
-        if (renderer_) SDL_DestroyRenderer(renderer_);
-        if (window_) SDL_DestroyWindow(window_);
+        close_sdl();
         if (surface_) SDL_FreeSurface(surface_);
-        if (video_) SDL_QuitSubSystem(SDL_INIT_VIDEO);
     }
 
     void present() {
@@ -164,6 +150,44 @@ public:
     const std::string& kind() const { return kind_; }
 
 private:
+    /// SDL window + renderer. need_gpu: fail (instead of using SDL's software renderer) when no accelerated one exists.
+    bool open_sdl(const Config& cfg, const Args& args, int want_w, int want_h, bool need_gpu, std::string& why) {
+        if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return why = std::string("SDL video: ") + SDL_GetError(), false;
+        video_ = true;
+        bool fullscreen = cfg.display.fullscreen && !args.windowed;
+        Uint32 flags = 0;
+        if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
+        if (want_w <= 0 || want_h <= 0) {
+            SDL_DisplayMode mode;
+            if (fullscreen && SDL_GetDesktopDisplayMode(0, &mode) == 0) want_w = mode.w, want_h = mode.h;
+            else want_w = 1280, want_h = 800;
+        }
+        window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, want_w, want_h, flags);
+        if (!window_) return why = std::string("SDL window: ") + SDL_GetError(), false;
+        renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
+        if (!renderer_) {
+            if (need_gpu) return why = std::string("no GPU renderer: ") + SDL_GetError(), false;
+            log::warning(LOG, std::string("no GPU renderer (") + SDL_GetError() + "), using software");
+            renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_SOFTWARE);
+        }
+        if (!renderer_) return why = std::string("SDL renderer: ") + SDL_GetError(), false;
+        SDL_RendererInfo info;
+        SDL_GetRendererInfo(renderer_, &info);
+        accelerated_ = (info.flags & SDL_RENDERER_ACCELERATED) != 0;
+        if (need_gpu && !accelerated_) return why = std::string("only a software renderer (") + info.name + ")", false;
+        SDL_GetRendererOutputSize(renderer_, &w_, &h_);
+        if (fullscreen) SDL_ShowCursor(SDL_DISABLE);
+        kind_ = std::string("SDL ") + SDL_GetCurrentVideoDriver() + " / " + info.name;
+        return true;
+    }
+
+    void close_sdl() {
+        if (renderer_) SDL_DestroyRenderer(renderer_), renderer_ = nullptr;
+        if (window_) SDL_DestroyWindow(window_), window_ = nullptr;
+        if (video_) SDL_QuitSubSystem(SDL_INIT_VIDEO), video_ = false;
+        accelerated_ = false;
+    }
+
     std::unique_ptr<Framebuffer> fb_;
     SDL_Surface* surface_ = nullptr;
     SDL_Window* window_ = nullptr;
@@ -271,7 +295,8 @@ int run(int argc, char** argv) {
             std::shared_ptr<const Snapshot> snap =
                 args.bench ? std::make_shared<const Snapshot>(bench_source.sample(i + 1)) : source->latest();
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick.
-            bool needed = snap != last || snap->state != State::Flight || stale(*snap, tick);
+            bool needed = snap != last || snap->state != State::Flight || stale(*snap, tick) ||
+                          (snap->state == State::Flight && display.navball().animating());
             if (needed) {
                 double t0 = monotonic();
                 display.draw(*snap, t0);

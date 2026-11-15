@@ -472,8 +472,14 @@ def check_hmi_cpp_layout(ctx):
         for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ["(missing)"]:
             if not name.endswith(allowed):
                 bad.append("%s/%s" % (sub, name))
+    # deploy_hmi tars a fixed list: a new top-level folder (include/ on 2026-11-14) broke the Pi build when missing.
+    m = re.search(r"tar -cf - ([^)]*)\)", read(os.path.join(ROOT, "ci")))
+    shipped = set(m.group(1).split()) if m else set()
+    for name in sorted(os.listdir(HMI_DIR)):
+        if os.path.isdir(os.path.join(HMI_DIR, name)) and name != "build" and name not in shipped:
+            bad.append("deploy_hmi does not ship %s/" % name)
     report("FAIL" if bad else "PASS", "hmi: source layout",
-           ", ".join(bad) if bad else "src/ only .cpp, include/ only headers")
+           ", ".join(bad) if bad else "src/ only .cpp, include/ only headers, deploy_hmi ships every folder")
 
 
 def check_hmi_cpp(ctx):

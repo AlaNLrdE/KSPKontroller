@@ -183,6 +183,28 @@ def _i32(v: float) -> int:
     return 0 if not math.isfinite(v) else int(max(-2**31, min(2**31 - 1, round(v))))
 
 
+def _nav(une) -> tuple[int, int]:
+    """(pitch, heading) x 50 of a direction in (up, north, east), as the plugin's WorldVecToNavHeading and
+    FloatAngleToFixed_16; 0, 0 for a zero vector."""
+    une = tuple(_f(c) for c in une)
+    n = math.sqrt(sum(c * c for c in une))
+    if n < 1e-9:
+        return 0, 0
+    pitch = math.degrees(math.asin(max(-1.0, min(1.0, une[0] / n))))
+    heading = math.degrees(math.atan2(une[2], une[1])) % 360.0 if math.hypot(une[1], une[2]) > 1e-9 else 0.0
+    return int(round(pitch * 50)), int(round(heading * 50)) % 18000
+
+
+def _prograde(r: dict) -> tuple[float, float, float]:
+    """The NavBall prograde of the reported speed mode (0 orbit, 1 surface, 2 target), eastward in the plane."""
+    mode = int(_f(r.get("speed_mode", 0)))
+    if mode == 2:
+        return tuple(r["relative_" + a] for a in ("up", "north", "east"))
+    speed = _f(r["surface_speed" if mode == 1 else "orbital_speed"])
+    vs = _f(r["vertical_speed"])
+    return vs, 0.0, math.sqrt(max(0.0, speed * speed - vs * vs))
+
+
 def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -> bytes:
     """VesselData for ``v``; the orbit / altitude / speed values come from ``r`` (Simulator.reported(): the
     flight model, or the values typed in manual mode), the rest (fuel, stages, action groups) from the vessel."""
@@ -198,6 +220,15 @@ def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -
         ag = (c.sas << 0 | c.rcs << 1 | c.lights << 2 | c.gear << 3 | c.brakes << 4 | c.abort << 5
               | ((c.groups >> 1) & 0x3FF) << 6)
     sas_on = bool(ag & 1)
+    pro = _prograde(r)
+    pro_pitch, pro_heading = _nav(pro)
+    horizontal = math.hypot(pro[1], pro[2])  # normal: perpendicular to the prograde, south for an eastward orbit
+    normal_heading = _nav((0.0, -pro[2] / horizontal, pro[1] / horizontal))[1] if horizontal > 1e-9 else 0
+    node = bool(r.get("node_enabled"))
+    mn_pitch, mn_heading = _nav(tuple(r["burn_" + a] for a in ("up", "north", "east"))) if node else (0, 0)
+    target = bool(r.get("target_enabled"))
+    target_vec = tuple(_f(r["target_" + a]) for a in ("up", "north", "east"))
+    tg_pitch, tg_heading = _nav(target_vec) if target else (0, 0)
     lf_s, ox_s = v.liquid_fuel, v.oxidizer
     if "stage_fuel" in r:  # percent of the stage tank (a forced value pins it)
         pct = max(0.0, min(100.0, _f(r["stage_fuel"]))) / 100
@@ -219,12 +250,15 @@ def encode_vessel(v: physics.Vessel, delta_time: float, r: dict | None = None) -
         IntakeAirTot=0.0, IntakeAir=0.0, SolidFuelTot=0.0, SolidFuel=0.0, XenonGasTot=0.0, XenonGas=0.0,
         LiquidFuelTotS=physics.LIQUID_FUEL, LiquidFuelS=lf_s, OxidizerTotS=physics.OXIDIZER,
         OxidizerS=ox_s, MissionTime=int(v.mission_time), deltaTime=delta_time, VOrbit=_f(r["orbital_speed"]),
-        MNTime=0, MNDeltaV=0.0, Pitch=pitch, Roll=r["roll"], Heading=heading, ActionGroups=ag, SOINumber=KERBIN_SOI,
+        MNTime=max(0, _i32(r["node_time"])) if node else 0, MNDeltaV=_f(r["node_remaining"]) if node else 0.0,
+        Pitch=pitch, Roll=r["roll"], Heading=heading, ActionGroups=ag, SOINumber=KERBIN_SOI,
         MaxOverHeat=overheat, MachNumber=surf / 340.0 if rho > 0 else 0.0,
         IAS=surf * math.sqrt(rho / physics.SEA_DENSITY), CurrentStage=v.stage, TotalStage=physics.STAGES,
-        TargetDist=0.0, TargetV=0.0, NavballSASMode=(1 + 1) << 4 | (int(r.get("sas_mode", 1)) & 0x0F if sas_on else 0),
-        ProgradePitch=int(max(-90, min(90, pitch)) * 50), ProgradeHeading=int(heading * 50),
-        ManeuverPitch=0, ManeuverHeading=0, TargetPitch=0, TargetHeading=0, NormalHeading=0)
+        TargetDist=math.sqrt(sum(c * c for c in target_vec)) if target else 0.0,
+        TargetV=math.sqrt(sum(_f(r["relative_" + a]) ** 2 for a in ("up", "north", "east"))) if target else 0.0,
+        NavballSASMode=(int(_f(r.get("speed_mode", 0))) + 1) << 4 | (int(r.get("sas_mode", 1)) & 0x0F if sas_on else 0),
+        ProgradePitch=pro_pitch, ProgradeHeading=pro_heading, ManeuverPitch=mn_pitch, ManeuverHeading=mn_heading,
+        TargetPitch=tg_pitch, TargetHeading=tg_heading, NormalHeading=normal_heading)
     return VESSEL_DATA.pack(*(values[k] for k in VESSEL_FIELDS))
 
 

@@ -567,5 +567,143 @@ class KrpcTest(unittest.TestCase):
             sim.stop()
 
 
+def _point(v, pitch, heading, roll=0.0):
+    """Steer the vessel to this attitude (degrees, NavBall), at rest."""
+    f, t = physics.attitude_axes(pitch, heading, roll)
+    v.forward, v.top, v.omega, v.steered = v.from_une(f), v.from_une(t), (0.0, 0.0, 0.0), True
+
+
+def _sas_report(v):
+    """A reported dict with a target and a maneuver node, so every SAS mode has a direction."""
+    return dict(v.report(), target_enabled=1.0, target_up=0.3, target_north=-0.5, target_east=0.8,
+                node_enabled=1.0, burn_up=0.2, burn_north=0.6, burn_east=-0.7)
+
+
+class AttitudeTest(unittest.TestCase):
+    def test_axes_and_angles_round_trip_and_match_the_rotation(self):
+        for p, h, r in ((0, 0, 0), (12, 90, -25), (-40, 300, 170), (89.9, 45, 10), (90, 90, 0), (-90, 200, 0)):
+            f, t = physics.attitude_axes(p, h, r)
+            p2, h2, r2 = physics.attitude_angles(f, t)
+            f2, t2 = physics.attitude_axes(p2, h2, r2)
+            for a, b in zip(f + t, f2 + t2):
+                self.assertAlmostEqual(a, b, places=6, msg=(p, h, r))
+            q = physics.attitude_rotation(p2, h2, r2)
+            x, y, z, w = q  # the rotation maps the vessel's forward axis (0, 1, 0) to f
+            fq = (2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x))
+            for a, b in zip(f, fq):
+                self.assertAlmostEqual(a, b, places=6)
+
+    def test_unsteered_vessel_follows_the_guidance(self):
+        v = physics.scenario("pad")
+        self.assertAlmostEqual(v.attitude()[0], 90.0)
+        v.apply_controls(physics.Controls(throttle=1.0))
+        v.step(60)
+        self.assertFalse(v.steered)
+        ux, uy = v.guidance_direction()
+        self.assertEqual(v.thrust_direction(), (ux, uy))
+
+    def test_sas_slews_to_every_mode_and_settles(self):
+        for mode in range(2, 11):
+            v = physics.scenario("orbit")
+            _point(v, -30, 300)  # at least 10 degrees from every target
+            errors, rates = [], []
+            for _ in range(int(30 / 0.1)):
+                v.autopilot = v.sas_target(mode, _sas_report(v))
+                self.assertIsInstance(v.autopilot, tuple, physics.SAS_MODES[mode - 1])
+                v.step(0.1)
+                errors.append(v.sas_error)
+                rates.append(math.sqrt(sum(w * w for w in v.omega)))
+            name = physics.SAS_MODES[mode - 1]
+            self.assertGreater(errors[0], 10, name)
+            self.assertLess(errors[10], errors[0], name)
+            self.assertTrue(all(b <= a + 0.05 for a, b in zip(errors, errors[1:]) if a > 2), name)  # no overshoot
+            self.assertLess(max(errors[-50:]), 0.5, name)  # settled for the last 5 s
+            self.assertLess(max(rates), physics.SAS_RATE * 1.01, name)
+            self.assertLess(rates[0], physics.SAS_RATE / 2, name)  # eases in
+
+    def test_sas_mode_directions(self):
+        v = physics.scenario("orbit")  # at periapsis: velocity horizontal and eastward
+        r = _sas_report(v)
+        for mode, (pitch, heading) in ((2, (0, 90)), (3, (0, 270)), (4, (0, 180)), (5, (0, 0)), (6, (-90, None)),
+                                       (7, (90, None))):
+            d = v.to_une(v.sas_target(mode, r))
+            self.assertAlmostEqual(math.degrees(math.asin(d[0])), pitch, places=3)
+            if heading is not None:
+                self.assertAlmostEqual(math.degrees(math.atan2(d[2], d[1])) % 360, heading, places=3)
+        self.assertEqual(v.sas_target(1, r), physics.HOLD)
+        self.assertEqual(v.sas_target(8, v.report()), physics.HOLD)   # no target
+        self.assertEqual(v.sas_target(10, v.report()), physics.HOLD)  # no node
+
+    def test_stability_assist_stops_and_holds(self):
+        v = physics.scenario("orbit")
+        _point(v, 10, 30, 5)
+        v.omega = (0.2, -0.1, 0.05)
+        v.autopilot = physics.HOLD
+        for _ in range(50):
+            v.step(0.1)
+        self.assertLess(math.sqrt(sum(w * w for w in v.omega)), 1e-6)
+        held = v.forward
+        for _ in range(20):
+            v.step(0.1)
+        for a, b in zip(held, v.forward):
+            self.assertAlmostEqual(a, b, places=9)
+
+    def test_stick_rotates_the_vessel(self):
+        for axis, index, sign in (("pitch", 0, 1), ("yaw", 1, 1), ("roll", 2, 1)):
+            v = physics.scenario("orbit")
+            _point(v, 0, 90, 0)
+            v.steered = False  # the stick alone takes over from the guidance
+            start = v.attitude()
+            v.apply_controls(physics.Controls(**{axis: 1.0}))
+            for _ in range(10):
+                v.step(0.1)
+            self.assertTrue(v.steered)
+            moved = v.attitude()
+            delta = (moved[index] - start[index] + 180) % 360 - 180
+            self.assertGreater(delta * sign, 5, axis)
+            v.apply_controls(physics.Controls())
+            for _ in range(60):
+                v.step(0.1)
+            self.assertLess(math.sqrt(sum(w * w for w in v.omega)), 0.01, axis)  # damped without SAS
+
+    def test_thrust_follows_the_attitude_once_steered(self):
+        v = physics.scenario("orbit")
+        _point(v, 90, 90)  # radial out
+        v.apply_controls(physics.Controls(throttle=1.0))
+        vs0 = v.vertical_speed
+        v.step(5)
+        self.assertGreater(v.vertical_speed - vs0, 0.9 * physics.MAX_ACCEL * 5 - 20)
+        w = physics.scenario("orbit")
+        _point(w, 0, 180)  # normal: out of the plane, no effect on the planar orbit
+        el = w.elements()
+        w.apply_controls(physics.Controls(throttle=1.0))
+        w.step(5)
+        self.assertAlmostEqual(w.elements().apoapsis, el.apoapsis, delta=1.0)
+
+    def test_simulator_sas_normal_reaches_the_board_and_krpc_values(self):
+        sim = Simulator("orbit")
+        sim.set_game(sas=True)
+        sim.sas_mode = 4  # normal
+        with self.assertLogs("kspsim", "INFO") as logs:
+            for _ in range(400):
+                sim.step_vessel(0.05)
+        text = "\n".join(logs.output)
+        self.assertIn("SAS on, mode normal", text)
+        self.assertIn("SAS normal: on target", text)
+        r = sim.reported()
+        self.assertAlmostEqual(r["pitch"], 0, delta=1)
+        self.assertAlmostEqual(r["heading"], 180, delta=1)
+        f = _fields(sim)
+        self.assertAlmostEqual(f["Heading"], 180, delta=1)
+        self.assertAlmostEqual(f["Pitch"], 0, delta=1)
+        self.assertEqual(f["NavballSASMode"] & 0x0F, 4)
+        self.assertAlmostEqual(f["NormalHeading"] / 50, 180, delta=1)
+        self.assertAlmostEqual(f["ProgradeHeading"] / 50, 90, delta=1)
+        sim.set_game(sas=False)
+        with self.assertLogs("kspsim", "INFO") as logs:
+            sim.step_vessel(0.05)
+        self.assertIn("SAS off", "\n".join(logs.output))
+
+
 if __name__ == "__main__":
     unittest.main()

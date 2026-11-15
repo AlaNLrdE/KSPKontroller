@@ -41,7 +41,10 @@ class Simulator:
         # sent before (VControlsOld), so a toggle pressed in the game is kept until the board's bit changes.
         self.game = {f: False for f in GAME_FLAGS}
         self.game_groups = 0            # custom action groups, bit n = group n (1-10)
-        self.sas_mode = 1               # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
+        self._sas_mode = 1              # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
+        self._sas_state = (False, 1)    # (SAS on, mode) last logged
+        self._sas_since = 0.0           # UT of the last SAS change, for the "on target" log line
+        self._sas_settled = True
         self._board_prev = physics.Controls()  # the plugin's VControlsOld
         self._board_seeded = False      # the plugin's StageSeeded: the first packet of a link only seeds the bits
         self.node: dict = {}            # a maneuver node on the flight model (set_node), under manual values
@@ -52,6 +55,47 @@ class Simulator:
         self._thread = threading.Thread(target=self._run, name="Simulator", daemon=True)
         self.listeners: list = []       # callables(scene) told when the scene changes (the kRPC server)
         self.load(scenario)
+
+    @property
+    def sas_mode(self) -> int:
+        return self._sas_mode
+
+    @sas_mode.setter
+    def sas_mode(self, mode: int) -> None:
+        """Select the SAS mode (1 stability assist .. 10 maneuver, physics.SAS_MODES); the vessel slews to it
+        while SAS is on."""
+        mode = int(mode)
+        if not 1 <= mode <= len(physics.SAS_MODES):
+            raise ValueError("SAS mode must be 1-%d" % len(physics.SAS_MODES))
+        with self.lock:
+            self._sas_mode = mode
+
+    def _update_autopilot(self) -> None:
+        """Give the vessel this tick's SAS direction (None with SAS off) and log SAS changes."""
+        v = self.vessel
+        state = (self.game["sas"], self._sas_mode)
+        if state != self._sas_state:
+            if state[0]:
+                log.info("SAS on, mode %s", physics.SAS_MODES[state[1] - 1])
+            else:
+                log.info("SAS off")
+            self._sas_state = state
+            self._sas_since, self._sas_settled = self.ut, False
+        v.autopilot = v.sas_target(self._sas_mode, self.reported()) if state[0] else None
+        if state[0] and self._sas_mode > 1 and v.autopilot == physics.HOLD and not self._sas_settled:
+            log.info("SAS %s: no direction (no target, node or speed), holding the attitude",
+                     physics.SAS_MODES[self._sas_mode - 1])
+            self._sas_settled = True
+
+    def _after_step(self, was_steered: bool) -> None:
+        v = self.vessel
+        if v.steered and not was_steered:
+            log.info("attitude: vessel steered (SAS or stick), launch guidance off, thrust along the nose")
+        if (self.game["sas"] and not self._sas_settled and isinstance(v.autopilot, tuple)
+                and v.sas_error < 1.0):
+            log.info("SAS %s: on target (%.2f deg) after %.1f s, attitude pitch %.1f heading %.1f roll %.1f",
+                     physics.SAS_MODES[self._sas_mode - 1], v.sas_error, self.ut - self._sas_since, *v.attitude())
+            self._sas_settled = True
 
     # -- control from the window --------------------------------------------------------------------
     def load(self, scenario: str) -> None:
@@ -272,4 +316,12 @@ class Simulator:
                     continue
                 self.ut += dt
                 if self.vessel and self.manual_values is None:  # on rails outside flight too, as in KSP
-                    self.vessel.step(dt)
+                    self.step_vessel(dt)
+
+    def step_vessel(self, dt: float) -> None:
+        """One tick of the flight model with this tick's SAS direction (the clock thread; tests call it)."""
+        with self.lock:
+            self._update_autopilot()
+            was = self.vessel.steered
+            self.vessel.step(dt)
+            self._after_step(was)

@@ -45,6 +45,16 @@ want COM5 and port 50000 (it checks).
   `root.destroy`, collect `report_callback_exception`, print the StringVars.
 - Heredocs with quotes break in the Bash tool: write edit scripts with Write and run them with the venv python.
 
+- Attitude (2026-11-14): the vessel has a 3D attitude (`Vessel.forward/top`, inertial, north = -z because the
+  planar orbit's normal r x v is south as in `TransformDirection`). It follows the launch guidance until
+  *steered* (SAS on or stick > 5 % since the scenario loaded), then SAS slews (`Vessel.sas_target`, modes
+  `Simulator.sas_mode` 1-10) or the stick rotates it, and the engine thrusts along the nose (in-plane part).
+  `physics.attitude_axes/attitude_angles` match `attitude_rotation` exactly (checked numerically: q maps the
+  vessel's (0,1,0) to forward). Drive it in tests with `Simulator.step_vessel(dt)` (sets the SAS direction
+  and logs "SAS on, mode X" / "SAS X: on target"); a headless check:
+  `sim.set_game(sas=True); sim.sas_mode = 4` then read `build/kspsim.log`.
+- `sed -i` in Git Bash rewrites a CRLF file as LF even when nothing matches: edit with the Python helper.
+
 ## Agents
 
 - Parallel agents on kspsim get a worktree. The Agent tool's `isolation: worktree` refused once (it reused a

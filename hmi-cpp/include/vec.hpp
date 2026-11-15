@@ -45,6 +45,13 @@ Basis basis(const Quat& q);
 /// Euler angles (degrees) to a vessel-to-surface quaternion, used by the demo source and the simulator.
 Quat attitude(double pitch, double heading, double roll);
 
+/// Spherical interpolation from a (t = 0) to b (t = 1) along the shortest arc; both are normalised first.
+/// Returns b for a zero / non-finite input.
+Quat slerp(const Quat& a, const Quat& b, double t);
+
+/// Rotation angle in degrees between two attitudes (0..180), or 180 for a zero / non-finite input.
+double angle_between(const Quat& a, const Quat& b);
+
 /// Burn duration for dv with the rocket equation; nothing when an input is missing, non-finite or <= 0.
 std::optional<double> burn_time(double dv, double mass, double thrust, double isp);
 
