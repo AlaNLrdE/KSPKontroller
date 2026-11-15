@@ -45,7 +45,10 @@ def report(status, name, detail=""):
 
 
 def read(path):
-    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+    """Text of a repo or game file with universal newlines: CRLF and CR become LF, so content checks behave the
+    same in the main checkout (core.autocrlf=true, CRLF files) and in agent worktrees (LF files). Regexes may use
+    `$` with re.M and literal "\\n" anchors; never test for "\\r" in the result."""
+    with open(path, encoding="utf-8", errors="replace") as f:
         return f.read()
 
 
@@ -172,6 +175,15 @@ def check_ci_deploy(ctx):
     report('PASS' if result.returncode == 0 else 'FAIL', 'ci: deploy all projects',
            'deployment guards, cold-cache reference paths and WDT metadata/source preservation' if result.returncode == 0
            else (result.stdout + result.stderr)[-1000:])
+
+
+def check_verify_newlines(ctx):
+    """verify.py itself: content checks pass with LF (agent worktrees) and CRLF (core.autocrlf=true checkout) files."""
+    result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_verify.py"],
+                            cwd=ROOT, capture_output=True, text=True, timeout=60,
+                            env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    report("PASS" if result.returncode == 0 else "FAIL", "verify: LF/CRLF agnostic",
+           "ship report contract with LF and CRLF copies" if result.returncode == 0 else (result.stdout + result.stderr)[-1000:])
 
 
 def run_firmware_test(name, sanitize=False):
@@ -1045,7 +1057,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_documentation, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_verify_newlines, check_documentation, check_hmi_desktop, check_git]
 
 
 def main():

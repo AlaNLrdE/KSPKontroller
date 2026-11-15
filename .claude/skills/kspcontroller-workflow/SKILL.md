@@ -154,3 +154,6 @@ In a fresh worktree copy `build/refasm` from the main checkout before `./ci buil
   SDL2 dev files and `mono-mcs`; `pip install --user cmake`. The repo is LF in git (`text=auto`): a Linux checkout
   is LF, so new files must be LF there (CRLF exists only in the Windows working tree). The VM has no git identity:
   pass `GIT_AUTHOR_*`/`GIT_COMMITTER_*` from `git log -1` instead of changing config.
+- `tools/verify.py` content checks must be newline-agnostic: the main checkout is CRLF (core.autocrlf), some
+  worktrees/CI checkouts are LF. `read()` uses universal newlines (it once used `newline=""`, so `^VERSION = 1$`
+  with re.M failed only in the main checkout). Read repo text through `read()`; `tools/test_verify.py` checks both.
