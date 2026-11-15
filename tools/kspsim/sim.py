@@ -11,6 +11,8 @@ from . import physics, ships
 
 log = logging.getLogger("kspsim")
 
+EDITOR_MODES = ("construction", "actions", "crew", "cargo")
+
 SKINS = ("", "classic", "apollo")  # "" sends no skin field (as KSPSerialIO): the HMI's config decides
 SCENES = ("flight", "space_center", "vab", "sph", "mission_control", "astronaut_complex",
           "research", "administration", "tracking_station", "closed")  # closed = KSP not running: kRPC ports closed, no telemetry
@@ -34,6 +36,8 @@ class Simulator:
         # KSPSerialIO.Hmi.dll). Every change is a new revision, as the plugin's onEditorShipModified.
         self.ship = "kerbal_x"
         self.ship_revision = 1
+        self.editor_mode = "construction"
+        self.editor_group = "custom1"
         self.warp = warp
         self.ut = 0.0
         self.tick = tick
@@ -248,6 +252,7 @@ class Simulator:
         assert scene in SCENES
         with self.lock:
             self.scene = scene
+            self._board_seeded = False
         for f in self.listeners:
             f(scene)
         log.info("scene %s", scene)
@@ -260,11 +265,29 @@ class Simulator:
             self.ship_revision += 1
         log.info("editor ship %s (revision %d)", name or "none: no KSPHMI service", self.ship_revision)
 
+    def set_editor_mode(self, mode: str) -> None:
+        if mode not in EDITOR_MODES:
+            raise ValueError("unknown editor mode: " + mode)
+        with self.lock:
+            if self.editor_mode != mode:
+                self.editor_mode = mode
+                self.ship_revision += 1
+        log.info("editor mode %s", mode)
+
+    def set_editor_group(self, group: str) -> None:
+        valid = ("stage", "gear", "lights", "brakes", "abort", "sas", "rcs") + tuple("custom%d" % n for n in range(1,11))
+        if group not in valid:
+            raise ValueError("unknown editor group: " + group)
+        with self.lock:
+            if self.editor_group != group:
+                self.editor_group = group
+                self.ship_revision += 1
+
     def ship_report(self) -> str:
         """What KSPHMI.ShipReport() answers now ("" when the sample has no ship)."""
         with self.lock:
             sample = ships.ship(self.ship)
-            return ships.report_text(self.ship_revision, sample) if sample else ""
+            return ships.report_text(self.ship_revision, ships.editor_sample(sample, self.editor_mode, self.editor_group)) if sample else ""
 
     def set_skin(self, skin: str) -> None:
         """Ask the Raspberry Pi HMI for a look ("classic", "apollo"), or "" to leave it to its config."""
@@ -291,6 +314,14 @@ class Simulator:
             self._last_board = time.monotonic()
             self.board_driven = True
             self.last_board = c
+            if self.scene in ("vab", "sph"):
+                if self._board_seeded:
+                    for field, direction in (("rcs", -1), ("sas", 1)):
+                        if getattr(c, field) != getattr(self._board_prev, field):
+                            self.set_editor_mode(EDITOR_MODES[(EDITOR_MODES.index(self.editor_mode) + direction) % 4])
+                self._board_seeded = True
+                self._board_prev = c
+                return
             if self._board_seeded:
                 self._apply_levels(c, self._board_prev)
             self._board_seeded = True
@@ -307,7 +338,7 @@ class Simulator:
 
     def vessel_for_board(self) -> physics.Vessel | None:
         with self.lock:
-            return self.vessel if self.scene == "flight" else None
+            return self.vessel if self.scene in ("flight", "vab", "sph") else None
 
     def ksp_running(self) -> bool:
         """KSP owns the serial port when it runs; checked at most every 5 s (tasklist is slow)."""

@@ -76,3 +76,11 @@ want COM5 and port 50000 (it checks).
   `return_type` (UINT32, STRING) or the krpc client cannot decode the results. `--scene` starts in any scene.
 - In a Linux VM (2026-11-15) `test_krpc_client_end_to_end` failed at "closed ports refuse connections" before any
   change (sandbox socket behaviour); every other test passed. Do not chase it there; run it on Windows (./ci test_sim).
+
+- Editor mode/group selectors and --editor-mode drive the same cached ship report as the real plugin.
+  In vab/sph the board link sends neutral VesselData; SAS/RCS change screens, never simulated flight flags
+  or axes. Entering a scene/reconnecting reseeds the input bits. The shared editor fixture tests all fields.
+
+- Check simulator provenance before diagnosing the board. Root ci.cmd sim runs main, not a feature
+  worktree. For a branch-only test give the complete PowerShell launcher path. A VAB log saying no
+  telemetry sent means the old simulator idles the board, so button silence alone is not a hardware fault.

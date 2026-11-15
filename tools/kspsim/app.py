@@ -63,6 +63,19 @@ class App:
         ship_box.pack(side="left", padx=4)
         ship_box.bind("<<ComboboxSelected>>",
                       lambda _e: sim.set_ship("" if self.ship.get() == "none" else self.ship.get()))
+        editor_row = ttk.Frame(game)
+        editor_row.pack(anchor="w", pady=(4, 0))
+        ttk.Label(editor_row, text="Editor mode").pack(side="left")
+        self.editor_mode = tk.StringVar(value=sim.editor_mode)
+        editor_box = ttk.Combobox(editor_row, textvariable=self.editor_mode, state="readonly", width=12,
+                                 values=("construction", "actions", "crew", "cargo"))
+        editor_box.pack(side="left", padx=4)
+        editor_box.bind("<<ComboboxSelected>>", lambda _e: sim.set_editor_mode(self.editor_mode.get()))
+        self.editor_group = tk.StringVar(value=sim.editor_group)
+        group_box = ttk.Combobox(editor_row, textvariable=self.editor_group, state="readonly", width=9,
+            values=("stage", "gear", "lights", "brakes", "abort", "sas", "rcs") + tuple("custom%d" % n for n in range(1,11)))
+        group_box.pack(side="left", padx=4)
+        group_box.bind("<<ComboboxSelected>>", lambda _e: sim.set_editor_group(self.editor_group.get()))
         self.board_text = tk.StringVar()
         self.krpc_text = tk.StringVar()
         for title, var, width in (("Arduino (KSPSerialIO protocol)", self.board_text, 64),
@@ -266,6 +279,8 @@ class App:
         self.sim.set_forced(key, val.get() if self.force_on[key].get() else None)
 
     def _refresh_game(self) -> None:
+        self.editor_mode.set(self.sim.editor_mode)
+        self.editor_group.set(self.sim.editor_group)
         sim = self.sim
         with sim.lock:
             for name, var in self.game_vars.items():
