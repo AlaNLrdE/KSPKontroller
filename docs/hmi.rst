@@ -29,7 +29,9 @@ The two application roles are:
 
 * a **source** (``src/telemetry.cpp``) publishes immutable ``Snapshot`` objects. ``KrpcSource`` connects to
   kRPC, opens streams on the active vessel and re-opens them when the vessel or the sphere of influence changes;
-  a stream transport failure ends the session even when cached values and the RPC channel remain available.
+  a stream transport failure or three seconds without incoming stream results ends the session, even when
+  cached values and the RPC channel remain available. Identical values arriving normally count as activity;
+  repeatedly reading the cache does not refresh the channel's receive timestamp.
   It reconnects forever, so starting the Pi before KSP is fine. ``DemoSource`` flies an 80 x 250 km Kerbin
   orbit, so the screens can be worked on without the game.
 * the **display** (``src/display.cpp``, SDL2 + SDL2_ttf) draws the latest snapshot at ``fps`` frames per second.

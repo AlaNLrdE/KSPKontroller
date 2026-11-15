@@ -77,7 +77,7 @@ public:
     /// Never throws: removing a stream of a dead connection is a no-op.
     void remove_stream(uint64_t id) noexcept;
     /// Latest value of a stream, waiting up to `wait` seconds for the first one.
-    /// Throws RpcError when the latest result is an error, ConnectionError when the stream link died.
+    /// Throws RpcError for a server error, ConnectionError if the stream link died or sent no results for 3 s.
     Value stream(uint64_t id, double wait = 5.0);
 
     /// Wake up and fail every blocked call (used on shutdown).
@@ -95,6 +95,7 @@ private:
     std::mutex mutex_;
     std::condition_variable updated_;
     std::map<uint64_t, std::string> latest_;  // stream id -> ProcedureResult bytes
+    double stream_received_ = 0;  // monotonic arrival time of the channel's latest results, guarded by mutex_
     std::string stream_error_;
 };
 

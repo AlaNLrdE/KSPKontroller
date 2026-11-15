@@ -512,6 +512,33 @@ TEST(krpc_stream_disconnect_overrides_cached_value) {
     CHECK_EQ(pb::dec_double(c.invoke(krpc::sc("get_UT")).data), 1234.5);
 }
 
+TEST(krpc_silent_stream_channel_expires_cached_values_while_rpc_stays_alive) {
+    FakeServer server([](const std::string&, const std::vector<std::string>&) -> FakeResult {
+        return {pb::enc_double(1234.5)};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    uint64_t ut = c.add_stream(krpc::sc("get_UT"), 10);
+    CHECK_EQ(pb::dec_double(c.stream(ut).data), 1234.5);
+    // Identical values arriving for longer than the idle limit are still live, even without reads.
+    std::this_thread::sleep_for(std::chrono::milliseconds(3200));
+    CHECK_EQ(pb::dec_double(c.stream(ut).data), 1234.5);
+    server.pause_streams = true;
+    CHECK_EQ(pb::dec_double(c.stream(ut).data), 1234.5);  // a recent cached value remains valid
+    std::this_thread::sleep_for(std::chrono::milliseconds(3200));
+    CHECK_EQ(pb::dec_double(c.invoke(krpc::sc("get_UT")).data), 1234.5);
+    bool expired = false;
+    try {
+        c.stream(ut);
+    } catch (const krpc::ConnectionError& e) {
+        expired = std::string(e.what()).find("stream channel inactive") != std::string::npos;
+    }
+    CHECK(expired);
+}
+
 namespace {
 // Accepts connections and never answers: like kRPC with maxTimePerUpdate = 0.
 struct SilentServer {

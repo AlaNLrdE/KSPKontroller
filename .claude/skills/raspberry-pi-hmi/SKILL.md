@@ -114,6 +114,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   Check the returned position optional before drawing current or maneuver apoapsis markers. The render
   regression uses e = 0.9999995 in both skins; libc++ debug hardening catches unchecked optional access.
 
+- An open stream socket can stop delivering data while RPC stays healthy. Track monotonic arrival of stream
+  results and reject cached values after 3 s of channel inactivity. Equal values still count as new arrivals;
+  cache reads do not. The fake server can pause updates without closing either socket to test this case.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the

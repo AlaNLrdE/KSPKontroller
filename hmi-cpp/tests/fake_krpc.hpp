@@ -52,6 +52,7 @@ public:
     std::atomic<int> calls{0};
     /// AddStream answers the call's error when it fails at once (real kRPC); off keeps older tests' streams.
     std::atomic<bool> fail_add_stream{false};
+    std::atomic<bool> pause_streams{false};  ///< keep both sockets open while withholding stream updates
 
 private:
     static int listen_any(int& port) {
@@ -188,6 +189,10 @@ private:
         if (!recv_message(c, m)) return;
         send_message(c, ok_response(""));
         while (!stop_) {
+            if (pause_streams) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                continue;
+            }
             ksphmi::pb::Writer update;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
