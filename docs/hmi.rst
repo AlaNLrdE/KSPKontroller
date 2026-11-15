@@ -103,6 +103,9 @@ The header shows ``LIVE``, ``CONNECTED`` (outside flight), ``OFFLINE`` (no kRPC)
 (connected, but no new sample for 3 s: the game froze or the link stalled). A periapsis inside the atmosphere is
 orange and one below the surface red.
 
+Apoapsis markers are omitted when the conic cannot supply a finite position near the parabolic limit,
+for both the current orbit and the maneuver preview.
+
 ORBIT's white ring is the measured vessel position relative to the body's centre, projected into a fixed
 inertial view plane. The source streams ``Vessel.position`` and ``Vessel.velocity`` in the body's
 ``non_rotating_reference_frame`` and fixes the view axes while following that vessel/body. The conic is

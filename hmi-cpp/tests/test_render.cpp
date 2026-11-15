@@ -206,6 +206,36 @@ TEST(inertial_marker_stays_put_and_inertial_escape_stays_clipped) {
     }
 }
 
+TEST(nearly_parabolic_apoapsis_is_omitted_when_its_position_is_unavailable) {
+    const double mu = KERBIN_MU, radius = KERBIN_RADIUS + 100000, e = .9999995;
+    const Vec3 position{radius, 0, 0}, velocity{0, 0, std::sqrt(mu * (1 + e) / radius)};
+    OrbitState state{position, velocity, mu, view_axes(position, velocity)};
+    auto conic = state.conic();
+    CHECK(conic.has_value());
+    CHECK(conic->apoapsis().has_value());
+    CHECK(!conic->position(PI));
+    for (const char* skin : {"classic", "apollo"}) {
+        Screen screen(1260, 840, skin);
+        Rect panel = orbit_panel(screen);
+        for (bool maneuver : {false, true}) {
+            Snapshot snap = demo();
+            snap.orbit_state = maneuver ? demo().orbit_state : std::optional<OrbitState>{state};
+            if (maneuver) snap.maneuver_orbit = ManeuverOrbit{position, velocity, 0};
+            else snap.maneuver_orbit.reset();
+            int ap_labels = 0;
+            screen.canvas->on_text = [&](const std::string& label, const Rect&) {
+                if (label == "Ap") ++ap_labels;
+            };
+            screen.fill(FILL);
+            screen.display->orbit(panel, snap);
+            screen.canvas->flush();
+            CHECK_EQ(ap_labels, maneuver ? 1 : 0);  // only the ordinary vessel orbit has a drawable apoapsis
+            CHECK(screen.display->last_vessel_marker.has_value());
+            CHECK(screen.untouched_outside(panel, FILL_PIXEL));
+        }
+    }
+}
+
 TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
     for (const auto& size : SIZES) {
         const int w = size.first, h = size.second;

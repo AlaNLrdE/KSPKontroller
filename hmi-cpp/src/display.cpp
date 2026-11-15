@@ -725,8 +725,8 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
     if (conic && conic->eccentricity > 1e-5) {
-        if (conic->apoapsis()) {
-            Pt ap = point(*conic->position(PI));
+        if (auto position = conic->position(PI)) {
+            Pt ap = point(*position);
             c_.circle(ap.x, ap.y, static_cast<float>(.8 * u), GOOD);
             orbit_text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
         }
@@ -794,7 +794,9 @@ void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSp
         else orbit_text(label, 2.4, MANEUVER, p.x - 1.1 * u, p.y, Anchor::MidRight);
     };
     if (next.eccentricity > 1e-5) {
-        if (span.closed && next.apoapsis()) apsis("Ap", *next.position(PI));
+        if (span.closed) {
+            if (auto position = next.position(PI)) apsis("Ap", *position);
+        }
         if (span.closed || (span.from <= 0 && 0 <= span.to)) apsis("Pe", *next.position(0));
     }
     Pt node = point(m.position);

@@ -71,6 +71,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   for a bounded retry (0.5 s), remove successful subscriptions from the pending set, and clear that set when
   stage/parts topology changes. Do not rebuild working resource or stage streams just to retry delta-v.
 
+- A conic can have a mathematical apoapsis while position(PI) is unavailable (1 - eccentricity <= 1e-6).
+  Check the returned position optional before drawing current or maneuver apoapsis markers. The render
+  regression uses e = 0.9999995 in both skins; libc++ debug hardening catches unchecked optional access.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the
