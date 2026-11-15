@@ -730,6 +730,33 @@ def check_sim(ctx):
 
 
 # --------------------------------------------------------------------------------------------- hardware
+def check_hmi_desktop(ctx):
+    """Record the interactive simulator GUI -> real C++ HMI smoke check, without needing Docker here."""
+    base = os.path.join(ROOT, "build", "hmi-container")
+    records = []
+    if os.path.isdir(base):
+        for platform in os.listdir(base):
+            path = os.path.join(base, platform, "desktop", "smoke.json")
+            if os.path.isfile(path):
+                records.append((platform, path))
+    if not records:
+        report("WARN", "hmi: desktop communication", "not tested: ./ci test_hmi_desktop")
+        return
+    sources = [os.path.join(ROOT, "ci")]
+    for folder in ("hmi-cpp", "tools/kspsim", "tools/hmi-container"):
+        for root, dirs, files in os.walk(os.path.join(ROOT, folder)):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            sources.extend(os.path.join(root, f) for f in files if not f.endswith(".pyc"))
+    newest = max(os.path.getmtime(p) for p in sources)
+    for platform, path in records:
+        with open(path, encoding="utf-8") as stream:
+            data = json.load(stream)
+        ok = data.get("passed") is True and data.get("skin") == "classic" and abs(data.get("throttle", 0) - .37) < .001 and data.get("browser") is True
+        stale = os.path.getmtime(path) < newest
+        report("FAIL" if not ok else "WARN" if stale else "PASS", "hmi: desktop communication " + platform,
+               "GUI skin -> C++ display (UDP), GUI throttle -> kRPC" + ("; sources changed: rerun ./ci test_hmi_desktop" if stale else ""))
+
+
 def check_board(ctx):
     if ksp_running():
         report("WARN", "board", "skipped: KSP is running and owns the serial port")
@@ -744,7 +771,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_hmi_desktop, check_git]
 
 
 def main():

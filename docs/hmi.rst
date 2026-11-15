@@ -285,6 +285,82 @@ Deploy
 #. waits 8 s, requires ``active`` with ``NRestarts=0`` (``Restart=always`` hides a crash loop behind
    ``active``) and prints the last 15 log lines.
 
+Interactive HMI and test app without the Pi
+------------------------------------------
+
+Run both application windows on a Linux desktop, viewed in your browser::
+
+   ./ci hmi_desktop
+
+Open ``http://localhost:6080/vnc.html?autoconnect=true&resize=scale``. Wait for the initial build;
+``docker logs -f ksphmi-desktop`` shows startup progress. The left window is the real kspsim test app;
+the right window is the actual C++ HMI, with an SDL window on a virtual X11 screen.
+The browser displays the desktop through noVNC, rather than reimplementing either app.
+
+Use the test app's scenario buttons, scene selector, HMI skin selector, throttle, resources and manual
+fields as usual. Both apps share container loopback: kRPC TCP 50300/50301, scene/skin context UDP 50002.
+Discovery is disabled so the HMI stays connected to this simulator. No Arduino or real KSP is needed.
+Only the browser port is published, bound to the host's loopback; no kRPC or VNC port is exposed.
+
+The desktop is 3000x1800, scaled to the browser viewport. Use browser fullscreen or noVNC scaling options
+for small labels. Move or resize either window with its title bar. Closing either app ends the container.
+Logs are under ``build/hmi-container/<platform>/desktop``. Stop and restart after editing code::
+
+   docker stop ksphmi-desktop
+   ./ci hmi_desktop
+
+If the desktop is already running, the command prints its URL and keeps the current session.
+A new session copies the current source and rebuilds it. This is not hot reload. The desktop and automated
+tests share a build directory: stop the desktop before running tests for the same architecture.
+The container is removed when stopped; build outputs and logs remain on the host.
+
+``./ci test_hmi_desktop`` exercises the actual Tk skin and throttle controls with both windows running,
+checks that the C++ display selects the skin received over UDP and reads the changed throttle over kRPC.
+It also checks the noVNC HTTP/WebSocket path to VNC. It runs without publishing browser ports, exits
+automatically, and saves ``desktop/smoke.json``.
+``tools/verify.py`` reports this result and whether it predates the relevant sources.
+
+Testing without a Raspberry Pi (Docker)
+---------------------------------------
+
+Install and start Docker with Linux containers, then run from the repository root::
+
+   ./ci test_hmi_container
+
+This builds a Debian Bookworm environment (the Pi's Debian generation), compiles the actual C++ HMI,
+runs all ctest suites and connects the executable to kspsim over loopback. SDL uses its dummy video
+backend and software rendering: no display, Pi, Arduino or KSP is required. The source mount is read-only;
+the test container has no external network. Only the image build downloads dependencies.
+
+The default platform is ``linux/arm64``. On an ARM64 Mac this avoids CPU emulation; on an x86 PC Docker
+needs ARM emulation support (included in Docker Desktop). For faster x86 development, or a 32-bit target::
+
+   HMI_PLATFORM=linux/amd64 ./ci test_hmi_container
+   HMI_PLATFORM=linux/arm/v7 ./ci test_hmi_container
+
+Choose the architecture matching the Pi OS when checking ARM compatibility. Builds have separate caches
+under ``build/hmi-container/linux-arm64`` (or ``linux-amd64`` / ``linux-arm-v7``). Inspect
+``hmi-cpp-sim/flight.png``, ``hmi.log`` and ``kspsim.log`` there; ctest details are under
+``hmi-cpp/Testing/Temporary``. A failing build or test makes the command fail.
+
+This checks C++ logic, rendering and the real client wire protocol, including an ARM build when selected.
+It does not reproduce the Pi kernel, firmware, systemd boot, physical framebuffer, display blanking or
+hardware performance. Test those on the Pi when available. Container timings are not Pi performance
+measurements. A full Raspberry Pi OS VM is an optional system integration environment, rather than a
+requirement for everyday HMI development. Debian package and transitive Python versions are resolved at
+image build time; this environment is repeatable tooling, not a bit-for-bit dependency lock.
+
+Building on macOS
+-----------------
+
+With CMake, a C++17 compiler, pkg-config, SDL2 and SDL2_ttf installed, ``./ci hmi`` runs a native Mac
+window. ``./ci hmi --demo`` displays simulated data without KSP. Run ``./ci test_hmi`` for native tests;
+``./ci hmi --demo --screenshot build/hmi-macos-demo.png --size 1280x800`` saves an off-screen frame.
+Native rendering falls back to macOS Arial Bold when the Linux fonts are absent; ``KSPHMI_FONT`` can
+select the same font used on the Pi for visual comparisons. Executable-relative configuration lookup
+uses the macOS API. Linux fbdev is unavailable on macOS and gives an explicit error; SDL and off-screen
+output work. For the simulator and HMI together in the browser, use ``./ci hmi_desktop``.
+
 Building on this PC
 -------------------
 

@@ -21,6 +21,9 @@
 #   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows in WSL
 #   ./ci hmi [ARGS]          Build it and run it on this PC in a window (--demo: simulated orbit, no KSP needed)
 #   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board
+#   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
+#   ./ci hmi_desktop        Open both HMI and simulator windows in a browser desktop at localhost:6080
+#   ./ci test_hmi_desktop   Exercise the real simulator GUI controls and their connection to the C++ HMI
 #   ./ci deploy_hmi          Copy hmi-cpp/ to the Pi over SSH, build and test it there, install ksphmi.service, restart
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
@@ -564,7 +567,7 @@ hmi_sim() {
   sim_pid=$!
   sleep 3
   KSPHMI_LOCAL_CONFIG=/dev/null "$BUILD/hmi-cpp/ksphmi" --address 127.0.0.1 --size 2520x1680 --seconds 8 \
-      --screenshot "$out/flight.png" --config <(printf '[krpc]\nrpc_port = %d\nstream_port = %d\n' "$port" "$((port + 1))") \
+      --screenshot "$out/flight.png" --config <(printf '[krpc]\ndiscovery = false\nrpc_port = %d\nstream_port = %d\n' "$port" "$((port + 1))") \
       >"$out/hmi.log" 2>&1 || rc=$?
   kill "$sim_pid" 2>/dev/null || true
   wait "$sim_pid" 2>/dev/null || true
@@ -572,8 +575,53 @@ hmi_sim() {
   [ "$rc" = 0 ] || die "HMI exited with $rc"
   grep -q "following .* around Kerbin" "$out/hmi.log" || die "the HMI never followed the simulated vessel"
   # kspsim asks for the apollo skin on the UDP 50002 context reply: the HMI must switch at runtime
-  grep -q "skin: apollo (context" "$out/hmi.log" || die "the HMI ignored the simulator's skin (context reply)"
+  # Context may arrive before Display is created: it then logs the initial skin as '(config)'.
+  grep -q "context skin: apollo" "$out/hmi.log" || die "the HMI never received the simulator's skin"
+  grep -q "ksphmi.display: skin: apollo" "$out/hmi.log" || die "the HMI ignored the simulator's skin (context reply)"
   log "OK: followed the simulated vessel; frame saved to $out/flight.png"
+}
+
+test_hmi_container() {
+  # Docker Desktop can install its CLI for this user without adding it to PATH.
+  if ! command -v docker >/dev/null && [ -x "$HOME/.docker/bin/docker" ]; then
+    export PATH="$HOME/.docker/bin:$PATH"
+  fi
+  command -v docker >/dev/null || die "Docker missing: install and start Docker, then retry ./ci test_hmi_container"
+  local platform="${HMI_PLATFORM:-linux/arm64}" out tag mode="${1:-test}"
+  case "$platform" in
+    linux/arm64|linux/amd64|linux/arm/v7) ;;
+    *) die "HMI_PLATFORM must be linux/arm64, linux/amd64 or linux/arm/v7" ;;
+  esac
+  out="$BUILD/hmi-container/${platform//\//-}"
+  tag="ksphmi-test:${platform//\//-}"
+  if [ "$mode" = desktop ]; then
+    local state
+    docker info >/dev/null 2>&1 || die "Docker engine unavailable: start Docker Desktop"
+    state="$(docker inspect --format '{{.State.Status}}' ksphmi-desktop 2>/dev/null || true)"
+    if [ "$state" = running ]; then
+      log "HMI desktop already running: http://localhost:6080/vnc.html?autoconnect=true&resize=scale"
+      log "To rebuild after source changes: docker stop ksphmi-desktop, then ./ci hmi_desktop"
+      return
+    fi
+    [ -z "$state" ] || die "ksphmi-desktop exists (state: $state). Inspect it with docker logs ksphmi-desktop; remove it with docker rm ksphmi-desktop before retrying"
+  fi
+  mkdir -p "$out"
+  docker build --platform "$platform" -t "$tag" -f "$ROOT/tools/hmi-container/Dockerfile" "$ROOT"
+  if [ "$mode" = desktop ]; then
+    MSYS_NO_PATHCONV=1 docker run --rm -d --init --name ksphmi-desktop --platform "$platform" \
+      --user "$(id -u):$(id -g)" --shm-size=256m \
+      -p 127.0.0.1:6080:6080 \
+      --mount "type=bind,source=$ROOT,target=/src,readonly" \
+      --mount "type=bind,source=$out,target=/out" "$tag" desktop
+    log "Open http://localhost:6080/vnc.html?autoconnect=true&resize=scale (first build may take a minute)"
+    log "Logs: docker logs -f ksphmi-desktop; stop: docker stop ksphmi-desktop"
+    return
+  fi
+  MSYS_NO_PATHCONV=1 docker run --rm --platform "$platform" --network none \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=$ROOT,target=/src,readonly" \
+    --mount "type=bind,source=$out,target=/out" "$tag" "$mode"
+  log "HMI test artifacts: $out/hmi-cpp-sim (flight.png and logs)"
 }
 
 test_hmi() {
@@ -673,6 +721,9 @@ case "${1:-help}" in
   hmi)               shift; hmi "$@" ;;
   build_hmi|build_hmi_cpp) build_hmi ;;
   test_hmi|test_hmi_cpp)   shift; test_hmi "$@" ;;
+  test_hmi_container) test_hmi_container ;;
+  hmi_desktop) test_hmi_container desktop ;;
+  test_hmi_desktop) test_hmi_container desktop-smoke ;;
   deploy_hmi)        deploy_hmi ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
   sim)               shift; sim "$@" ;;

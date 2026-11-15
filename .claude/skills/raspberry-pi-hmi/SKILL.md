@@ -158,3 +158,41 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   frames) matched a full redraw pixel for pixel and helped in software, but on the V3D (kmsdrm/opengl, 2520x1680,
   `--bench 300 [--bench-anim] --layer-cache on|off`) a full redraw took 2.8 ms draw + 11.8 ms present while cached
   frames took 5.3 + 20.5 ms with the same CPU. Default `layer_cache = "off"`.
+
+## Testing when the Pi is unavailable
+
+- `./ci test_hmi_container` builds Debian Bookworm + SDL2 and runs ctest plus the C++ client against kspsim,
+  headlessly with no external runtime network. Requires a running Docker engine; default `linux/arm64`,
+  override `HMI_PLATFORM=linux/amd64` or `linux/arm/v7`. Sources are read-only; artifacts and separate
+  architecture caches live in `build/hmi-container/<platform-with-dashes>/`.
+- Use this for logic, rendering and protocol checks. It cannot validate fbdev hardware, kiosk boot or Pi
+  performance. Do not claim container tests passed unless Docker actually ran them.
+- Docker Desktop on macOS may expose its CLI only under `~/.docker/bin`; the container target adds it
+  to PATH when needed. A context skin can arrive before `Display` exists: require the telemetry context
+  message and the selected display skin, rather than assuming the display logs `(context)` instead of
+  `(config)`. Keep discovery disabled in the isolated simulator run.
+
+## Interactive desktop without the Pi
+
+- `./ci hmi_desktop` starts the actual Tk simulator and C++ SDL window together, accessed through
+  `http://localhost:6080/vnc.html?autoconnect=true&resize=scale` (noVNC). Docker publishes only host
+  loopback 6080; kRPC 50300/50301 and context UDP 50002 stay inside the container. Discovery is disabled.
+- Stop with `docker stop ksphmi-desktop`; rerun the command after source changes to rebuild. Stop the
+  desktop before automated tests for that architecture: they share `build/hmi-container/<platform>`.
+- `./ci test_hmi_desktop` invokes actual Tk skin/throttle widgets with the real C++ HMI running, checks
+  the skin was applied over UDP and the throttle changed over kRPC. `check_hmi_desktop` in verify.py
+  reports `desktop/smoke.json` and detects stale results. This covers desktop interaction, not fbdev.
+- Container source copies must preserve timestamps for incremental CMake builds. Desktop packages
+  (Xvfb, Openbox, x11vnc, noVNC, websockify, python3-tk) belong in the image, not on the Mac.
+- `hmi_desktop` is idempotent for a running session: print its URL before building or creating another
+  container. A second invocation must not fail with a Docker name conflict or silently replace the session.
+
+## Native macOS builds
+
+- Keep C++17 portable: include `<algorithm>` for min/max and do not capture structured bindings in
+  lambdas (C++20). Use ordinary local variables when a lambda needs a pair's members.
+- `fbdev.cpp` compiles its Linux implementation only on Linux; other platforms throw a clear error
+  for fbdev while supporting SDL and off-screen output. `config.cpp` uses `_NSGetExecutablePath` on
+  macOS instead of `/proc/self/exe`; Canvas can use system Arial Bold when Linux fonts are absent.
+- Validate native support with `./ci test_hmi` and `./ci hmi --demo --screenshot build/hmi-macos-demo.png`.
+  Core tests need loopback sockets; a sandbox that blocks binds can leave the fake server waiting.
