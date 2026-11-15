@@ -2,7 +2,7 @@
 # Run once as root after deploying the HMI. SSH remains available.
 set -eu
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Run with sudo: sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh" >&2
+    echo "Run with sudo: sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh" >&2
     exit 1
 fi
 

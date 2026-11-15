@@ -1,4 +1,4 @@
-// Number formatting for the screens (port of hmi-pi/ksphmi/fmt.py): short strings that do not jump around.
+// Number formatting for the screens: short strings that do not jump around.
 #pragma once
 
 #include <string>

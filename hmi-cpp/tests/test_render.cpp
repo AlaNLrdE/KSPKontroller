@@ -1,4 +1,4 @@
-// Layout and clipping regressions ported from hmi-pi/tests, drawn off-screen with SDL's software renderer.
+// Layout and clipping regressions, drawn off-screen with SDL's software renderer.
 // Needs the TTF font (fonts-freefont-ttf, or KSPHMI_FONT).
 #include <SDL.h>
 

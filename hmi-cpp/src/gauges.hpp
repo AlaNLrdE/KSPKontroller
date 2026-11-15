@@ -1,4 +1,4 @@
-// Pure geometry of the RESOURCES dials (port of hmi-pi/ksphmi/gauges.py): no SDL, unit tested in test_core.
+// Pure geometry of the RESOURCES dials: no SDL, unit tested in test_core.
 //
 // Each dial looks like a car fuel gauge: a chrome bezel around a light face, and a SWEEP-degree arc across the
 // upper half of the face, E (0 %) at the left end and F (100 %) at the right end. The needle pivots on a hub in the
@@ -39,6 +39,10 @@ std::pair<double, double> point(double px, double py, double radius, double frac
 std::vector<std::pair<double, double>> needle(double px, double py, double radius, double fraction);
 /// Fractions splitting [f0, f1] into steps of at most `step_degrees` (both ends included).
 std::vector<double> steps(double f0, double f1, double step_degrees = 4.0);
+/// Ring between two radii around (cx, cy) from fraction f0 to f1: the outer edge forward, then the inner edge back
+/// (points i and size-1-i are on the same ray, so consecutive pairs form convex quads).
+std::vector<std::pair<double, double>> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
+                                              double step_degrees = 4.0);
 
 struct Cell {
     double cx, cy, cell_x, cell_w;

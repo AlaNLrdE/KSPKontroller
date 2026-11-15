@@ -1,4 +1,4 @@
-# KSP HMI, C++ port of hmi-pi/ksphmi for the Raspberry Pi 4 (Debian bookworm) and Linux PCs (WSL included).
+# KSP HMI flight data display for the Raspberry Pi 4 (Debian bookworm) and Linux PCs (WSL included).
 #
 #   cmake -S hmi-cpp -B build/hmi-cpp -DCMAKE_BUILD_TYPE=Release && cmake --build build/hmi-cpp -j4
 #   ctest --test-dir build/hmi-cpp --output-on-failure
@@ -62,3 +62,9 @@ target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)
 add_test(NAME render COMMAND ksphmi_render_tests)
 target_compile_definitions(ksphmi_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(ksphmi_tests PRIVATE -Wno-missing-field-initializers)
+
+# setup-kiosk.sh edits the Pi's boot files with python3 (present on Raspberry Pi OS): test that part when we can.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME kiosk COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_kiosk.py)
+endif()

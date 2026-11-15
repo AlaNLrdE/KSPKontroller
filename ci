@@ -18,12 +18,12 @@
 #   ./ci test_arduino [PORT] Compile, upload and test the board over serial (NO_UPLOAD=1 skips the upload)
 #   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
 #                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
-#   ./ci hmi [ARGS]          Run the Raspberry Pi HMI on this PC in a window (--demo: simulated orbit, no KSP needed)
-#   ./ci test_hmi            Unit tests of the HMI (no pygame, no kRPC needed)
-#   ./ci deploy_hmi          Test, copy hmi-pi/ to the Pi over SSH, install its service and restart it
+#   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows in WSL
+#   ./ci hmi [ARGS]          Build it and run it on this PC in a window (--demo: simulated orbit, no KSP needed)
+#   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board
+#   ./ci deploy_hmi          Copy hmi-cpp/ to the Pi over SSH, build and test it there, install ksphmi.service, restart
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
-#   ./ci build_hmi_cpp       Build the C++ HMI (hmi-cpp/, CMake) into build/hmi-cpp; on Windows inside WSL
-#   ./ci test_hmi_cpp [--sim] Build and run its tests; --sim also runs it against ./ci sim --no-board --headless
+#                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
 #   ./ci test_sim            Simulator tests, including the HMI kRPC client against the simulated server
@@ -475,82 +475,6 @@ deploy_all() {
   log "Done: plugin installed in $KSPDIR, board flashed"
 }
 
-# ------------------------------------------------------------------ Raspberry Pi HMI (hmi-pi/)
-
-HMI_DIR="$ROOT/hmi-pi"
-HMI_HOST="${HMI_HOST:-ksphmi}"
-HMI_APT_PACKAGES="python3-pygame libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri"
-
-hmi_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"; }
-
-# PC development venv (build/hmi-venv): pygame + krpc, kept apart from the tools venv
-hmi_venv() {
-  local py bin
-  py="$(find_python)"
-  [ -d "$BUILD/hmi-venv" ] || { log "Creating the HMI virtual environment" >&2; "$py" -m venv "$BUILD/hmi-venv" >&2; }
-  bin="$BUILD/hmi-venv/bin"
-  [ -d "$BUILD/hmi-venv/Scripts" ] && bin="$BUILD/hmi-venv/Scripts"
-  "$bin/python" -m pip install --quiet --disable-pip-version-check -r "$HMI_DIR/requirements-dev.txt" >&2
-  echo "$bin"
-}
-
-hmi() {
-  local bin
-  bin="$(hmi_venv)"
-  cd "$HMI_DIR"
-  "$bin/python" -m ksphmi --windowed "$@"
-}
-
-test_hmi() {
-  log "HMI unit tests"
-  (cd "$HMI_DIR" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest discover -s tests)
-}
-
-# Layout on the Pi: ~/ksphmi/app (replaced on every deploy), ~/ksphmi/venv (with the Debian pygame),
-# ~/ksphmi/env (kRPC address), ~/ksphmi/config.local.toml (yours, never touched).
-deploy_hmi() {
-  hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
-  test_hmi
-  local missing pc_ip
-  # SDL's kmsdrm driver needs Mesa EGL/GLES even for 2D drawing; Raspberry Pi OS Lite does not ship them
-  missing="$(hmi_ssh "for p in $HMI_APT_PACKAGES; do dpkg -s \$p >/dev/null 2>&1 || echo \"  \$p not installed\"; done
-    [ -e /var/lib/systemd/linger/\$USER ] || echo '  lingering off'")"
-  [ -z "$missing" ] || die "the Pi needs its one-time setup:
-$missing
-run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
-  # The text console's blinking cursor is drawn over the HMI frames; only root can stop it (not fatal)
-  # (the live cursor_blink value is not enough: it reads 0 whenever fbcon's timer happens to be stopped)
-  if ! hmi_ssh 'test -f /etc/tmpfiles.d/ksphmi-cursor.conf'; then
-    log "WARNING: the console cursor blinks over the HMI. Once, on the Pi:"
-    log "  %s" "echo '\''w /sys/class/graphics/fbcon/cursor_blink - - - - 0'\'' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
-  fi
-  pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
-
-  log "Copying hmi-pi to $HMI_HOST:~/ksphmi/app (kRPC server: $pc_ip)"
-  # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
-  (cd "$HMI_DIR" && tar --exclude=__pycache__ -cf - ksphmi config.toml requirements.txt systemd) |
-    hmi_ssh 'set -e; rm -rf ~/ksphmi/app.new; mkdir -p ~/ksphmi/app.new; tar -C ~/ksphmi/app.new -xf -; rm -rf ~/ksphmi/app; mv ~/ksphmi/app.new ~/ksphmi/app'
-
-  log "Installing the Python packages and the service"
-  hmi_ssh "set -e
-    cd ~/ksphmi
-    [ -x venv/bin/python ] || python3 -m venv --system-site-packages venv
-    venv/bin/pip install --quiet --disable-pip-version-check -r app/requirements.txt
-    printf 'KSPHMI_KRPC_ADDRESS=%s\n' '$pc_ip' > env
-    mkdir -p ~/.config/systemd/user
-    cp app/systemd/ksphmi.service ~/.config/systemd/user/
-    systemctl --user daemon-reload
-    systemctl --user enable ksphmi.service 2>/dev/null
-    systemctl --user restart ksphmi.service"
-  # Restart=always hides a crash loop behind "active": wait past RestartSec and require zero restarts
-  sleep 8
-  local state
-  state="$(hmi_ssh 'echo "$(systemctl --user is-active ksphmi.service)/$(systemctl --user show ksphmi.service -p NRestarts --value)"' || true)"
-  hmi_logs 15
-  [ "$state" = "active/0" ] || die "the HMI service is not running cleanly on $HMI_HOST (state/restarts: $state, log above)"
-  log "Done: HMI running on $HMI_HOST"
-}
-
 sim() {
   local bin
   bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
@@ -563,38 +487,41 @@ test_sim() {
   (cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest tools/kspsim/test_kspsim.py)
 }
 
-# ------------------------------------------------------------------ C++ HMI (hmi-cpp/)
-# On the Pi:  sudo apt install $HMI_CPP_APT_PACKAGES  (once), then ./ci build_hmi_cpp.
-HMI_CPP_DIR="$ROOT/hmi-cpp"
-HMI_CPP_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
+# ------------------------------------------------------------------ Raspberry Pi HMI (hmi-cpp/, C++)
+# Built with CMake: on the Pi by ./ci deploy_hmi, on this PC inside WSL (no C++ toolchain on Windows).
+HMI_DIR="$ROOT/hmi-cpp"
+HMI_HOST="${HMI_HOST:-ksphmi}"
+HMI_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
 # Fallback for a Linux box without root (this PC's WSL): the same libraries unpacked into build/hmi-cpp-deps.
 # Names are Ubuntu 24.04's (t64); SDL2's runtime needs the audio/X11 libraries even if it never opens them.
-HMI_CPP_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 fonts-freefont-ttf libxss1
+HMI_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 fonts-freefont-ttf libxss1
   libasound2t64 libdecor-0-0 libpulse0 libsamplerate0 libsndfile1 libasyncns0 libflac12t64 libvorbisenc2
   libvorbis0a libogg0 libopus0 libmpg123-0t64 libmp3lame0"
 
+hmi_ssh() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"; }
+
 # Windows has no C++ toolchain here: run the same ./ci target inside WSL when it is installed.
-hmi_cpp_in_wsl() {
+hmi_in_wsl() {
   local dir
-  command -v wsl.exe >/dev/null || die "no C++ toolchain on Windows and no WSL: build on the Pi (sudo apt install $HMI_CPP_APT_PACKAGES)"
+  command -v wsl.exe >/dev/null || die "no C++ toolchain on Windows and no WSL: build on the Pi (./ci deploy_hmi)"
   dir="$(cygpath -m "$ROOT")"
   dir="/mnt/$(printf '%s' "${dir:0:1}" | tr 'A-Z' 'a-z')${dir:2}"
   log "No C++ toolchain on Windows: running ./ci $* in WSL"
   MSYS_NO_PATHCONV=1 wsl.exe -- bash -lc "cd '$dir' && ./ci $*"
 }
 
-hmi_cpp_env() {
+hmi_env() {
   local deps="$BUILD/hmi-cpp-deps" lib arch dir
   command -v cmake >/dev/null && command -v g++ >/dev/null && command -v pkg-config >/dev/null ||
-    die "C++ toolchain missing: sudo apt install $HMI_CPP_APT_PACKAGES"
+    die "C++ toolchain missing: sudo apt install $HMI_APT_PACKAGES"
   pkg-config --exists sdl2 SDL2_ttf 2>/dev/null && return 0
   command -v apt-get >/dev/null && command -v dpkg >/dev/null ||
-    die "SDL2 development files missing: sudo apt install $HMI_CPP_APT_PACKAGES"
+    die "SDL2 development files missing: sudo apt install $HMI_APT_PACKAGES"
   if [ ! -f "$deps/.complete" ]; then
     log "SDL2 / SDL2_ttf not installed: unpacking the packages into $deps (no root needed)"
     rm -rf "$deps"; mkdir -p "$deps/debs"
     # shellcheck disable=SC2086
-    (cd "$deps/debs" && apt-get download $HMI_CPP_LOCAL_DEBS) || die "apt-get download failed; or: sudo apt install $HMI_CPP_APT_PACKAGES"
+    (cd "$deps/debs" && apt-get download $HMI_LOCAL_DEBS) || die "apt-get download failed; or: sudo apt install $HMI_APT_PACKAGES"
     for f in "$deps"/debs/*.deb; do dpkg -x "$f" "$deps/root"; done
     touch "$deps/.complete"
   fi
@@ -609,22 +536,29 @@ hmi_cpp_env() {
   export KSPHMI_FONT="${KSPHMI_FONT:-$deps/root/usr/share/fonts/truetype/freefont/FreeSansBold.ttf}"
 }
 
-build_hmi_cpp() {
-  if is_windows; then hmi_cpp_in_wsl build_hmi_cpp; return; fi
-  hmi_cpp_env
-  log "Building the C++ HMI into build/hmi-cpp"
-  cmake -S "$HMI_CPP_DIR" -B "$BUILD/hmi-cpp" -DCMAKE_BUILD_TYPE=Release >/dev/null
+build_hmi() {
+  if is_windows; then hmi_in_wsl build_hmi; return; fi
+  hmi_env
+  log "Building the HMI into build/hmi-cpp"
+  cmake -S "$HMI_DIR" -B "$BUILD/hmi-cpp" -DCMAKE_BUILD_TYPE=Release >/dev/null
   cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || echo 2)"
 }
 
-# End to end: tools/kspsim serves the real kRPC protocol; the C++ HMI must follow its vessel and draw a frame.
-hmi_cpp_sim() {
+# Build, then run it in a window on this PC (WSLg on Windows); ARGS as ksphmi --help, e.g. --demo
+hmi() {
+  if is_windows; then hmi_in_wsl hmi "$@"; return; fi
+  build_hmi
+  "$BUILD/hmi-cpp/ksphmi" --windowed "$@"
+}
+
+# End to end: tools/kspsim serves the real kRPC protocol; the HMI must follow its vessel and draw a frame.
+hmi_sim() {
   local py out port=50300 sim_pid rc=0
   py="${KSPSIM_PYTHON:-$(command -v python3)}" || die "python3 needed for tools/kspsim"
   "$py" -c "import krpc, google.protobuf" 2>/dev/null ||
     die "tools/kspsim needs the krpc and protobuf Python packages (pip install -r tools/requirements.txt)"
   out="$BUILD/hmi-cpp-sim"; mkdir -p "$out"
-  log "kspsim on 127.0.0.1:$port/$((port + 1)), C++ HMI against it"
+  log "kspsim on 127.0.0.1:$port/$((port + 1)), HMI against it"
   (cd "$ROOT/tools" && exec "$py" -m kspsim --no-board --headless --seconds 40 --address 127.0.0.1 \
       --rpc-port "$port" --stream-port "$((port + 1))") >"$out/kspsim.log" 2>&1 &
   sim_pid=$!
@@ -635,17 +569,73 @@ hmi_cpp_sim() {
   kill "$sim_pid" 2>/dev/null || true
   wait "$sim_pid" 2>/dev/null || true
   cat "$out/hmi.log"
-  [ "$rc" = 0 ] || die "C++ HMI exited with $rc"
-  grep -q "following .* around Kerbin" "$out/hmi.log" || die "the C++ HMI never followed the simulated vessel"
+  [ "$rc" = 0 ] || die "HMI exited with $rc"
+  grep -q "following .* around Kerbin" "$out/hmi.log" || die "the HMI never followed the simulated vessel"
   log "OK: followed the simulated vessel; frame saved to $out/flight.png"
 }
 
-test_hmi_cpp() {
-  if is_windows; then hmi_cpp_in_wsl test_hmi_cpp "$@"; return; fi
-  build_hmi_cpp
-  log "C++ HMI unit and layout tests"
+test_hmi() {
+  if is_windows; then hmi_in_wsl test_hmi "$@"; return; fi
+  build_hmi
+  log "HMI unit, layout and kiosk tests (ctest)"
   (cd "$BUILD/hmi-cpp" && ctest --output-on-failure)
-  if [ "${1:-}" = "--sim" ]; then hmi_cpp_sim; fi
+  if [ "${1:-}" = "--sim" ]; then hmi_sim; fi
+}
+
+# Layout on the Pi: ~/ksphmi/cpp (hmi-cpp sources and config.toml, replaced on every deploy; its build/ directory is
+# kept so CMake rebuilds incrementally), ~/ksphmi/env (kRPC address), ~/ksphmi/config.local.toml (yours, never touched).
+deploy_hmi() {
+  hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
+  local missing pc_ip
+  missing="$(hmi_ssh "for p in $HMI_APT_PACKAGES; do dpkg -s \$p >/dev/null 2>&1 || echo \"  \$p not installed\"; done
+    [ -e /var/lib/systemd/linger/\$USER ] || echo '  lingering off'")"
+  [ -z "$missing" ] || die "the Pi needs its one-time setup:
+$missing
+run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
+  # The text console's blinking cursor is drawn over the HMI frames; only root can stop it (not fatal)
+  # (the live cursor_blink value is not enough: it reads 0 whenever fbcon's timer happens to be stopped)
+  if ! hmi_ssh 'test -f /etc/tmpfiles.d/ksphmi-cursor.conf'; then
+    log "WARNING: the console cursor blinks over the HMI. Once, on the Pi:"
+    log "  %s" "echo '\''w /sys/class/graphics/fbcon/cursor_blink - - - - 0'\'' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf && sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf"
+  fi
+  pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
+
+  log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
+  # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
+  (cd "$HMI_DIR" && tar -cf - CMakeLists.txt config.toml src tests systemd) |
+    hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -xf -
+      find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
+      mv cpp.new/* cpp/; rmdir cpp.new'
+
+  # The running service keeps its binary until the restart below: a failed build or test leaves it untouched.
+  log "Building on $HMI_HOST (CMake Release, -j4) and running the tests there"
+  hmi_ssh 'set -e; cd ~/ksphmi/cpp
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
+    cmake --build build -j4
+    cd build && ctest --output-on-failure' || die "build or tests failed on $HMI_HOST: the service was not restarted"
+
+  log "Installing ksphmi.service and restarting it"
+  hmi_ssh "set -e
+    cd ~/ksphmi
+    printf 'KSPHMI_KRPC_ADDRESS=%s\n' '$pc_ip' > env
+    mkdir -p ~/.config/systemd/user
+    # the C++ trial unit and the Python runtime (app/, venv/) are gone: ksphmi.service is the C++ HMI now
+    if [ -f ~/.config/systemd/user/ksphmi-cpp.service ]; then
+      systemctl --user disable --now ksphmi-cpp.service 2>/dev/null || true
+      rm -f ~/.config/systemd/user/ksphmi-cpp.service
+    fi
+    rm -rf app venv
+    cp cpp/systemd/ksphmi.service ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable ksphmi.service 2>/dev/null
+    systemctl --user restart ksphmi.service"
+  # Restart=always hides a crash loop behind "active": wait past RestartSec and require zero restarts
+  sleep 8
+  local state
+  state="$(hmi_ssh 'echo "$(systemctl --user is-active ksphmi.service)/$(systemctl --user show ksphmi.service -p NRestarts --value)"' || true)"
+  hmi_logs 15
+  [ "$state" = "active/0" ] || die "the HMI service is not running cleanly on $HMI_HOST (state/restarts: $state, log above)"
+  log "Done: HMI running on $HMI_HOST"
 }
 
 hmi_logs() {
@@ -679,11 +669,10 @@ case "${1:-help}" in
   test_arduino)      shift; test_arduino "$@" ;;
   verify)            shift; "$(ensure_venv "$ROOT/tools/requirements.txt")/python" "$ROOT/tools/verify.py" "$@" ;;
   hmi)               shift; hmi "$@" ;;
-  test_hmi)          test_hmi ;;
+  build_hmi|build_hmi_cpp) build_hmi ;;
+  test_hmi|test_hmi_cpp)   shift; test_hmi "$@" ;;
   deploy_hmi)        deploy_hmi ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
-  build_hmi_cpp)     build_hmi_cpp ;;
-  test_hmi_cpp)      shift; test_hmi_cpp "$@" ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
   clean)             clean ;;

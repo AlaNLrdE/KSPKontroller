@@ -1,4 +1,4 @@
-// Pure-logic tests, ported from hmi-pi/tests (formatting, attitude, orbit geometry, resources, scenes,
+// Pure-logic tests (formatting, attitude, orbit geometry, resources, scenes,
 // discovery, config, kRPC client, reconnect). No display, no game.
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -322,7 +322,7 @@ TEST(toml_subset_and_errors) {
     }
     // the real settings file parses
     Config cfg;
-    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/../hmi-pi/config.toml");
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
     std::stringstream buf;
     buf << in.rdbuf();
     apply_toml(cfg, parse_toml(buf.str()));
@@ -597,6 +597,19 @@ TEST(gauge_scale_needle_and_window_stay_on_the_face) {
     }
     CHECK(std::hypot(gauges::WINDOW_W / 2, gauges::WINDOW_BOTTOM) < gauges::FACE);
     CHECK(gauges::WINDOW_TOP > gauges::PIVOT);  // the window is under the hub
+}
+
+TEST(gauge_sector_closes_between_the_two_radii) {
+    auto pts = gauges::sector(0, 0, 10, 8, 0, .5);
+    const size_t half = pts.size() / 2;
+    CHECK(pts.size() % 2 == 0 && half == gauges::steps(0, .5).size());
+    for (size_t i = 0; i < pts.size(); ++i)
+        CHECK_NEAR(std::hypot(pts[i].first, pts[i].second), i < half ? 10.0 : 8.0, 1e-9);
+    for (size_t i = 0; i < half; ++i) {  // point i and its mirror lie on the same ray from the hub
+        auto o = pts[i], in = pts[pts.size() - 1 - i];
+        CHECK_NEAR(o.first * in.second - o.second * in.first, 0, 1e-9);
+    }
+    CHECK_NEAR(pts.front().first, gauges::point(0, 0, 10, 0).first, 1e-12);  // starts at E, outer edge first
 }
 
 TEST(gauge_layout_fits_the_panel_at_every_resolution) {
