@@ -512,6 +512,33 @@ def check_hmi_except_names(ctx):
     report("FAIL" if bad else "PASS", "hmi: except names defined",
            ", ".join(bad) if bad else "every caught exception name is imported in its function or module")
 
+def check_hmi_cpp(ctx):
+    """The C++ HMI port (hmi-cpp/) must keep the Python reference's scene contract, views and resource order."""
+    src = os.path.join(ROOT, "hmi-cpp", "src")
+    if not os.path.isdir(src):
+        report("WARN", "hmi-cpp: parity with hmi-pi", "hmi-cpp/ missing")
+        return
+    py_scenes = read(os.path.join(HMI_DIR, "ksphmi", "scenes.py"))
+    cpp_scenes = read(os.path.join(src, "scenes.cpp"))
+    problems = []
+    for key in re.findall(r'^    "(\w+)": \(', py_scenes, re.M):
+        if '{"%s",' % key not in cpp_scenes:
+            problems.append("view %s" % key)
+    for text in re.findall(r'\("([A-Z0-9]+)", "([^"]+)", "([^"]+)"\)', py_scenes):
+        if '{"%s", "%s", "%s"}' % text not in cpp_scenes:
+            problems.append("card %s" % text[1])
+    if "KSPHMI/1" not in cpp_scenes or "50002" not in read(os.path.join(src, "scenes.hpp")):
+        problems.append("UDP 50002 KSPHMI/1 protocol")
+    names = re.search(r"RESOURCE_NAMES = \(([^)]*)\)", read(os.path.join(HMI_DIR, "ksphmi", "systems.py")))
+    model = read(os.path.join(src, "model.hpp"))
+    if not names or re.findall(r"'(\w+)'", names.group(1)) != re.findall(
+            r'"(\w+)"', model.split("RESOURCE_NAMES", 1)[1].split(";", 1)[0]):
+        problems.append("RESOURCE_NAMES order")
+    if "hmi-cpp/** text eol=lf" not in read(os.path.join(ROOT, ".gitattributes")):
+        problems.append(".gitattributes LF rule")
+    report("FAIL" if problems else "PASS", "hmi-cpp: parity with hmi-pi",
+           ", ".join(problems) if problems else "scene views and cards, UDP 50002 contract, resource order")
+
 
 def check_hmi(ctx):
     """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
@@ -707,7 +734,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_except_names, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_except_names, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
 
 
 def main():

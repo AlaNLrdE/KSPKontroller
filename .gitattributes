@@ -2,3 +2,4 @@ ci text eol=lf
 ci.cmd text eol=crlf
 Doxyfile text eol=lf
 hmi-pi/** text eol=lf
+hmi-cpp/** text eol=lf

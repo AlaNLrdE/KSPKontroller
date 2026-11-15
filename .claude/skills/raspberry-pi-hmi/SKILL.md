@@ -81,3 +81,18 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - Real kRPC 0.7 returns **null** for `SpaceCenter.ActiveVessel` at the Space Center (no RPC error): the HMI read
   `None.orbit` and reconnected in a loop (seen live 2026-11-14). Handle None as NOT IN FLIGHT; kspsim now answers
   null too. Any behaviour seen only in the real game goes into `tools/kspsim/krpcserver.py` and a test.
+
+## C++ runtime (hmi-cpp/, 2026-11-14)
+
+- This Windows PC has no C++ compiler; WSL Ubuntu 24.04 has g++/cmake but no sudo. `./ci build_hmi_cpp` /
+  `test_hmi_cpp` re-run themselves in WSL and unpack SDL2/SDL2_ttf with `apt-get download` + `dpkg -x` into
+  `build/hmi-cpp-deps` (PKG_CONFIG_SYSROOT_DIR, `-rpath-link`, LD_LIBRARY_PATH, KSPHMI_FONT). SDL2_ttf.pc names
+  harfbuzz/glib include dirs: CMake refuses imported targets whose include dirs do not exist, so ci creates them.
+- Building on `/mnt/c` from WSL is slow (minutes); for quick iterations build into `~/` inside WSL.
+- kspsim runs inside WSL with the Windows venv: `PYTHONPATH=<repo>/build/venv/Lib/site-packages
+  PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python` (pure-Python protobuf). Then `./ci test_hmi_cpp --sim`.
+- SDL's **software** renderer rasterises each blended triangle through a temporary surface: opaque untextured
+  batches must use `SDL_BLENDMODE_NONE`, rectangles `SDL_RenderFillRect`, glyphs `SDL_RenderCopy` (40 -> 9 ms
+  per 2520x1680 frame on the PC). The GPU path keeps batched `SDL_RenderGeometry` with feathered edges.
+- Never type `cat > file` without a heredoc in a Bash call: it waits on stdin until the tool times out.
+- Pi numbers are still unmeasured: `ksphmi --bench 20 --offscreen --size 2520x1680` prints `HMI_RENDER_MS`.

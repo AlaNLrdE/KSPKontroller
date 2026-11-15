@@ -1,0 +1,27 @@
+# systemd *user* unit for the C++ HMI (hmi-cpp/). A variant of hmi-pi/systemd/ksphmi.service: same settings files,
+# same ~/ksphmi/env (kRPC address written by ./ci deploy_hmi), same framebuffer output. Not installed by
+# ./ci deploy_hmi: until parity is confirmed on the Pi, install it by hand (docs/hmi.rst, "C++ runtime"):
+#
+#   cp ~/ksphmi/cpp/systemd/ksphmi-cpp.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user disable --now ksphmi.service && systemctl --user enable --now ksphmi-cpp.service
+#
+# Only one of the two units may run: both draw to /dev/fb0.
+[Unit]
+Description=KSP HMI flight data display (C++)
+Conflicts=ksphmi.service
+
+[Service]
+# fbdev = SDL software renderer + /dev/fb0 (user in group video), the proven path on the Pi 4.
+# To try the GPU instead: KSPHMI_OUTPUT=sdl and SDL_VIDEODRIVER=kmsdrm (needs Mesa EGL/GLES and DRM master).
+Environment=KSPHMI_OUTPUT=fbdev
+Environment=KSPHMI_APP_DIR=%h/ksphmi/app
+Environment=KSPHMI_LOCAL_CONFIG=%h/ksphmi/config.local.toml
+EnvironmentFile=-%h/ksphmi/env
+WorkingDirectory=%h/ksphmi/cpp
+ExecStart=%h/ksphmi/cpp/build/ksphmi
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
