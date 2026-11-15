@@ -4,8 +4,12 @@
 # never touched), then ~/ksphmi/env (KSPHMI_KRPC_ADDRESS, written by ./ci deploy_hmi).
 # Runs without a desktop: frames are copied to the Linux framebuffer /dev/fb0 (user in group video). Needs lingering
 # (sudo loginctl enable-linger $USER) so it starts at boot without anybody logged in.
+# Boot: the system unit ksphmi-splash.service (setup-kiosk.sh) paints the loading screen first; this unit opens
+# /dev/fb0 without clearing it and its first frame (the waiting screen) replaces the splash directly.
 [Unit]
 Description=KSP HMI flight data display
+# Never give up: no fb0 yet, no network or no KSP are retried (kRPC reconnects inside the process).
+StartLimitIntervalSec=0
 
 [Service]
 # fbdev = SDL software renderer + /dev/fb0, the proven path on the Pi 4.

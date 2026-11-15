@@ -17,6 +17,7 @@
 #include "fmt.hpp"
 #include "log.hpp"
 #include "png.hpp"
+#include "splash.hpp"
 #include "telemetry.hpp"
 
 using namespace ksphmi;
@@ -29,7 +30,7 @@ void on_signal(int) { quit_signal = 1; }
 
 struct Args {
     std::string config, address, size, screenshot;
-    bool demo = false, windowed = false, offscreen = false;
+    bool demo = false, windowed = false, offscreen = false, splash = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
 };
@@ -37,7 +38,8 @@ struct Args {
 void usage(FILE* out) {
     std::fprintf(out,
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed] [--size WxH]\n"
-                 "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N] [--offscreen]\n\n"
+                 "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N] [--offscreen]\n"
+                 "       ksphmi --splash [--screenshot FILE --size WxH]\n\n"
                  "KSP flight data display (kRPC client), for the Raspberry Pi.\n\n"
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
@@ -48,7 +50,9 @@ void usage(FILE* out) {
                  "  --seconds S        how long --screenshot waits for data (default 1.5)\n"
                  "  --fps N            frames per second (default: [display] fps)\n"
                  "  --bench N          draw N demo frames, print HMI_RENDER_MS / HMI_PRESENT_MS and exit\n"
-                 "  --offscreen        draw in memory only (never touches the screen; for --bench)\n");
+                 "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
+                 "  --splash           draw the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) and exit;\n"
+                 "                     reads no settings (ksphmi-splash.service, early boot)\n");
 }
 
 bool parse(int argc, char** argv, Args& a) {
@@ -72,6 +76,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--demo") a.demo = true;
         else if (k == "--windowed") a.windowed = true;
         else if (k == "--offscreen") a.offscreen = true;
+        else if (k == "--splash") a.splash = true;
         else throw std::runtime_error("unknown option " + k);
     }
     return true;
@@ -177,6 +182,33 @@ std::unique_ptr<Source> make_source(const Config& cfg, const Args& args) {
     return std::make_unique<KrpcSource>(o);
 }
 
+/// --splash: before any settings, network or SDL video; --screenshot saves the same picture off-screen instead.
+int splash(const Args& args) {
+    if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
+    int code = 0;
+    if (args.screenshot.empty()) {
+        const char* dev = std::getenv("KSPHMI_FBDEV");
+        code = run_splash(dev && *dev ? dev : "/dev/fb0");
+    } else {
+        int w = 1280, h = 800;
+        size_t x = args.size.find_first_of("xX");
+        if (x != std::string::npos) w = std::stoi(args.size.substr(0, x)), h = std::stoi(args.size.substr(x + 1));
+        SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        SDL_Renderer* r = s ? SDL_CreateSoftwareRenderer(s) : nullptr;
+        if (!r) throw std::runtime_error(std::string("software renderer: ") + SDL_GetError());
+        {
+            Canvas canvas(r, w, h, false);
+            draw_splash(canvas);
+        }
+        code = save_png(s, args.screenshot) ? 0 : 1;
+        SDL_DestroyRenderer(r);
+        SDL_FreeSurface(s);
+    }
+    TTF_Quit();
+    SDL_Quit();
+    return code;
+}
+
 int run(int argc, char** argv) {
     Args args;
     try {
@@ -186,6 +218,7 @@ int run(int argc, char** argv) {
         usage(stderr);
         return 2;
     }
+    if (args.splash) return splash(args);
     Config cfg = load_config(args.config);
     if (!args.address.empty()) cfg.krpc.address = args.address;  // one place: the source and the waiting screen
     int want_w = cfg.display.width, want_h = cfg.display.height;

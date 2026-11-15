@@ -9,13 +9,64 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
+import os
 import sys
+import threading
 import time
 
 from . import physics
 from .arduino import BoardLink
 from .krpcserver import KrpcServer
 from .sim import Simulator
+
+
+LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        "build", "kspsim.log")
+
+
+def setup_logging() -> str:
+    """Console plus build/kspsim.log (rotated, 3 x 2 MB), so a session can be read after the fact."""
+    fmt = logging.Formatter("%(asctime)s.%(msecs)03d %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    console = logging.StreamHandler()
+    console.setFormatter(fmt)
+    root.addHandler(console)
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        handler.setFormatter(fmt)
+        root.addHandler(handler)
+    except OSError as e:
+        root.warning("no log file %s: %s", LOG_FILE, e)
+    return LOG_FILE
+
+
+def log_status(board, server, period: float = 5.0) -> None:
+    """What the window shows, in the log: on every change, and at least every 30 s."""
+    log = logging.getLogger("kspsim.status")
+    last, last_at = None, 0.0
+    while True:
+        time.sleep(period)
+        parts = []
+        if board:
+            b = board.status
+            d = b.debug or {}
+            age = "never" if not b.last_controls else "%.1f s ago" % (time.monotonic() - b.last_controls)
+            parts.append("board %s %s [%s] sent %d recv %d bad %d last ControlPacket %s uptime %s" % (
+                b.state, b.port or "-", b.detail.replace("\n", " "), b.sent, b.received, b.bad, age,
+                "%d ms" % b.uptime_ms if b.uptime_ms else "--"))
+            if d:
+                parts.append("debug " + " ".join("%s=%s" % kv for kv in sorted(d.items())))
+        if server:
+            parts.append("kRPC clients %d" % len(server.clients))
+        line = " | ".join(parts)
+        key = line.split(" sent ")[0] if board else line  # state/port/detail changes; counters alone do not
+        now = time.monotonic()
+        if line and (key != last or now - last_at >= 30):
+            log.info("%s", line)
+            last, last_at = key, now
 
 
 def main(argv=None) -> int:
@@ -36,7 +87,8 @@ def main(argv=None) -> int:
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
     ap.add_argument("--seconds", type=float, default=0, help="with --headless: quit after this long (0 = never)")
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    log_path = setup_logging()
+    logging.getLogger("kspsim").info("kspsim started: %s (log %s)", " ".join(sys.argv[1:] if argv is None else argv), log_path)
 
     sim = Simulator(args.scenario, args.warp)
     sim.board_throttle = not args.no_board_throttle
@@ -51,6 +103,7 @@ def main(argv=None) -> int:
     sim.start()
     if board:
         board.start()
+    threading.Thread(target=log_status, args=(board, server), name="StatusLog", daemon=True).start()
     try:
         if args.headless:
             end = time.monotonic() + args.seconds if args.seconds else float("inf")

@@ -46,7 +46,8 @@ add_library(ksphmi_ui STATIC
   src/display.cpp
   src/fbdev.cpp
   src/navball.cpp
-  src/png.cpp)
+  src/png.cpp
+  src/splash.cpp)
 target_link_libraries(ksphmi_ui PUBLIC ksphmi_core PkgConfig::SDL2 PkgConfig::SDL2TTF)
 
 add_executable(ksphmi src/main.cpp)

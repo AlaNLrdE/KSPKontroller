@@ -1,0 +1,28 @@
+# systemd *system* unit: the boot loading screen. Installed (and @USER@/@HOME@ filled in) by setup-kiosk.sh into
+# /etc/systemd/system/ksphmi-splash.service; ./ci deploy_hmi never touches it.
+# Runs `ksphmi --splash` as soon as /dev/fb0 exists (a udev rule from setup-kiosk.sh tags fb0 for systemd): it
+# paints the loading screen once and exits; the framebuffer keeps the picture until ksphmi.service (user unit,
+# lingering) draws its first frame over it.
+[Unit]
+Description=KSP HMI boot splash
+DefaultDependencies=no
+Wants=dev-fb0.device
+After=dev-fb0.device local-fs.target
+# Finish before the user manager (and so ksphmi.service) starts, so the HMI's first frame is never painted over.
+# JobTimeoutSec caps that wait if fb0 never shows up: logins (SSH included) are not held back for long.
+Before=systemd-user-sessions.service
+JobTimeoutSec=20
+ConditionPathExists=@HOME@/ksphmi/cpp/build/ksphmi
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=video
+SupplementaryGroups=video
+ExecStart=@HOME@/ksphmi/cpp/build/ksphmi --splash
+TimeoutStartSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

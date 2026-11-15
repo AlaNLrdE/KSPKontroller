@@ -1,5 +1,11 @@
 # Changelog
 
+* **0.19.3.16**: 20261114
+  Fix the link silence detection: it measured silence from the last queued packet, which is never older than
+  200 ms while flying, so a board that stopped answering mid-flight stayed `link_state=up` for minutes
+  (board-dead-1923: no rx from 19:16:26, no `lost:` line). Silence now counts from the start of the current
+  sending run (or the last received byte), and pauses over 1 s (scene loads) still do not count as a loss.
+
 * **0.19.3.15**: 20261114
   Add read-only HMI scene discovery over UDP 50002, including space-center facility UI events.
   The Pi shows dedicated preparation checklists for VAB, SPH, Mission Control, Astronaut Complex,
