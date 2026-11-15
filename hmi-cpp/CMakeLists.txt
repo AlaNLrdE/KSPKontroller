@@ -45,11 +45,13 @@ target_link_libraries(ksphmi_core PUBLIC Threads::Threads)
 
 # Drawing: SDL2 renderer (GPU when available, software for /dev/fb0 and off-screen frames) and SDL2_ttf text.
 add_library(ksphmi_ui STATIC
+  src/apollo.cpp
   src/canvas.cpp
   src/display.cpp
   src/fbdev.cpp
   src/navball.cpp
   src/png.cpp
+  src/segments.cpp
   src/splash.cpp)
 target_link_libraries(ksphmi_ui PUBLIC ksphmi_core PkgConfig::SDL2 PkgConfig::SDL2TTF)
 

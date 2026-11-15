@@ -79,6 +79,16 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `Node.orbit` at `Node.ut` in the body's non-rotating frame, so the dashed conic shares ORBIT's view axes. Stream
   only the node key (UT, prograde/normal/radial), refetch on change or every 2 s; cache the dashes per state and
   quantised scale. Not yet seen in the real game: check the log line `maneuver orbit: periapsis ... agrees`.
+- Apollo skin (2026-11-14, proposal, `--skin apollo` / `[display] skin`): all static art (brushed grey written
+  straight into the surface pixels, frames, labels, lamp housings, segment windows with ghost segments, meter
+  scales, bezels) is one full-screen texture per size and screen kind; per frame only lit segments, lit lamps,
+  pointers and the plots. Measured 7.1 ms vs 8.6 ms classic (`--bench`, WSL). Segment glow is pre-mixed with the
+  glass colour (opaque): translucent triangles are slow on the software renderer. The NavBall keeps its whole
+  zone (an inset rect pushed HDG under the mode buttons): its bezel goes around it, in the gaps between zones.
+  `KSPHMI_SHOTS=DIR ./ci test_hmi` saves facility / no-vessel / caution screenshots that `--demo` cannot reach.
+- WSL can fail with `Wsl/Service/E_UNEXPECTED` for minutes: wait with a background loop on
+  `wsl.exe -d Ubuntu -e true`; never `wsl --shutdown` (other agents use it). No PIL in the venv: crop PNGs
+  with a stdlib zlib script.
 - ORBIT's plot area is short (about 12 % of the screen height at 3:2): labels belong beside markers (side
   margins are reserved for them); labels above/below a marker at the view's edge leave the clip.
 

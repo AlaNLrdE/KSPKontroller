@@ -136,7 +136,14 @@ under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
 ``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
 ``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
---config FILE --fps N --bench N --offscreen`` (``ksphmi --help``).
+--config FILE --fps N --bench N --offscreen --skin NAME`` (``ksphmi --help``).
+
+``[display] skin`` picks the look: ``classic`` (the default, flat dark panels) or ``apollo``, a proposal under
+review that draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
+seven-segment readouts (``segments.cpp``), caution and warning lamps (UPLINK, NO DATA, NO LINK, SAS, RCS,
+PE ATMO, PE SURF, LOW PWR, LOW FUEL, ESCAPE), edgewise resource meters and bezels around ORBIT and the
+NavBall. Its static art is one texture per screen size and screen kind; per frame only lit segments, lamps,
+pointers and the two plots are drawn. Try it with ``./ci hmi --demo --skin apollo``.
 
 The Pi initiates all connections, so a DHCP change of its own address does not affect the display.
 If the configured PC address stops working, the HMI broadcasts ``KSPHMI/1`` on UDP 50002 to the local

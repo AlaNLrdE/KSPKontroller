@@ -21,6 +21,7 @@ struct Config {
     } demo;
     struct {
         std::string output = "sdl", fbdev = "/dev/fb0";
+        std::string skin = "classic";  ///< classic | apollo
         int fps = 10;
         bool fullscreen = true;
         int width = 0, height = 0;

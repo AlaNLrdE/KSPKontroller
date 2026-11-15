@@ -4,6 +4,7 @@
 #include <cmath>
 #include <initializer_list>
 
+#include "apollo.hpp"
 #include "fmt.hpp"
 #include "gauges.hpp"
 #include "scenes.hpp"
@@ -115,13 +116,20 @@ Display::Display(const Config& cfg, Canvas& canvas)
     : c_(canvas),
       day_hours_(cfg.format.day_hours),
       server_text_(fmt::str("kRPC server: %s:%d", cfg.krpc.address.c_str(), cfg.krpc.rpc_port)),
-      net_(cfg.krpc.address) {}
+      net_(cfg.krpc.address),
+      skin_(cfg.display.skin == "apollo" ? "apollo" : "classic") {
+    if (skin_ == "apollo") apollo_ = std::make_unique<ApolloSkin>(*this, cfg);
+}
 
 Display::~Display() {
     for (auto& [key, texture] : gauge_faces_) SDL_DestroyTexture(texture);
 }
 
 void Display::draw(const Snapshot& snap, double now) {
+    if (apollo_) {
+        apollo_->draw(snap, now);
+        return;
+    }
     c_.clear(BG);
     header(snap, now);
     if (snap.state == State::Flight) flight(snap);
@@ -464,8 +472,8 @@ int Display::apsis_label_width() {
 void Display::orbit(const Rect& rect, const Snapshot& s) {
     const double u = c_.u;
     panel(c_, rect);
-    c_.text("ORBIT", 2.6, LABEL, rect.x + 1.8 * u, rect.y + 1.8 * u);
-    if (s.orbit_state) c_.text("INERTIAL", 1.8, MUTED, rect.right() - 1.8 * u, rect.y + 1.8 * u, Anchor::TopRight);
+    if (panel_titles) c_.text("ORBIT", 2.6, LABEL, rect.x + 1.8 * u, rect.y + 1.8 * u);
+    if (s.orbit_state && panel_titles) c_.text("INERTIAL", 1.8, MUTED, rect.right() - 1.8 * u, rect.y + 1.8 * u, Anchor::TopRight);
     // Escape trajectories are unbounded: contain every primitive, including off-screen vessel markers, without
     // covering the panel title, and always give the caller its clip back.
     const Rect previous_clip = c_.clip();

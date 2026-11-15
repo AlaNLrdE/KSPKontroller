@@ -20,6 +20,7 @@ fps = 10
 fullscreen = true
 width = 0                # 0 = the monitor's own resolution
 height = 0
+skin = "classic"         # classic = flat dark panels; apollo = 1960s spacecraft panel (proposal, under review)
 
 [format]
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time

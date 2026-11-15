@@ -7,6 +7,7 @@
 #include <map>
 #include <tuple>
 #include <memory>
+#include <string>
 #include <optional>
 
 #include "canvas.hpp"
@@ -16,6 +17,8 @@
 #include "netinfo.hpp"
 
 namespace ksphmi {
+
+class ApolloSkin;
 
 class Display {
 public:
@@ -54,6 +57,11 @@ public:
     std::optional<Pt> last_vessel_marker;
     /// Where the maneuver node diamond was drawn, and how often the dashed post-burn orbit was rebuilt.
     std::optional<Pt> last_node_marker;
+    /// ORBIT draws its own title and INERTIAL caption (the apollo skin paints them on the bezel instead).
+    bool panel_titles = true;
+    /// "classic" or "apollo" ([display] skin).
+    const std::string& skin() const { return skin_; }
+    ApolloSkin* apollo() { return apollo_.get(); }
     int maneuver_builds = 0;
 
 private:
@@ -92,6 +100,8 @@ private:
     std::string server_text_;
     NetInfo net_;
     Navball navball_;
+    std::string skin_;
+    std::unique_ptr<ApolloSkin> apollo_;
 };
 
 }  // namespace ksphmi

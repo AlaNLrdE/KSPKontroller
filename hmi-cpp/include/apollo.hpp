@@ -1,0 +1,64 @@
+// The "apollo" skin ([display] skin = "apollo"): the same screens drawn as a 1960s spacecraft instrument panel.
+//
+// Grey panel with white painted labels and group lines, recessed wells, screws, seven-segment readouts
+// (segments.hpp) and caution/warning lamp tiles. All static art (panel texture, frames, labels, lamp housings,
+// segment windows with their unlit segments, meter scales, instrument bezels) is drawn once per screen size and
+// screen kind into one texture; per frame only the lit segments, lit lamps, pointers, a few changing labels, the
+// ORBIT plot and the NavBall are drawn. The zones and the information are those of the default skin.
+#pragma once
+
+#include <SDL.h>
+
+#include <string>
+#include <vector>
+
+#include "canvas.hpp"
+#include "config.hpp"
+#include "model.hpp"
+#include "netinfo.hpp"
+
+namespace ksphmi {
+
+class Display;
+
+class ApolloSkin {
+public:
+    ApolloSkin(Display& display, const Config& cfg);
+    ~ApolloSkin();
+    ApolloSkin(const ApolloSkin&) = delete;
+    ApolloSkin& operator=(const ApolloSkin&) = delete;
+
+    void draw(const Snapshot& s, double now);
+    /// How often the static panel art was rebuilt (tests: once per screen kind, not per frame).
+    int builds = 0;
+
+private:
+    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL };
+    struct Key {
+        int w = 0, h = 0, screen = -1;
+        std::string scene;
+        std::vector<int> resources;  // index in RESOURCE_NAMES * 4 + state
+        bool operator==(const Key& o) const {
+            return w == o.w && h == o.h && screen == o.screen && scene == o.scene && resources == o.resources;
+        }
+    };
+    Key key_for(const Snapshot& s) const;
+    void build(const Key& key, const Snapshot& s);
+
+    // Each section draws its static art (`art`, into the cached panel) or its live parts, from the same geometry.
+    void header(Canvas& c, bool art, const Snapshot& s, double now, int screen);
+    void flight(Canvas& c, bool art, const Snapshot& s);
+    void resources(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
+    void staging(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
+    void facility(Canvas& c, bool art, const Snapshot& s);
+    void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
+
+    Display& d_;
+    int day_hours_;
+    std::string server_text_;
+    NetInfo net_;
+    SDL_Texture* panel_ = nullptr;
+    Key key_;
+};
+
+}  // namespace ksphmi

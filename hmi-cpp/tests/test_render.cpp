@@ -3,13 +3,17 @@
 #include <SDL.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 
+#include "apollo.hpp"
 #include "check.hpp"
 #include "config.hpp"
 #include "display.hpp"
 #include "log.hpp"
+#include "png.hpp"
 #include "scenes.hpp"
+#include "segments.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
 #include "theme.hpp"
@@ -19,11 +23,13 @@ using namespace ksphmi;
 namespace {
 
 struct Screen {
-    Screen(int w, int h) {
+    Screen(int w, int h, const std::string& skin = "classic") {
         surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
         renderer = SDL_CreateSoftwareRenderer(surface);
         canvas = std::make_unique<Canvas>(renderer, w, h, false);
-        display = std::make_unique<Display>(Config{}, *canvas);
+        Config cfg;
+        cfg.display.skin = skin;
+        display = std::make_unique<Display>(cfg, *canvas);
     }
     ~Screen() {
         display.reset();
@@ -402,6 +408,148 @@ TEST(full_frame_software_render_time) {
     time("resource", [&] { s.display->resources(Rect::f(42, 54 * u, 1067, 25 * u), snap); });
     time("staging", [&] { s.display->staging(Rect::f(42, 80.6 * u, 1067, 15 * u), snap); });
     CHECK(ms < 1000);
+}
+
+// ------------------------------------------------------------------------------------- apollo skin
+
+TEST(segment_text_aligns_right_with_decimal_points_and_separators) {
+    auto lit = seg::assign("8888888", "12.40");
+    CHECK_EQ(int(lit[3].segments), int(seg::bits('1')));
+    CHECK(lit[4].dp && !lit[5].dp);
+    CHECK_EQ(int(lit[6].segments), int(seg::bits('0')));
+    CHECK_EQ(int(lit[0].segments), 0);
+    auto ut = seg::assign("88 888 88:88:88", "1 001 05:23:11");
+    CHECK_EQ(int(ut[1].segments), int(seg::bits('1')));
+    CHECK_EQ(int(ut[3].segments), int(seg::bits('0')));
+    CHECK(ut[9].colon && ut[12].colon);
+    auto over = seg::assign("888", "12345");  // too long: the left characters are dropped
+    CHECK_EQ(int(over[0].segments), int(seg::bits('3')));
+    auto l = seg::layout("888:88:88", 40);
+    CHECK(l.w > 0 && l.h > 40);
+}
+
+TEST(apollo_skin_keeps_the_layout_zones_and_text_inside_its_tiles) {
+    for (auto [w, h] : SIZES) {
+        Screen s(w, h, "apollo");
+        Display& d = *s.display;
+        CHECK(d.apollo() != nullptr);
+        std::vector<Rect> tiles, active;
+        d.on_tile_begin = [&](const Rect& r) { tiles.push_back(r), active.push_back(r); };
+        d.on_tile_end = [&](const Rect&) { active.pop_back(); };
+        double u = s.canvas->u;
+        Rect res = Rect::f(2.5 * u, 54 * u, w * .44 - 2.5 * u, 25 * u);
+        int meters = 0;
+        d.on_gauge = [&](const std::string& label, const Rect& r) {
+            ++meters;
+            if (!res.contains(r)) check::fail(__FILE__, __LINE__, "meter outside the resources panel: " + label);
+        };
+        s.canvas->on_text = [&](const std::string& t, const Rect& r) {
+            Rect bounds = active.empty() ? Rect(0, 0, w, h) : active.back();
+            if (!bounds.contains(r)) check::fail(__FILE__, __LINE__, "text outside its tile: " + t);
+        };
+        Snapshot base = demo();
+        Systems all;
+        all.current_stage = 3;
+        for (const char* name : RESOURCE_NAMES) all.resources.push_back({name, 7.5, 100.0});
+        for (int n : {3, 2, 1, 0}) all.stages.push_back({n, 10, 1234.0});
+        Systems mixed;
+        mixed.current_stage = 0;
+        mixed.resources = {{"ElectricCharge", 4.0, 200.0}, {"LiquidFuel", 300.0, 1440.0}, {"Oxidizer", std::nullopt, std::nullopt},
+                           {"MonoPropellant", 0.0, 0.0}, {"SolidFuel", 12345.6, 12345.6}, {"XenonGas", 0.0, 5700.0}};
+        for (const std::optional<Systems>& systems : {base.systems, std::optional<Systems>{}, std::optional<Systems>{all},
+                                                      std::optional<Systems>{mixed}}) {
+            tiles.clear();
+            meters = 0;
+            Snapshot snap = base;
+            snap.systems = systems;
+            d.draw(snap, monotonic());
+            CHECK_EQ(tiles.size(), size_t(10));
+            int top = h, bottom = 0;
+            for (const Rect& r : tiles) top = std::min(top, r.y), bottom = std::max(bottom, r.bottom());
+            CHECK(bottom - top < h * .40);
+            if (systems) CHECK(meters >= 4);
+        }
+        // escape trajectory and a huge periapsis countdown still fit their windows' tiles
+        Snapshot escape = base;
+        escape.eccentricity = 1.4, escape.periapsis = -2e6, escape.time_to_periapsis = 9e7;
+        d.draw(escape, monotonic());
+    }
+}
+
+TEST(apollo_panel_art_is_built_once_per_screen_kind) {
+    Screen s(1260, 840, "apollo");
+    DemoSource src;
+    for (int i = 0; i < 4; ++i) s.display->draw(src.sample(i), monotonic());
+    CHECK_EQ(s.display->apollo()->builds, 1);
+    Snapshot waiting;
+    s.display->draw(waiting, monotonic());
+    s.display->draw(waiting, monotonic());
+    CHECK_EQ(s.display->apollo()->builds, 2);
+    // the classic skin is untouched by the option
+    Screen classic(1260, 840);
+    CHECK(classic.display->apollo() == nullptr);
+}
+
+TEST(apollo_views_render_within_screen) {
+    for (auto [w, h] : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}}) {
+        Screen s(w, h, "apollo");
+        s.canvas->on_text = [&](const std::string& label, const Rect& r) {
+            if (!Rect(0, 0, w, h).contains(r)) check::fail(__FILE__, __LINE__, "text off screen: " + label);
+        };
+        for (const auto& v : views()) {
+            Snapshot snap;
+            snap.state = State::NoVessel;
+            snap.scene = v.key;
+            s.display->draw(snap, monotonic());
+        }
+        Snapshot waiting;
+        waiting.detail = "connecting to kRPC at 192.168.1.2:50000";
+        s.display->draw(waiting, monotonic());
+        Snapshot no_vessel;
+        no_vessel.state = State::NoVessel;
+        s.display->draw(no_vessel, monotonic());
+        Snapshot old = demo();
+        old.vessel = "A very long vessel name that never fits on the name plate at all";
+        old.received = monotonic() - 10;  // stale: NO DATA lamp
+        s.display->draw(old, monotonic());
+    }
+}
+
+TEST(apollo_full_frame_software_render_time) {
+    Screen s(2520, 1680, "apollo");
+    DemoSource src;
+    auto t0 = std::chrono::steady_clock::now();
+    s.display->draw(src.sample(0), monotonic());  // builds the panel art
+    double build = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    t0 = std::chrono::steady_clock::now();
+    for (int i = 1; i <= 5; ++i) s.display->draw(src.sample(i), monotonic());
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 5;
+    std::printf("     apollo flight frame at 2520x1680: %.1f ms (panel art built once in %.0f ms)\n", ms, build);
+    CHECK(ms < 1000);
+}
+
+// KSPHMI_SHOTS=DIR saves the apollo screens that --demo --screenshot cannot reach (facility, no vessel, stale).
+TEST(apollo_review_screenshots_on_request) {
+    const char* dir = std::getenv("KSPHMI_SHOTS");
+    if (!dir) return;
+    Screen s(2520, 1680, "apollo");
+    Snapshot facility;
+    facility.state = State::NoVessel;
+    facility.scene = views().front().key;
+    s.display->draw(facility, monotonic());
+    CHECK(save_png(s.surface, std::string(dir) + "/apollo_facility.png"));
+    Snapshot no_vessel;
+    no_vessel.state = State::NoVessel;
+    s.display->draw(no_vessel, 100.2);
+    CHECK(save_png(s.surface, std::string(dir) + "/apollo_no_vessel.png"));
+    Snapshot warn = demo(1200);
+    warn.periapsis = 40000, warn.received = monotonic() - 10;
+    for (auto& r : warn.systems->resources)
+        if (r.name == "ElectricCharge") r.amount = *r.capacity * .06;
+        else if (r.name == "LiquidFuel") r.amount = *r.capacity * .18;
+        else if (r.name == "Oxidizer") r.amount.reset();
+    s.display->draw(warn, monotonic());
+    CHECK(save_png(s.surface, std::string(dir) + "/apollo_cautions.png"));
 }
 
 TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
