@@ -11,8 +11,8 @@
 #  - config.txt: no firmware rainbow splash, no under-voltage/warning overlays (backup: config.txt.ksphmi-backup);
 #  - /etc/tmpfiles.d/ksphmi-cursor.conf: fbcon cursor blinking off at every boot;
 #  - getty@tty1 masked: no login prompt on the screen (SSH logins are unaffected);
-#  - /etc/udev/rules.d/99-ksphmi-fb.rules + /etc/systemd/system/ksphmi-splash.service: `ksphmi --splash` paints
-#    the loading screen as soon as /dev/fb0 exists;
+#  - /etc/udev/rules.d/99-ksphmi-fb.rules + /etc/systemd/system/ksphmi-splash.service: `ksphmi --splash` animates
+#    the loading screen as soon as the DRM framebuffer (vc4drmfb) is /dev/fb0, until the HMI's first frame;
 #  - /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf: the journal survives reboots (Raspberry Pi OS keeps it
 #    in RAM), so a failed boot can be read with journalctl -b -1;
 #  - lingering for the HMI user, so the user unit ksphmi.service starts at boot without a login;
@@ -57,7 +57,7 @@ if [ "$undo" = yes ]; then
             echo "restored $f"
         fi
     done
-    systemctl disable ksphmi-splash.service 2>/dev/null || true
+    systemctl disable --now ksphmi-splash.service 2>/dev/null || true
     rm -f "$unit" "$rule" "$cursor" "$journal" "$stamp"
     systemctl daemon-reload
     systemctl restart systemd-journald 2>/dev/null || true
@@ -111,7 +111,9 @@ systemctl mask --now getty@tty1.service
 
 # The splash runs as the HMI user (group video can write /dev/fb0); systemd only sees fb0 when udev tags it.
 id -nG "$user" | grep -qw video || usermod -aG video "$user"
-printf '%s\n' 'SUBSYSTEM=="graphics", KERNEL=="fb0", TAG+="systemd"' > "$rule"
+# Only the DRM framebuffer: the firmware's simplefb is fb0 for ~2 s first and is then replaced by vc4drmfb;
+# tagging it started the splash on a device about to disappear.
+printf '%s\n' 'SUBSYSTEM=="graphics", KERNEL=="fb0", ATTR{name}=="vc4drmfb", TAG+="systemd"' > "$rule"
 udevadm control --reload 2>/dev/null || true
 sed -e "s|@USER@|$user|g" -e "s|@HOME@|$home|g" "$here/ksphmi-splash.service" > "$unit"
 systemctl daemon-reload

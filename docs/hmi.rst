@@ -237,22 +237,55 @@ The script is idempotent and keeps SSH, the network and the serial console. It:
 * adds ``disable_splash=1`` (no rainbow) and ``avoid_warnings=1`` (no under-voltage icon over the HMI) to
   ``config.txt`` (backup ``config.txt.ksphmi-backup``);
 * writes the fbcon ``cursor_blink`` tmpfiles rule and masks ``getty@tty1`` (no login prompt);
-* installs the udev rule ``/etc/udev/rules.d/99-ksphmi-fb.rules`` (makes ``dev-fb0.device`` visible to systemd)
-  and the **system** unit ``ksphmi-splash.service`` (from ``hmi-cpp/systemd/``, with the user and home filled
-  in): ``Type=oneshot``, ``DefaultDependencies=no``, ``After=dev-fb0.device``, ``WantedBy=sysinit.target``,
-  ``Before=systemd-user-sessions.service`` (capped by ``JobTimeoutSec=20``), running
-  ``~/ksphmi/cpp/build/ksphmi --splash`` as the HMI user in group ``video``;
+* installs the udev rule ``/etc/udev/rules.d/99-ksphmi-fb.rules`` (makes ``dev-fb0.device`` visible to systemd,
+  but only for the DRM framebuffer ``ATTR{name}=="vc4drmfb"``: the firmware's ``simplefb`` is ``fb0`` from about
+  4.5 s and is replaced by ``vc4drmfb`` at about 6.4 s) and the **system** unit ``ksphmi-splash.service`` (from
+  ``hmi-cpp/systemd/``, with the user and home filled in): ``Type=simple``, ``DefaultDependencies=no``,
+  ``After=dev-fb0.device``, ``WantedBy=sysinit.target``, no ``Before=`` on the boot or the logins (the job is
+  dropped after ``JobTimeoutSec=30`` without a DRM framebuffer), ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``,
+  running ``~/ksphmi/cpp/build/ksphmi --splash`` as the HMI user in group ``video``;
 * enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci deploy_hmi`` does that).
 
 What the screen shows at boot: black while the firmware and kernel start (no rainbow, no logo, no text), then the
-loading screen ("KSP HMI", "Starting...") as soon as ``/dev/fb0`` exists, held by the framebuffer; then the user
-unit ``ksphmi.service`` (lingering, ``WantedBy=default.target``, ``Restart=always``, ``StartLimitIntervalSec=0``)
-paints its waiting screen over it and connects when KSP and kRPC are up. ``ksphmi --splash`` reads no settings
-and touches no network; it re-applies the video mode (``FBIOPUT_VSCREENINFO``) because with a silent console
-nothing else may have set it. Without the font it still fills the screen with the HMI background. Review the
-picture with ``./ci hmi --splash --screenshot build/splash.png --size 2520x1680``. The HMI opens ``/dev/fb0``
-without clearing it and rewrites every row at each unblank (start, then every 30 s), so neither the splash nor
-console text can survive behind its frames. ``./ci verify`` reports each missing piece in ``hmi: kiosk boot``.
+animated loading screen as soon as the DRM ``/dev/fb0`` exists, until the HMI has drawn its first frame:
+
+* header: "KSPKontroller", "FLIGHT DISPLAY · RASPBERRY PI" and, top right, ``T+ mm:ss.s`` since power-on
+  (``CLOCK_BOOTTIME``, so it includes the firmware and kernel time);
+* left: the planet with an ascent trajectory that climbs from the surface to the dashed target orbit as the boot
+  progresses (35 % while the system services start, 62 % while waiting for the network, 86 % while the HMI
+  launches, 100 % "Orbit reached"), the percentage and a status message;
+* right: the BOOT SEQUENCE card, one row per stage with a detail and a status pill (OK, a pulsing "···" for the
+  active stage, "--" pending, OFF, FAIL): KERNEL, DISPLAY (``HDMI WxH · /dev/fb0``), SYSTEM (until
+  ``multi-user.target`` is active), NETWORK (interface and IPv4 address; "offline" in amber after 40 s, which
+  never blocks the boot) and HMI (``ksphmi.service`` waiting, starting, first frame drawn);
+* bottom: a five-segment bar and a footer with the host name and "SSH available while booting".
+
+If the HMI has not drawn a frame 45 s after power-on its row turns to FAIL, the percentage reads "HMI FAILED" and
+the message shows the command to read its log (``ssh <hostname>  →  journalctl --user -u ksphmi``). The splash
+keeps drawing, so a late HMI still takes over. Review every stage without a Pi with
+``./ci hmi --splash --screenshot build/splash.png --size 2520x1680 --splash-state STAGE`` (``system``,
+``network``, ``offline``, ``hmi``, ``ready``, ``failed``).
+
+The splash redraws about 8 times a second with the software renderer; the static parts are drawn once per size
+and kept in a copy, each frame restores and redraws only the animated regions, and the framebuffer write skips
+unchanged rows. Probes run on a worker at 2 Hz (``systemctl is-active``, ``getifaddrs``, ``/proc``), never per
+frame; no D-Bus library, no extra packages. ``ksphmi --splash`` reads no settings; it re-applies the video mode
+(``FBIOPUT_VSCREENINFO``) because with a silent console nothing else may have set it, and it reopens ``/dev/fb0``
+if the device node or the driver behind it changes. Without the font it still fills the screen with the HMI
+background. Its journal lines (``journalctl -u ksphmi-splash``) give the start time, the network address and a
+final ``splash done (HMI ready) ... draw X ms, write Y ms per frame``.
+
+Hand-over: the user unit ``ksphmi.service`` (lingering, ``WantedBy=default.target``, ``Restart=always``,
+``StartLimitIntervalSec=0``) deletes a stale ``ksphmi.ready`` at start and writes it right after its first
+presented frame, in ``$XDG_RUNTIME_DIR`` (``/run/user/<uid>/ksphmi.ready`` for a system unit without that
+variable). The splash runs as the same user, looks for the file every frame and once more right before each
+framebuffer write, and exits within about 125 ms, so both never paint at once; it also exits on ``SIGTERM`` and
+after 10 minutes, leaving its last picture. The HMI removes the file when it stops cleanly, and a splash started
+while the file exists exits at once. The HMI opens ``/dev/fb0`` without clearing it, rewrites every row one second
+after its first frame and at each unblank (start, then every 30 s), so neither the splash nor console text can
+survive behind its frames. ``./ci verify`` reports each missing piece in ``hmi: kiosk boot``.
+
+.. uml:: diagrams/seq_hmi_boot.puml
 Do not cut power to shut down Linux; use ``sudo poweroff`` first to avoid filesystem damage.
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's

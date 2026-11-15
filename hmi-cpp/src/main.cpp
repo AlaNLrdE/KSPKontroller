@@ -12,6 +12,7 @@
 #include <thread>
 #include <time.h>
 
+#include "bootstate.hpp"
 #include "canvas.hpp"
 #include "config.hpp"
 #include "display.hpp"
@@ -31,7 +32,7 @@ volatile std::sig_atomic_t quit_signal = 0;
 void on_signal(int) { quit_signal = 1; }
 
 struct Args {
-    std::string config, address, size, screenshot, skin, layer_cache;
+    std::string config, address, size, screenshot, skin, layer_cache, splash_state;
     bool demo = false, windowed = false, offscreen = false, splash = false, bench_anim = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
@@ -43,7 +44,7 @@ void usage(FILE* out) {
                  "              [--skin classic|apollo]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N [--bench-anim]] [--offscreen]\n"
                  "              [--layer-cache auto|on|off]\n"
-                 "       ksphmi --splash [--screenshot FILE --size WxH]\n\n"
+                 "       ksphmi --splash [--screenshot FILE --size WxH [--splash-state STAGE]]\n\n"
                  "KSP flight data display (kRPC client), for the Raspberry Pi.\n\n"
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
@@ -59,8 +60,10 @@ void usage(FILE* out) {
                  "                     frames over the cached layer; full frames when the layer cache is off)\n"
                  "  --layer-cache M    auto (GPU renderer only), on or off (overrides [display] layer_cache)\n"
                  "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
-                 "  --splash           draw the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) and exit;\n"
-                 "                     reads no settings (ksphmi-splash.service, early boot)\n");
+                 "  --splash           animate the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) until\n"
+                 "                     the HMI writes $XDG_RUNTIME_DIR/ksphmi.ready; reads no settings\n"
+                 "                     (ksphmi-splash.service, early boot)\n"
+                 "  --splash-state S   with --splash --screenshot: system, network, offline, hmi, ready or failed\n");
 }
 
 bool parse(int argc, char** argv, Args& a) {
@@ -88,6 +91,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--bench-anim") a.bench_anim = true;
         else if (k == "--layer-cache") value(a.layer_cache);
         else if (k == "--splash") a.splash = true;
+        else if (k == "--splash-state") value(a.splash_state);
         else throw std::runtime_error("unknown option " + k);
     }
     return true;
@@ -141,6 +145,10 @@ public:
     ~Output() {
         close_sdl();
         if (surface_) SDL_FreeSurface(surface_);
+    }
+
+    void repaint_all() {
+        if (fb_) fb_->repaint_all();
     }
 
     void present() {
@@ -238,12 +246,14 @@ int splash(const Args& args) {
         SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
         SDL_Renderer* r = s ? SDL_CreateSoftwareRenderer(s) : nullptr;
         if (!r) throw std::runtime_error(std::string("software renderer: ") + SDL_GetError());
+        SDL_DestroyRenderer(r);  // only proves the surface works; SplashPainter owns its renderer
         {
-            Canvas canvas(r, w, h, false);
-            draw_splash(canvas);
+            const BootView view = boot_view(boot_demo_inputs(args.splash_state.empty() ? "system" : args.splash_state,
+                                                             w, h));
+            SplashPainter painter(s);
+            painter.draw(view, SplashAnim{view.progress, view.done ? 0.9 : 0.0, 1.0});
         }
         code = save_png(s, args.screenshot) ? 0 : 1;
-        SDL_DestroyRenderer(r);
         SDL_FreeSurface(s);
     }
     TTF_Quit();
@@ -275,6 +285,10 @@ int run(int argc, char** argv) {
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
+    // Boot hand-over: the splash (ksphmi-splash.service) draws until this file exists; it is written after the
+    // first presented frame. Only the real screen announces itself, never a window, a screenshot or a benchmark.
+    const bool announce = !args.bench && args.screenshot.empty() && !args.offscreen && !args.windowed;
+    if (announce) remove_ready_file();
     std::unique_ptr<Source> source;
     if (!args.bench) source = make_source(cfg, args);
     log::info(LOG, fmt::str("ksphmi %s (C++), source %s, settings %s", KSPHMI_VERSION,
@@ -299,6 +313,8 @@ int run(int argc, char** argv) {
         const double deadline = monotonic() + args.seconds;
         std::shared_ptr<const Snapshot> last;
         double draw_ms = 0, present_ms = 0, present_cpu_ms = 0, perf_since = monotonic();
+        double ready_at = -1;  // when the ready file was written; one full repaint follows a second later
+        bool repainted = false;
         double full_ms = 0, anim_ms = 0;  // draw time split: full (cached layer) frames, NavBall-only frames
         int frames = 0, full_frames = 0, anim_frames = 0;
         DemoSource bench_source;
@@ -338,6 +354,15 @@ int run(int argc, char** argv) {
                 if (anim) anim_ms += (t1 - t0) * 1000, ++anim_frames;
                 else full_ms += (t1 - t0) * 1000, ++full_frames;
                 last = snap;
+                if (announce && ready_at < 0) {
+                    ready_at = t2;
+                    if (write_ready_file()) log::info(LOG, "first frame presented: " + ready_file_path());
+                    else log::warning(LOG, "cannot write " + ready_file_path() + ": the boot splash may linger");
+                } else if (announce && !repainted && t2 - ready_at > 1.0) {
+                    // On the framebuffer the splash may have written one last frame after ours: rewrite every row.
+                    out.repaint_all();
+                    repainted = true;
+                }
             }
             if (args.bench && frames >= args.bench) {
                 std::printf("HMI_RENDER_MS=%.1f HMI_PRESENT_MS=%.1f HMI_PRESENT_CPU_MS=%.1f frames=%d full=%d "
@@ -367,6 +392,7 @@ int run(int argc, char** argv) {
         }
     }
     if (source) source->stop();
+    if (announce) remove_ready_file();  // a splash started by hand after this can draw again
     TTF_Quit();
     SDL_Quit();
     return code;

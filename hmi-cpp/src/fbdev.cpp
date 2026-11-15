@@ -5,6 +5,7 @@
 #include <linux/fb.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -29,6 +30,12 @@ std::string attr(const std::string& sysfs, const char* name) {
 Framebuffer::Framebuffer(const std::string& device) : device_(device) {
     std::string base = device.substr(device.find_last_of('/') + 1);
     std::string sysfs = "/sys/class/graphics/" + base;
+    sysfs_ = sysfs;
+    try {
+        name_ = attr(sysfs, "name");
+    } catch (const std::exception&) {
+        name_.clear();
+    }
     std::string size = attr(sysfs, "virtual_size");
     size_t comma = size.find(',');
     width_ = std::stoi(size.substr(0, comma));
@@ -39,6 +46,8 @@ Framebuffer::Framebuffer(const std::string& device) : device_(device) {
         throw std::runtime_error(device + ": unsupported " + std::to_string(bpp_) + " bits per pixel");
     fd_ = open(device.c_str(), O_RDWR | O_CLOEXEC);
     if (fd_ < 0) throw std::runtime_error(device + ": " + std::strerror(errno) + " (user in group video?)");
+    struct stat st {};
+    if (fstat(fd_, &st) == 0) inode_ = static_cast<unsigned long>(st.st_ino);
     map_size_ = static_cast<size_t>(stride_) * height_;
     void* m = mmap(nullptr, map_size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
     if (m == MAP_FAILED) {
@@ -74,6 +83,14 @@ void Framebuffer::activate() {
     var.activate = FB_ACTIVATE_NOW | FB_ACTIVATE_FORCE;
     if (ioctl(fd_, FBIOPUT_VSCREENINFO, &var) != 0)
         log::warning("ksphmi.display", std::string("cannot set the video mode: ") + std::strerror(errno));
+}
+
+bool Framebuffer::replaced() const {
+    struct stat st {};
+    if (stat(device_.c_str(), &st) != 0 || static_cast<unsigned long>(st.st_ino) != inode_) return true;
+    std::ifstream f(sysfs_ + "/name");
+    std::string now;
+    return std::getline(f, now) && now != name_;
 }
 
 int Framebuffer::write(const SDL_Surface* frame) {
@@ -124,5 +141,6 @@ int Framebuffer::write(const SDL_Surface*) {
 void Framebuffer::activate() {
     throw std::runtime_error("fbdev output requires Linux");
 }
+bool Framebuffer::replaced() const { return true; }
 }  // namespace ksphmi
 #endif

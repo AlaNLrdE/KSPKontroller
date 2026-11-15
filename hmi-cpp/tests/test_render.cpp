@@ -3,10 +3,14 @@
 #include <SDL.h>
 
 #include <chrono>
+#include <cmath>
+#include <iterator>
+#include <map>
 #include <cstdlib>
 #include <memory>
 
 #include "apollo.hpp"
+#include "bootstate.hpp"
 #include "check.hpp"
 #include "config.hpp"
 #include "display.hpp"
@@ -632,24 +636,89 @@ TEST(apollo_review_screenshots_on_request) {
     CHECK(save_png(s.surface, std::string(dir) + "/apollo_cautions.png"));
 }
 
+namespace {
+const char* const SPLASH_STAGES[] = {"system", "network", "offline", "hmi", "ready", "failed"};
+SplashAnim splash_anim(const BootView& v, double pulse = 1.0) { return {v.progress, v.done ? 0.9 : 0.0, pulse}; }
+}  // namespace
+
 TEST(boot_splash_fills_the_screen_and_fits_at_every_size) {
-    for (const auto& size : SIZES) {
+    for (const auto& size : SIZES)
+        for (const char* stage : SPLASH_STAGES) {
+            const int w = size.first, h = size.second;
+            Screen s(w, h);
+            s.fill(FILL);
+            std::vector<std::pair<std::string, Rect>> texts;
+            s.canvas->on_text = [&](const std::string& t, const Rect& r) { texts.emplace_back(t, r); };
+            const BootView view = boot_view(boot_demo_inputs(stage, w, h));
+            draw_splash(*s.canvas, view, splash_anim(view));
+            const uint32_t bg = (theme::BG.r << 16) | (theme::BG.g << 8) | theme::BG.b;
+            // Every corner is the HMI background: no console black or stale pixels survive the splash.
+            CHECK_EQ(s.pixel(0, 0), bg);
+            CHECK_EQ(s.pixel(w - 1, h - 1), bg);
+            std::map<std::string, int> seen;
+            for (auto& [t, r] : texts) ++seen[t];
+            for (const char* t : {"KSPKontroller", "SINCE POWER-ON", "BOOT SEQUENCE", "KERNEL", "DISPLAY", "SYSTEM",
+                                  "NETWORK", "HMI", "Arduino panel works without this display"})
+                CHECK(seen.count(t));
+            CHECK(seen.count(view.clock));
+            CHECK(seen.count(view.message));
+            CHECK(seen.count(view.footer));
+            for (const auto& row : view.rows) CHECK(seen.count(row.detail));
+            CHECK(seen.count(view.failed ? std::string("HMI FAILED")
+                                         : std::to_string(static_cast<int>(std::lround(view.progress * 100))) + "%"));
+            // Everything on the screen, nothing on top of anything else.
+            Rect screen(0, 0, w, h);
+            for (size_t i = 0; i < texts.size(); ++i) {
+                if (!screen.contains(texts[i].second)) std::fprintf(stderr, "outside: %s\n", texts[i].first.c_str());
+                CHECK(screen.contains(texts[i].second));
+                for (size_t j = i + 1; j < texts.size(); ++j) {
+                    bool hit = texts[i].second.collides(texts[j].second);
+                    if (hit)
+                        std::fprintf(stderr, "%dx%d %s: '%s' overlaps '%s'\n", w, h, stage, texts[i].first.c_str(),
+                                     texts[j].first.c_str());
+                    CHECK(!hit);
+                }
+            }
+        }
+}
+
+TEST(boot_splash_partial_frames_match_a_full_redraw) {
+    // SplashPainter restores only the animated regions from its static copy: the result must be the same picture.
+    for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}}) {
         const int w = size.first, h = size.second;
-        Screen s(w, h);
-        s.fill(FILL);
-        std::map<std::string, Rect> texts;
-        s.canvas->on_text = [&](const std::string& t, const Rect& r) { texts[t] = r; };
-        draw_splash(*s.canvas);
-        const uint32_t bg = (theme::BG.r << 16) | (theme::BG.g << 8) | theme::BG.b;
-        // Every corner is the HMI background: no console black or stale pixels survive the splash.
-        CHECK_EQ(s.pixel(0, 0), bg);
-        CHECK_EQ(s.pixel(w - 1, h - 1), bg);
-        CHECK(texts.count("KSP HMI"));
-        CHECK(texts.count("Starting..."));
-        Rect screen(0, 0, w, h);
-        for (auto& [t, r] : texts) CHECK(screen.contains(r));
-        if (texts.count("KSP HMI") && texts.count("Starting..."))
-            CHECK(!texts["KSP HMI"].collides(texts["Starting..."]));
+        SDL_Surface* target = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+        {
+            SplashPainter painter(target);
+            const char* order[] = {"system", "failed", "network", "ready", "offline", "hmi"};
+            for (size_t i = 0; i + 1 < std::size(order); ++i) {
+                const BootView a = boot_view(boot_demo_inputs(order[i], w, h));
+                const BootView b = boot_view(boot_demo_inputs(order[i + 1], w, h));
+                painter.draw(a, splash_anim(a, 0.2));
+                painter.draw(b, splash_anim(b, 0.7));
+                Screen ref(w, h);
+                draw_splash(*ref.canvas, b, splash_anim(b, 0.7));
+                int differ = 0;
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                        differ += (static_cast<const uint32_t*>(target->pixels)[y * (target->pitch / 4) + x] &
+                                   0xFFFFFF) != ref.pixel(x, y);
+                if (differ) std::fprintf(stderr, "%dx%d %s -> %s: %d pixels differ\n", w, h, order[i], order[i + 1],
+                                         differ);
+                CHECK_EQ(differ, 0);
+            }
+        }
+        SDL_FreeSurface(target);
+    }
+}
+
+TEST(boot_splash_screenshots) {
+    const char* dir = std::getenv("KSPHMI_SHOTS");
+    if (!dir) return;
+    for (const char* stage : SPLASH_STAGES) {
+        Screen s(2520, 1680);
+        const BootView view = boot_view(boot_demo_inputs(stage, 2520, 1680));
+        draw_splash(*s.canvas, view, splash_anim(view));
+        CHECK(save_png(s.surface, std::string(dir) + "/splash_" + stage + ".png"));
     }
 }
 

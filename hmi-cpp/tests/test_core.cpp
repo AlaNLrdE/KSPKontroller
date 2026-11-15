@@ -15,6 +15,7 @@
 #include <limits>
 #include <thread>
 
+#include "bootstate.hpp"
 #include "check.hpp"
 #include "config.hpp"
 #include "fake_krpc.hpp"
@@ -1050,6 +1051,127 @@ TEST(gauge_layout_fits_the_panel_at_every_resolution) {
             for (size_t i = 1; i < l.cells.size(); ++i) CHECK(l.cells[i].cx - l.cells[i - 1].cx >= 2 * l.radius - 1e-6);
         }
     }
+}
+
+// ------------------------------------------------------------------------------------- boot splash state
+namespace ksphmi {
+std::ostream& operator<<(std::ostream& o, Step s) { return o << static_cast<int>(s); }
+}  // namespace ksphmi
+
+TEST(boot_clock_counts_minutes_seconds_and_tenths) {
+    CHECK_EQ(boot_clock(0), std::string("T+ 00:00.0"));
+    CHECK_EQ(boot_clock(75.36), std::string("T+ 01:15.3"));
+    CHECK_EQ(boot_clock(6000), std::string("T+ 100:00.0"));
+    CHECK_EQ(boot_clock(-3), std::string("T+ 00:00.0"));
+}
+
+TEST(boot_view_follows_the_boot_stages) {
+    BootView v = boot_view(boot_demo_inputs("system", 2520, 1680));
+    CHECK_EQ(v.rows[0].step, Step::Done);
+    CHECK_EQ(v.rows[1].step, Step::Done);
+    CHECK_EQ(v.rows[1].detail, std::string("HDMI 2520x1680 \xC2\xB7 /dev/fb0"));
+    CHECK_EQ(v.rows[2].step, Step::Active);
+    CHECK_EQ(v.rows[2].detail, std::string("Mounting filesystems"));
+    CHECK_EQ(v.rows[3].step, Step::Pending);
+    CHECK_EQ(v.rows[4].step, Step::Pending);
+    CHECK_NEAR(v.progress, 0.35, 1e-9);
+    CHECK_EQ(v.message, std::string("Starting system services"));
+    CHECK(!v.failed && !v.done);
+    CHECK_EQ(v.clock, std::string("T+ 00:07.8"));
+
+    v = boot_view(boot_demo_inputs("network", 2520, 1680));
+    CHECK_EQ(v.rows[2].step, Step::Done);
+    CHECK_EQ(v.rows[2].detail, std::string("Filesystems and services up"));
+    CHECK_EQ(v.rows[3].step, Step::Active);
+    CHECK(v.rows[3].detail.find("waiting for address") != std::string::npos);
+    CHECK_NEAR(v.progress, 0.62, 1e-9);
+    CHECK_EQ(v.message, std::string("Connecting to the network"));
+
+    v = boot_view(boot_demo_inputs("hmi", 2520, 1680));
+    CHECK_EQ(v.rows[3].step, Step::Done);
+    CHECK_EQ(v.rows[3].detail, std::string("wlan0 192.168.1.20"));
+    CHECK_EQ(v.rows[4].step, Step::Active);
+    CHECK_EQ(v.rows[4].detail, std::string("Starting ksphmi"));
+    CHECK_NEAR(v.progress, 0.86, 1e-9);
+    CHECK_EQ(v.message, std::string("Launching the flight display"));
+
+    v = boot_view(boot_demo_inputs("ready", 2520, 1680));
+    CHECK(v.done && !v.failed);
+    CHECK_EQ(v.rows[4].step, Step::Done);
+    CHECK_EQ(v.rows[4].detail, std::string("First frame drawn"));
+    CHECK_NEAR(v.progress, 1.0, 1e-9);
+    CHECK_EQ(v.message, std::string("Orbit reached"));
+    CHECK(v.footer.find("ksphmi") == 0);
+}
+
+TEST(boot_view_gives_up_on_network_and_hmi_without_blocking) {
+    BootInputs in = boot_demo_inputs("network", 1920, 1080);
+    in.iface.clear();
+    in.seconds = NETWORK_GIVE_UP - 0.1;
+    CHECK_EQ(boot_view(in).rows[3].step, Step::Active);
+    CHECK(boot_view(in).rows[3].detail.find("network") == 0);
+    in.seconds = NETWORK_GIVE_UP;
+    BootView v = boot_view(in);
+    CHECK_EQ(v.rows[3].step, Step::Warn);
+    CHECK(v.rows[3].detail.find("offline") != std::string::npos);
+    CHECK_EQ(v.rows[4].step, Step::Active);  // the HMI starts without a network
+    CHECK_NEAR(v.progress, 0.86, 1e-9);
+
+    in = boot_demo_inputs("hmi", 1920, 1080);
+    in.seconds = HMI_GIVE_UP - 0.1;
+    CHECK(!boot_view(in).failed);
+    in.seconds = HMI_GIVE_UP;
+    v = boot_view(in);
+    CHECK(v.failed && !v.done);
+    CHECK_EQ(v.rows[4].step, Step::Failed);
+    CHECK_EQ(v.rows[4].detail, std::string("ksphmi did not start"));
+    CHECK(v.message.find("ssh ksphmi") == 0);
+    CHECK(v.message.find("journalctl --user -u ksphmi") != std::string::npos);
+    in.ready = true;  // a late HMI still ends the boot normally
+    CHECK(boot_view(in).done && !boot_view(in).failed);
+
+    // The system row is never skipped: a network that is up early is shown, the progress waits for the system.
+    in = boot_demo_inputs("system", 1920, 1080);
+    in.address = "10.0.0.3";
+    v = boot_view(in);
+    CHECK_EQ(v.rows[3].step, Step::Done);
+    CHECK_EQ(v.rows[4].step, Step::Pending);
+    CHECK_NEAR(v.progress, 0.35, 1e-9);
+
+    bool threw = false;
+    try {
+        boot_demo_inputs("nope", 10, 10);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+}
+
+TEST(ready_file_follows_xdg_runtime_dir) {
+    const char* old = std::getenv("XDG_RUNTIME_DIR");
+    const std::string saved = old ? old : "";
+    unsetenv("XDG_RUNTIME_DIR");
+    CHECK_EQ(ready_file_path(), "/run/user/" + std::to_string(getuid()) + "/ksphmi.ready");
+    char dir[] = "/tmp/ksphmi-ready-XXXXXX";
+    CHECK(mkdtemp(dir) != nullptr);
+    setenv("XDG_RUNTIME_DIR", dir, 1);
+    CHECK_EQ(ready_file_path(), std::string(dir) + "/ksphmi.ready");
+    CHECK(!file_exists(ready_file_path()));
+    CHECK(write_ready_file());
+    CHECK(file_exists(ready_file_path()));
+    remove_ready_file();
+    CHECK(!file_exists(ready_file_path()));
+    rmdir(dir);
+    if (old) setenv("XDG_RUNTIME_DIR", saved.c_str(), 1);
+    else unsetenv("XDG_RUNTIME_DIR");
+}
+
+TEST(boot_probes_answer_without_systemd) {
+    CHECK(boot_seconds() > 0);
+    CHECK(!hmi_process_running() || true);  // must not crash; the answer depends on the machine
+    CHECK(!unit_active("ksphmi-no-such-unit.target"));
+    NetInterface n = primary_interface();
+    CHECK(n.address.empty() || !n.name.empty());
 }
 
 int main(int argc, char** argv) {

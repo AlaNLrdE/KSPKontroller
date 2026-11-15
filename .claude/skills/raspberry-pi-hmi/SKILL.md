@@ -47,9 +47,14 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `w /sys/class/graphics/fbcon/cursor_blink - - - - 0` in `/etc/tmpfiles.d/ksphmi-cursor.conf`. The live
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
 - Kiosk boot (2026-11-14, `hmi-cpp/systemd/setup-kiosk.sh`, run by the user with sudo, `--undo` reverts): a
-  system oneshot `ksphmi-splash.service` runs `ksphmi --splash` after `dev-fb0.device` (needs the udev rule
-  `TAG+="systemd"` on fb0, else the device unit never appears) and before `systemd-user-sessions.service`, so the
-  HMI's first frame always comes after it. **Never `console=ttynull`** (2026-11-15): it hung the Pi 4 early in boot
+  system `Type=simple` `ksphmi-splash.service` runs `ksphmi --splash` after `dev-fb0.device` (needs the udev rule
+  `TAG+="systemd"` on fb0, else the device unit never appears). Since 2026-11-15 it animates the boot (about
+  8 fps, probes at 2 Hz) until the HMI writes `$XDG_RUNTIME_DIR/ksphmi.ready` (`/run/user/<uid>/ksphmi.ready`
+  for the system unit) after its first presented frame; no `Before=` (a long-running unit ordered before
+  `systemd-user-sessions` would hold up SSH and the HMI). The Pi's fb0 is first the firmware's `simplefb`
+  (~4.5 s), replaced by `vc4drmfb` (~6.4 s): the udev rule matches `ATTR{name}=="vc4drmfb"` only and the splash
+  reopens fb0 when its inode or sysfs `name` changes. Review stages off-line with
+  `--splash --screenshot F --size 2520x1680 --splash-state system|network|offline|hmi|ready|failed`. **Never `console=ttynull`** (2026-11-15): it hung the Pi 4 early in boot
   (black screen with backlight on, no ping, nothing in the journal); keep `console=tty1` and silence it with
   `quiet loglevel=3 systemd.show_status=false` (verified: splash at ~7 s, HMI at ~12 s, no text). Never add
   `fbcon=map:`/`nodefer`: with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies

@@ -26,6 +26,7 @@ pkg_check_modules(SDL2TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
 
 # Pure logic: formatting, attitude and orbit geometry, config, scenes, discovery, kRPC client, telemetry sources.
 add_library(ksphmi_core STATIC
+  src/bootstate.cpp
   src/config.cpp
   src/discovery.cpp
   src/fmt.cpp

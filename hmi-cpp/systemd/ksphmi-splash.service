@@ -1,26 +1,30 @@
-# systemd *system* unit: the boot loading screen. Installed (and @USER@/@HOME@ filled in) by setup-kiosk.sh into
-# /etc/systemd/system/ksphmi-splash.service; ./ci deploy_hmi never touches it.
-# Runs `ksphmi --splash` as soon as /dev/fb0 exists (a udev rule from setup-kiosk.sh tags fb0 for systemd): it
-# paints the loading screen once and exits; the framebuffer keeps the picture until ksphmi.service (user unit,
-# lingering) draws its first frame over it.
+# systemd *system* unit: the animated boot loading screen. Installed (and @USER@/@HOME@ filled in) by
+# setup-kiosk.sh into /etc/systemd/system/ksphmi-splash.service; ./ci deploy_hmi never touches it.
+# Runs `ksphmi --splash` as soon as the DRM framebuffer /dev/fb0 exists (the udev rule from setup-kiosk.sh tags
+# only fb0 named vc4drmfb, not the firmware's simplefb it replaces ~2 s later). It animates the boot progress
+# until ksphmi.service (user unit, lingering) writes /run/user/<uid>/ksphmi.ready after its first frame, then
+# exits; it also stops on SIGTERM and after 10 minutes. The framebuffer keeps its last picture.
+# Type=simple and no Before=: it never holds up the boot or logins (SSH included).
 [Unit]
 Description=KSP HMI boot splash
 DefaultDependencies=no
 Wants=dev-fb0.device
 After=dev-fb0.device local-fs.target
-# Finish before the user manager (and so ksphmi.service) starts, so the HMI's first frame is never painted over.
-# JobTimeoutSec caps that wait if fb0 never shows up: logins (SSH included) are not held back for long.
-Before=systemd-user-sessions.service
-JobTimeoutSec=20
+# Without a DRM framebuffer the job is dropped instead of waiting for the device's default timeout.
+JobTimeoutSec=30
+Conflicts=shutdown.target
+Before=shutdown.target
 ConditionPathExists=@HOME@/ksphmi/cpp/build/ksphmi
 
 [Service]
-Type=oneshot
+Type=simple
 User=@USER@
 Group=video
 SupplementaryGroups=video
 ExecStart=@HOME@/ksphmi/cpp/build/ksphmi --splash
-TimeoutStartSec=15
+Restart=no
+RuntimeMaxSec=660
+TimeoutStopSec=3
 StandardOutput=journal
 StandardError=journal
 
