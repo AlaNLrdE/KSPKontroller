@@ -5,15 +5,15 @@ start
 repeat
   :record loop interval and count\nWDT.refresh();
   partition "input()" {
+    if (idle >2 s?) then (yes)
+      :Connected = false, LEDs off\nreset partial receiver before parsing\nkeep unread serial bytes;
+    endif
     if (complete valid packet?) then (yes)
       :update receive time\ndispatch handshake / telemetry / display command;
       :green LED on, Connected = true;
     else (no)
       if (ever connected and no valid packet >30 s?) then (yes)
         :NVIC_SystemReset();
-      endif
-      if (idle >2 s?) then (yes)
-        :Connected = false, LEDs off;
       endif
     endif
   }

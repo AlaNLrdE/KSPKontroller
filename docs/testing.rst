@@ -58,6 +58,16 @@ Verification matrix
      - Interactive test app and actual HMI together through noVNC.
      - Hardware performance or real KSP execution.
 
+Firmware receiver regression tests
+----------------------------------
+
+``python3 tools/verify.py --firmware-only`` compiles and runs the actual ``SerialCOMS.ino``, ``Input.ino``
+and ``HandShake.ino`` functions with fake serial, clock and indicator peripherals. Packet declarations
+are extracted from the production sketch, including their size assertions. Tests cover incomplete telemetry
+expiring after two seconds, the immediate next handshake (including bytes queued before expiry is checked),
+and ordinary fragmentation below the timeout. Requires a native C++17 compiler; artifacts stay under
+``build/firmware-tests``. These tests do not validate physical USB, watchdog or button behavior.
+
 Button event regression tests
 -----------------------------
 

@@ -62,7 +62,10 @@ Packet and state ownership
   timestamp and turns the link LED on.
 
 The receiver selects a known destination structure, accumulates partial input, checks the expected
-size and XOR, and only then copies into shared state. Keep the C# layout and simulator serializer in
+size and XOR, and only then copies into shared state. After the idle timeout, ``input()`` resets the
+receiver's length, index and destination before parsing new bytes. This abandons partial telemetry without
+flushing unread serial data, so the next handshake is not consumed as its payload. A fragmented packet
+that finishes within the timeout keeps its state. Keep the C# layout and simulator serializer in
 step with the sketch. ``int`` is 32 bits on this board, so wire fields use explicit widths and packed
 layout. A ``ControlPacket`` must remain 25 bytes unless all peers are deliberately migrated.
 

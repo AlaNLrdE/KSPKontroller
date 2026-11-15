@@ -16,6 +16,15 @@ int input() {
   int returnValue = -1;
   now = millis();
 
+  // Expire the old frame before parsing: a fresh handshake may already be queued after the silence.
+  deadtime = now - deadtimeOld;
+  if (deadtime > IDLETIMER) {
+    deadtimeOld = now;
+    Connected = false;
+    KSPBoardResetReceiver();
+    LEDSAllOff();
+  }
+
   if (KSPBoardReceiveData()){
     deadtimeOld = now;
     returnValue = id;
@@ -37,19 +46,12 @@ int input() {
     Connected = true;
   }
   else
-  { //if no message received for a while, go idle
+  { // No valid packet this iteration: check the longer link recovery deadline.
     // The loop is alive but the USB link has been dead for a long time after working: a wedged USB stack
     // is not recoverable from inside the sketch, so reset the whole board (the watchdog cannot help, loop() keeps running).
     if (everConnected && (now - dbgLastRxMs) > LINKRESETMS)
       NVIC_SystemReset();
 
-    deadtime = now - deadtimeOld;
-    if (deadtime > IDLETIMER)
-    {
-      deadtimeOld = now;
-      Connected = false;
-      LEDSAllOff();
-    }
   }
 
   return returnValue;

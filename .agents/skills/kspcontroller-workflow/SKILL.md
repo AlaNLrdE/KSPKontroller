@@ -67,6 +67,11 @@ for each flash (AGENTS.md rule 1); a request like "disable it in the Arduino" is
 - `BoardLink._session(ser, name)` accepts any object with `read`/`write`/`reset_input_buffer`: link behaviour can be
   unit tested with a fake board (see `FakeBoard` in `tools/kspsim/test_kspsim.py`).
 
+- When the firmware idle timeout expires, reset partial receive state before parsing new bytes. Clearing
+  Connected alone leaves rx_len active and consumes a reconnect handshake as telemetry. Keep unread serial
+  bytes intact. `python3 tools/verify.py --firmware-only` tests the actual receive/dispatch/handshake code
+  with fake peripherals, including a handshake already queued when expiry is first observed.
+
 ## Never call Debug.Log from a worker thread
 
 KSP's in-game debug console creates TextMeshPro UI objects per log line; off the main thread this crashes UnityPlayer

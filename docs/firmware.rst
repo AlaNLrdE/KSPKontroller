@@ -99,6 +99,8 @@ exercises every item without KSP (see :doc:`simulator`, *Game state / LEDs* and 
    * - Idle timeout
      - enabled
      - ``IDLETIMER`` 2000 ms: disconnected, LEDs off, no more ControlPackets or DebugPackets, matrix shows X.
+       Before reading new bytes, discard any incomplete receive frame; unread serial bytes are preserved so
+       a new handshake can reconnect immediately.
    * - Link reset
      - enabled
      - ``LINKRESETMS`` 30000 ms without a valid packet, once connected since power on: ``NVIC_SystemReset()``.

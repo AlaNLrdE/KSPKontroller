@@ -14,6 +14,15 @@ uint8_t structSize;    ///< Size of the struct that matches the packet id being 
 uint8_t rx_array_inx;  ///< Index for the RX parsing buffer
 uint8_t calc_CS;       ///< Calculated checksum
 
+/// @brief Abandons an incomplete frame without discarding unread serial bytes (which may contain a new handshake).
+void KSPBoardResetReceiver() {
+  rx_len = 0;
+  rx_array_inx = 0;
+  address = nullptr;
+  structSize = 0;
+  calc_CS = 0;
+}
+
 /**
  * @brief Reads pending serial bytes and assembles one packet.
  *
