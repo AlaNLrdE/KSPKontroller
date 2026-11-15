@@ -59,6 +59,11 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
   bridge**, which owns COM5; the RA4M1 native USB is not used (pin 21 is the USB mux). So "wedged USB" means the
   bridge: `NVIC_SystemReset()`/watchdog reset only the RA4M1 and do not recover it (stage_dead: board rebooted 30 s
   into a silence, link still dead 5 min). Only unplugging USB (power-cycles the ESP32-S3) recovers it.
+- 2026-11-14 19:50: a variant that unplugging did NOT fix: the sketch ran (matrix X, RX/TX LEDs blinking,
+  screens appeared while kspsim sent) but the PC received 0 bytes (kspsim log "port completely silent",
+  `verify --board` no handshake). `./ci upload_sketch` alone failed ("No device found on COM5"); double-tap
+  RESET (orange LED pulsing) then `./ci upload_sketch` succeeded and all `verify --board` checks passed.
+  Escalation: unplug 10 s -> double-tap RESET + upload_sketch -> ESP32-S3 bridge firmware update.
   The signature on the host: `write_avg_ms` ~19.7 with `rx_bytes=0` and COM5 still present.
 - Until 0.19.3.16 `CheckLink` measured silence from the last queued packet, so it never fired while flying
   (board-dead-1923: `link_state=up` with `rx_age_ms` 400000+). `./ci verify` check `log: link loss detected`.
