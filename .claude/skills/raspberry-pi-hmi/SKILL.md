@@ -118,6 +118,11 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   results and reject cached values after 3 s of channel inactivity. Equal values still count as new arrivals;
   cache reads do not. The fake server can pause updates without closing either socket to test this case.
 
+- Waiting-screen network identity must be cached: getaddrinfo has no portable application deadline and
+  must not run under the render thread or its cache mutex. NetInfo refreshes on a worker with shared state;
+  destruction signals stop without joining a pending DNS call. Test with a blocked injected query, including
+  cached reads, publication after release and destruction before release.
+
 ## kRPC (server in KSP, client on the Pi)
 
 - kRPC **0.7.0** for KSP 1.12.5 speaks protocol version 1, as the HMI's own client (`src/krpc.cpp`) and the

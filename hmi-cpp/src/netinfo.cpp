@@ -7,8 +7,11 @@
 #include <sys/time.h>
 
 #include <cstring>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
-#include "model.hpp"
 #include "net.hpp"
 
 namespace ksphmi {
@@ -67,33 +70,70 @@ std::vector<std::string> all_addresses() {
     return found;
 }
 
-NetInfo::NetInfo(std::string server_, double every) : server(std::move(server_)), every_(every) {
-    char name[256] = {0};
-    gethostname(name, sizeof name - 1);
-    hostname = name;
-}
-
-void NetInfo::refresh(double now) {
-    if (now - at_ < every_) return;
-    at_ = now;
-    std::string p = route_address(server);
+namespace {
+std::string network_line(const std::string& server, const std::string& hostname) {
+    std::string primary = route_address(server);
     auto everything = all_addresses();
-    if (p.empty() || p.rfind("127.", 0) == 0) p = everything.empty() ? "" : everything.front();  // server = localhost
-    primary = p;
-    others.clear();
-    for (const auto& a : everything)
-        if (a != primary) others.push_back(a);
-}
-
-std::string NetInfo::line() {
-    refresh(monotonic());
-    std::string text = "This display: " + (primary.empty() ? std::string("no network address") : primary) + " (" +
-                       hostname + ")";
-    if (!others.empty()) {
-        text += ", also ";
-        for (size_t i = 0; i < others.size(); ++i) text += (i ? ", " : "") + others[i];
+    if (primary.empty() || primary.rfind("127.", 0) == 0)
+        primary = everything.empty() ? "" : everything.front();
+    std::string text = "This display: " + (primary.empty() ? std::string("no network address") : primary) +
+                       " (" + hostname + ")";
+    bool first = true;
+    for (const auto& address : everything) {
+        if (address == primary) continue;
+        text += (first ? ", also " : ", ") + address;
+        first = false;
     }
     return text;
+}
+}  // namespace
+
+struct NetInfo::State {
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool stopping = false;
+    std::string text;
+};
+
+NetInfo::NetInfo(std::string server, double every, Query query) : state_(std::make_shared<State>()) {
+    char name[256] = {0};
+    gethostname(name, sizeof name - 1);
+    const std::string hostname = name;
+    state_->text = "This display: looking up network address (" + hostname + ")";
+    if (!query) query = [hostname](const std::string& target) { return network_line(target, hostname); };
+    // A system DNS call cannot be cancelled portably. The worker owns only shared state, so destruction
+    // signals it without waiting for DNS or leaving references to the display behind.
+    auto state = state_;
+    std::thread([state, server = std::move(server), every, query = std::move(query)] {
+        for (;;) {
+            {
+                std::lock_guard<std::mutex> lock(state->mutex);
+                if (state->stopping) return;
+            }
+            std::string text;
+            try {
+                text = query(server);  // never hold the cache lock during DNS or interface enumeration
+            } catch (const std::exception&) {
+                // Keep the last known identity and retry after the normal refresh interval.
+            }
+            std::unique_lock<std::mutex> lock(state->mutex);
+            if (state->stopping) return;
+            if (!text.empty()) state->text = std::move(text);
+            if (state->wake.wait_for(lock, std::chrono::duration<double>(every), [&] { return state->stopping; }))
+                return;
+        }
+    }).detach();
+}
+
+NetInfo::~NetInfo() {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->stopping = true;
+    state_->wake.notify_all();
+}
+
+std::string NetInfo::line() const {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    return state_->text;
 }
 
 }  // namespace ksphmi

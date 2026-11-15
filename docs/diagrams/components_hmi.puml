@@ -9,6 +9,7 @@ package "ksphmi_core" {
   component "Snapshot / navigation / systems" as Model
   component "krpc::Client" as Client
   component "pb / POSIX network / context" as Wire
+  component "NetInfo / background identity lookup" as Identity
   component "Vector / quaternion / conic math" as Math
 }
 package "ksphmi_ui" {
@@ -26,6 +27,8 @@ Source --> Client
 Client --> Wire
 Source --> Model
 Source --> Math
+Display --> Identity : cached text only
+Identity --> Wire : worker DNS / interfaces
 Display --> Model
 Display --> Instruments
 Instruments --> Math

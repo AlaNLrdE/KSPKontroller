@@ -370,10 +370,72 @@ TEST(netinfo_line_names_this_machine) {
     NetInfo info("127.0.0.1");
     std::string line = info.line();
     CHECK(line.rfind("This display: ", 0) == 0);
-    CHECK(line.find(info.hostname) != std::string::npos);
+    char hostname[256] = {0};
+    gethostname(hostname, sizeof hostname - 1);
+    CHECK(line.find(hostname) != std::string::npos);
     CHECK_EQ(route_address("127.0.0.1"), "127.0.0.1");
     CHECK_EQ(route_address("not a host name"), "");
-    CHECK(info.primary.rfind("127.", 0) != 0);  // loopback never shown as the display's address
+    double end = monotonic() + 2;
+    while (monotonic() < end && line.find("looking up") != std::string::npos) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        line = info.line();
+    }
+    CHECK(line.find("looking up") == std::string::npos);
+    CHECK(line.find("This display: 127.") == std::string::npos);
+}
+
+TEST(netinfo_slow_query_does_not_block_cached_reads_or_destruction) {
+    struct Gate {
+        std::mutex mutex;
+        std::condition_variable wake;
+        bool entered = false, released = false, finished = false;
+    };
+    auto gate = std::make_shared<Gate>();
+    auto query = [gate](const std::string&) {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        gate->entered = true;
+        gate->wake.notify_all();
+        gate->wake.wait(lock, [&] { return gate->released; });
+        gate->finished = true;
+        gate->wake.notify_all();
+        return std::string("This display: 10.0.0.42 (resolved)");
+    };
+    auto info = std::make_unique<NetInfo>("slow.example", 15, query);
+    {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        CHECK(gate->wake.wait_for(lock, std::chrono::seconds(2), [&] { return gate->entered; }));
+    }
+    double start = monotonic();
+    for (int i = 0; i < 100; ++i) CHECK(info->line().find("looking up") != std::string::npos);
+    CHECK(monotonic() - start < 1);
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->released = true;
+        gate->wake.notify_all();
+    }
+    double end = monotonic() + 2;
+    while (monotonic() < end && info->line().find("resolved") == std::string::npos)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    CHECK_EQ(info->line(), "This display: 10.0.0.42 (resolved)");
+    info.reset();
+    {
+        std::lock_guard<std::mutex> lock(gate->mutex);
+        gate->entered = gate->released = gate->finished = false;
+    }
+    info = std::make_unique<NetInfo>("slow.example", 15, query);
+    {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        CHECK(gate->wake.wait_for(lock, std::chrono::seconds(2), [&] { return gate->entered; }));
+    }
+    start = monotonic();
+    info.reset();  // DNS is still blocked; its worker must not retain or block the display
+    CHECK(monotonic() - start < 1);
+    {
+        std::unique_lock<std::mutex> lock(gate->mutex);
+        gate->released = true;
+        gate->wake.notify_all();
+        CHECK(gate->wake.wait_for(lock, std::chrono::seconds(2), [&] { return gate->finished; }));
+    }
 }
 
 // ------------------------------------------------------------------------------------------- config

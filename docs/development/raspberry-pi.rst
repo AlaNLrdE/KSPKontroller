@@ -34,7 +34,8 @@ Source map
      - This is a small project parser, not a full TOML implementation.
    * - ``net.hpp``, ``netinfo.*``, ``discovery.cpp``, ``scenes.*``
      - Socket RAII, IPv4 lookup, interface information, broadcast discovery and UDP context.
-     - Bounded waits occur on the source thread.
+     - Source socket waits stay off the render thread. ``NetInfo`` uses a worker for DNS/interface lookup;
+       ``line()`` reads cached text only, and destruction signals shared worker state without joining DNS.
    * - ``pb.*`` / ``krpc.*``
      - Protobuf wire codecs, paired TCP connections, procedures and stream-result table.
      - Protocol errors and transport errors remain distinct.

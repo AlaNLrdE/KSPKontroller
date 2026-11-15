@@ -149,7 +149,10 @@ unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./c
 The console underneath (fbcon, tty1) still blinks its cursor into the framebuffer between frames; only
 root can turn that off, hence the tmpfiles rule below. With blinking off the cursor is never redrawn and the
 next frame covers it. The waiting screens show this display's own address (the one it uses to reach the
-kRPC server first) and the server it looks for, to find the Pi without a keyboard.
+kRPC server first) and the server it looks for, to find the Pi without a keyboard. Each network identity
+cache refreshes on a background worker every 15 seconds. Drawing reads only the cached text, initially
+showing a lookup message, so slow DNS cannot stall waiting-screen animation or SDL events. Destruction
+signals the worker without waiting for a system DNS lookup; its shared state survives until the lookup ends.
 
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.

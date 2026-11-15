@@ -115,6 +115,9 @@ Execution and synchronization
    * - kRPC stream reader
      - Stores the latest result for each stream ID and wakes waiters.
      - Mutex, condition variable and shutdown flags.
+   * - HMI network identity worker
+     - Resolves the configured server and enumerates local interfaces every 15 seconds.
+     - Publishes cached text under a mutex; owns shared state until any pending DNS lookup ends.
    * - HMI display thread
      - SDL events, interpolation, drawing and presentation.
      - Owns rendering resources; no RPC calls in the frame loop.
