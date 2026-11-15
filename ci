@@ -689,6 +689,7 @@ hmi_sim() {
   grep -q "context skin: apollo" "$out/hmi.log" || die "the HMI never received the simulator's skin"
   grep -q "ksphmi.display: skin: apollo" "$out/hmi.log" || die "the HMI ignored the simulator's skin (context reply)"
   log "OK: followed the simulated vessel; frame saved to $out/flight.png"
+  "$py" "$ROOT/tools/test_editor_hmi.py" "$BUILD/hmi-cpp/ksphmi"
 }
 
 test_hmi_container() {

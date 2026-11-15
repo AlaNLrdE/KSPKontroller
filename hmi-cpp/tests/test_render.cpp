@@ -665,7 +665,7 @@ std::shared_ptr<const ShipReport> sample_ship(const std::string& variant = "") {
     if (variant == "empty") r->delta_v_pending = true, r->stages.clear(), r->parts = 0, r->crew = 0, r->seats = 0;
     if (variant == "many") {  // more stages than rows, a long name, a big ship: everything must still fit
         r->name = "An extremely long ship name that is never going to fit on any header at all, really";
-        for (int i = 3; i < 14; ++i) r->stages.push_back({i, 12345, 23456, 12.34, 9999, {{"engines", 12}, {"decouplers", 4}, {"chutes", 8}}});
+        for (int i = 3; i < 14; ++i) r->stages.push_back({i, 12345, 23456, 12.34, 9999, {{"engines", 12}, {"decouplers", 4}, {"chutes", 8}}, std::numeric_limits<double>::quiet_NaN(), {}});
         r->mass = 12345.67, r->cost = 98765432, r->funds = 1234;
     }
     if (variant == "heavy") r->stages.front().twr = .74;  // cannot leave the pad
@@ -785,6 +785,41 @@ TEST(vab_review_screenshots_on_request) {
             CHECK(save_png(s.surface, name));
         }
     }
+}
+
+TEST(editor_modes_keep_real_skin_geometry_and_cache_stable) {
+    const char* shots = std::getenv("KSPHMI_SHOTS");
+    for (const char* skin : {"classic", "apollo"})
+        for (const auto& size : SIZES) {
+            Screen screen(size.first, size.second, skin, repo_config());
+            std::ifstream file(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/editor_report_v1.txt");
+            std::stringstream text;
+            text << file.rdbuf();
+            auto parsed = parse_ship_report(text.str());
+            CHECK(parsed.has_value());
+            std::vector<std::pair<std::string, Rect>> labels;
+            screen.canvas->on_text = [&](const std::string& s, const Rect& box) { labels.emplace_back(s, box); };
+            for (const char* mode : {"construction", "actions", "crew", "cargo"}) {
+                auto data = *parsed;
+                data.editor_mode = mode;
+                Snapshot snap = vab(std::make_shared<const ShipReport>(data));
+                snap.received = 0;
+                labels.clear();
+                screen.display->draw(snap, 0);
+                for (const auto& entry : labels)
+                    if (!Rect(0, 0, size.first, size.second).contains(entry.second))
+                        check::fail(__FILE__, __LINE__, std::string(skin) + " " + mode + ": off-screen " + entry.first);
+                if (shots && size.first == 2520) CHECK(save_png(screen.surface, std::string(shots) + "/" + skin + "_editor_" + mode + ".png"));
+                // Live group labels and manifests must not invalidate Apollo's static art.
+                data.selected_group = "custom2";
+                data.manifest[0].name = "A different kerbal";
+                snap.ship = std::make_shared<const ShipReport>(data);
+                auto apollo = screen.display->apollo();
+                int before = apollo ? apollo->builds : 0;
+                screen.display->draw(snap, 0);
+                CHECK(!apollo || apollo->builds == before);
+            }
+        }
 }
 
 namespace {

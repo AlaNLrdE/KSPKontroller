@@ -800,7 +800,7 @@ namespace KSPSerialIO
         }
 
         /// @brief Unity per-frame callback: processes a packet completed by the worker thread, if any.
-        private void Update()
+        protected virtual void Update()
         {
             KSPLogQueue.Drain();
             if (NewPacketFlag)
@@ -1005,6 +1005,11 @@ namespace KSPSerialIO
 
             CPacket = new ControlPacket();
 
+            VControls = new VesselControls();
+            VControlsOld = new VesselControls();
+            ControlReceived = false;
+            NewPacketFlag = false;
+            Buttons.Reset();
             VControls.ControlGroup = new Boolean[11];
             VControlsOld.ControlGroup = new Boolean[11];
         }
@@ -1017,7 +1022,7 @@ namespace KSPSerialIO
          * reader thread are recreated (KSPSerialIO::Start opens the port). Whatever happens, the link
          * supervisor is started: it reconnects in the background if nothing was found or the link is lost later.
          */
-        void Awake()
+        protected virtual void Awake()
         {
             KSPLogQueue.InitMainThread();
             StopSupervisor();   // in case the previous scene did not clean up
@@ -1025,7 +1030,14 @@ namespace KSPSerialIO
             LinkFailed = false;
             SendFailures = 0;
             LinkUp = false;
+            initializeDataPackets();  // never carry editor axes, levels or pending presses into flight
 
+            if (this is EditorSerialLink)
+            {
+                DisplayFound = false;
+                StartSupervisor();
+                return;
+            }
             if (DisplayFound)
             {
                 KSPLogQueue.Log("KSPSerialIO: running...");
@@ -1041,7 +1053,6 @@ namespace KSPSerialIO
                 KSPLogQueue.Log(String.Format("KSPSerialIO: Output packet size: {0}/{1}",
                                         Marshal.SizeOf(VData).ToString(),
                                         MaxPayloadSize));
-                initializeDataPackets();
 
                 try
                 {

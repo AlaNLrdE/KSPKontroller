@@ -570,6 +570,7 @@ std::shared_ptr<const ShipReport> ShipReportPoller::poll(Client& c, double now) 
     log::info(LOG, fmt::str("ship report: revision %u, %s, %s, %d stages%s", revision, parsed->name.c_str(),
                             parsed->situation.c_str(), static_cast<int>(parsed->stages.size()),
                             parsed->delta_v_pending ? " (delta-v pending)" : ""));
+    log::info(LOG, "editor report: mode " + parsed->editor_mode);
     problem_.clear();
     report_ = std::make_shared<const ShipReport>(std::move(*parsed));
     return report_;

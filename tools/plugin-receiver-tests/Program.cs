@@ -101,6 +101,20 @@ class Program
         Check((bool)Get("ControlReceived") && !Abort() && PendingButtons() == 3,
             "valid controls and their presses must survive malformed following packets");
         Check((bool)Get("DisplayFound"), "malformed handshake must not disconnect an established session");
+        // Entering a new scene must discard editor state before any flight addon can consume it.
+        controls = Get("VControls");
+        controls.GetType().GetField("Throttle").SetValue(controls, 1.0f);
+        controls.GetType().GetField("SAS").SetValue(controls, true);
+        Set("VControls", controls);
+        Set("ControlReceived", true);
+        Set("NewPacketFlag", true);
+        object owner = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(port);
+        port.GetMethod("initializeDataPackets", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(owner, null);
+        controls = Get("VControls");
+        Check((float)controls.GetType().GetField("Throttle").GetValue(controls) == 0 &&
+              !(bool)controls.GetType().GetField("SAS").GetValue(controls), "scene entry resets axes and control levels");
+        Check(!(bool)Get("ControlReceived") && !(bool)Get("NewPacketFlag") && PendingButtons() == 0,
+              "scene entry discards publication flags and pending button presses");
         Console.WriteLine("PASS plugin receiver: real assembly rejects short/long controls and handshakes before publication");
     }
 }

@@ -51,6 +51,19 @@ class Program
         producer.Join();
         consumed += buttons.Take().Length;
         Check(consumed == count, "concurrent consumption must preserve every edge");
+        var steps = new System.Collections.Generic.List<int>();
+        Action<int> navigate = value => steps.Add(value);
+        EditorNavigation.StepRequested += navigate;
+        EditorNavigation.Consume(new[] {
+            new ButtonEvents.Press { Bit = 7, Received = 100 },
+            new ButtonEvents.Press { Bit = 6, Received = 200 },
+            new ButtonEvents.Press { Bit = 0, Received = 300 },
+            new ButtonEvents.Press { Bit = 7, Received = -1000 }
+        }, 500);
+        Check(steps.Count == 2 && steps[0] == 1 && steps[1] == -1, "editor routes SAS/RCS only and drops stale presses");
+        EditorNavigation.Consume(new[] { new ButtonEvents.Press { Bit = 7, Received = int.MaxValue - 5 } }, int.MinValue + 5);
+        Check(steps.Count == 3, "editor navigation survives TickCount rollover");
+        EditorNavigation.StepRequested -= navigate;
         Console.WriteLine("PASS button events: stage pulse, SAS/RCS transitions, baseline, timestamps, reset, concurrency");
     }
 }

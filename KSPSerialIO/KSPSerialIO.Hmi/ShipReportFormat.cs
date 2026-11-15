@@ -10,6 +10,8 @@ namespace KSPSerialIO.Hmi
     {
         /// <summary>Stage number as in the staging list (the highest fires first).</summary>
         public int Stage;
+        /// <summary>Named staged parts; independent of the short per-kind counts.</summary>
+        public readonly List<StagePartFacts> Items = new List<StagePartFacts>();
         /// <summary>Delta-v in m/s in the situation of KSP's editor delta-v app (body and sea level / altitude /
         /// vacuum), and in vacuum.</summary>
         public double DeltaV, DeltaVVac;
@@ -28,16 +30,23 @@ namespace KSPSerialIO.Hmi
     public sealed class StageTally
     {
         /// <summary>Report order of the kinds.</summary>
-        public static readonly string[] Order = { "engines", "decouplers", "chutes", "clamps", "fairings" };
+        public static readonly string[] Order = { "engines", "decouplers", "chutes", "clamps", "fairings", "other" };
+        private readonly List<StagePartFacts> items = new List<StagePartFacts>();
         private readonly Dictionary<int, Dictionary<string, int>> stages = new Dictionary<int, Dictionary<string, int>>();
 
         /// <summary>Highest stage that fires something, -1 for none.</summary>
         public int MaxStage = -1;
 
         /// <summary>Count one part of `kind` firing in `stage`; ignored for a null kind or a negative stage.</summary>
-        public void Add(int stage, string kind)
+        public void Add(int stage, string kind, string title = null)
         {
             if (kind == null || stage < 0) return;
+            if (title != null)
+            {
+                StagePartFacts found = items.Find(x => x.Stage == stage && x.Kind == kind && x.Name == title);
+                if (found != null) ++found.Count;
+                else items.Add(new StagePartFacts { Stage = stage, Kind = kind, Name = title, Count = 1 });
+            }
             Dictionary<string, int> s;
             if (!stages.TryGetValue(stage, out s)) stages[stage] = s = new Dictionary<string, int>();
             int n;
@@ -47,6 +56,9 @@ namespace KSPSerialIO.Hmi
         }
 
         /// <summary>True when `stage` fires anything.</summary>
+        public List<StagePartFacts> Items(int stage) { return items.FindAll(x => x.Stage == stage); }
+
+        /// <summary>Whether this staging step activates any part.</summary>
         public bool Has(int stage) { return stages.ContainsKey(stage); }
 
         /// <summary>The stage's events in report order.</summary>
@@ -157,11 +169,59 @@ namespace KSPSerialIO.Hmi
         }
     }
 
-    /// <summary>Plain data of one editor ship: filled from KSP on the main thread, formatted without KSP types.</summary>
+    /// <summary>One part or module action assigned to an editor group.</summary>
+    public sealed class ActionFacts {
+        /// <summary>Group code, part title and action caption (percent-encoded by the formatter).</summary>
+        public string Group, Part, Name;
+    }
+    /// <summary>One seat of a current-ship part; empty name denotes a free seat.</summary>
+    public sealed class SeatFacts {
+        /// <summary>Stable part id, part title, kerbal name and stock role.</summary>
+        public string PartId, Part, Name, Role;
+        /// <summary>Zero-based seat index and kerbal experience level.</summary>
+        public int Seat, Level;
+    }
+    /// <summary>One stock inventory, with totals and limits independent of item detail rows.</summary>
+    public sealed class InventoryFacts {
+        /// <summary>Part-id/module-index key and part title.</summary>
+        public string Key, Part;
+        /// <summary>Number of inventory slots.</summary>
+        public int Slots;
+        /// <summary>Mass in tonnes, volume in litres; NaN unknown, capacity -1 explicitly unlimited.</summary>
+        public double Mass, MassCapacity, Volume, VolumeCapacity;
+    }
+    /// <summary>A stack of stored parts.</summary>
+    public sealed class CargoFacts {
+        /// <summary>Owning inventory key and stored part title.</summary>
+        public string Inventory, Name;
+        /// <summary>Zero-based slot and stack count.</summary>
+        public int Slot, Quantity;
+        /// <summary>Stack mass in tonnes and packed volume in litres; NaN unknown.</summary>
+        public double Mass, Volume;
+    }
+    /// <summary>Named staged components, grouped by stage, kind and title.</summary>
+    public sealed class StagePartFacts {
+        /// <summary>Stage number and quantity of this part title.</summary>
+        public int Stage, Count;
+        /// <summary>Staging event kind and part title.</summary>
+        public string Kind, Name;
+    }
+
+    /// <summary>Plain editor data, formatted without touching KSP objects.</summary>
     public sealed class ShipFacts
     {
         /// <summary>Editor building: "vab" or "sph" (EditorDriver.editorFacility).</summary>
         public string Facility = "vab";
+        /// <summary>Screen code and selected group; empty mode omits the optional editor extension.</summary>
+        public string EditorMode = "", SelectedGroup = "";
+        /// <summary>Assigned actions.</summary>
+        public readonly List<ActionFacts> Actions = new List<ActionFacts>();
+        /// <summary>Per-part seat manifest.</summary>
+        public readonly List<SeatFacts> Manifest = new List<SeatFacts>();
+        /// <summary>Inventory totals and limits.</summary>
+        public readonly List<InventoryFacts> Inventories = new List<InventoryFacts>();
+        /// <summary>Stored item stacks.</summary>
+        public readonly List<CargoFacts> Cargo = new List<CargoFacts>();
         /// <summary>Ship name as typed in the editor.</summary>
         public string Name = "";
         /// <summary>Delta-v situation, "body_asl" / "body_alt" / "body_vac" (e.g. "kerbin_asl").</summary>
@@ -232,6 +292,22 @@ namespace KSPSerialIO.Hmi
               .Append(" seats=").Append(f.Seats.ToString(CultureInfo.InvariantCulture))
               .Append(" size=").Append(Number(f.Height, 1)).Append(',').Append(Number(f.Width, 1))
               .Append(" engines=").Append(f.Engines.ToString(CultureInfo.InvariantCulture)).Append('\n');
+            if (f.EditorMode.Length > 0)
+            {
+                sb.Append("editor=").Append(Escape(f.EditorMode)).Append(',').Append(Escape(f.SelectedGroup)).Append('\n');
+                foreach (ActionFacts a in f.Actions)
+                    sb.Append("ac=").Append(Escape(a.Group)).Append(',').Append(Escape(a.Part)).Append(',').Append(Escape(a.Name)).Append('\n');
+                foreach (SeatFacts s in f.Manifest)
+                    sb.Append("seat=").Append(Escape(s.PartId)).Append(',').Append(Escape(s.Part)).Append(',').Append(s.Seat)
+                      .Append(',').Append(Escape(s.Name)).Append(',').Append(Escape(s.Role)).Append(',').Append(s.Level).Append('\n');
+                foreach (InventoryFacts i in f.Inventories)
+                    sb.Append("inv=").Append(Escape(i.Key)).Append(',').Append(Escape(i.Part)).Append(',').Append(i.Slots)
+                      .Append(',').Append(Number(i.Mass, 6)).Append(',').Append(Number(i.MassCapacity, 6))
+                      .Append(',').Append(Number(i.Volume, 3)).Append(',').Append(Number(i.VolumeCapacity, 3)).Append('\n');
+                foreach (CargoFacts c in f.Cargo)
+                    sb.Append("cargo=").Append(Escape(c.Inventory)).Append(',').Append(c.Slot).Append(',').Append(Escape(c.Name))
+                      .Append(',').Append(c.Quantity).Append(',').Append(Number(c.Mass, 6)).Append(',').Append(Number(c.Volume, 3)).Append('\n');
+            }
             if (f.DeltaVPending)
             {
                 sb.Append("dv=pending\n");
@@ -248,6 +324,10 @@ namespace KSPSerialIO.Hmi
                     sb.Append(',').Append(Escape(e.Key)).Append(':').Append(e.Value.ToString(CultureInfo.InvariantCulture));
                 sb.Append('\n');
             }
+            foreach (StageFacts st in f.Stages)
+                foreach (StagePartFacts p in st.Items)
+                    sb.Append("sp=").Append(st.Stage).Append(',').Append(Escape(p.Kind)).Append(',').Append(Escape(p.Name))
+                      .Append(',').Append(p.Count).Append('\n');
             if (f.Stages.Count > 0)
             {
                 sb.Append("kasl=");

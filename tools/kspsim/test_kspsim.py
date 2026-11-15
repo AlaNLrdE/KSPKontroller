@@ -608,6 +608,38 @@ def _sas_report(v):
 class ShipReportTest(unittest.TestCase):
     """KSPSerialIO.Hmi's KSPHMI service as kspsim serves it: same text as the plugin, same rules as kRPC."""
 
+    def test_editor_fixture_and_serial_navigation_are_separate_from_flight_controls(self):
+        from kspsim import ships
+        sample = ships.editor_sample(ships.ship("kerbal_x"), "actions")
+        with open(os.path.join(ROOT, "hmi-cpp", "tests", "data", "editor_report_v1.txt"), encoding="utf-8") as file:
+            self.assertEqual(ships.report_text(57, sample), file.read())
+        sim = Simulator()
+        sim.set_scene("vab")
+        before_game = dict(sim.game)
+        before_controls = dict(vars(sim.vessel.controls))
+        self.assertIsNotNone(sim.vessel_for_board())
+        sim.board_linked()
+        sim.board_controls(physics.Controls())
+        sim.board_controls(physics.Controls(sas=True, stage=True, throttle=1))
+        self.assertEqual(sim.editor_mode, "actions")
+        sim.board_controls(physics.Controls(sas=False))
+        self.assertEqual(sim.editor_mode, "crew")
+        sim.board_controls(physics.Controls(rcs=True))
+        self.assertEqual(sim.editor_mode, "actions")
+        sim.set_editor_mode("construction")
+        sim.board_controls(physics.Controls(rcs=False))
+        self.assertEqual(sim.editor_mode, "cargo")
+        self.assertEqual(sim.game, before_game)
+        self.assertEqual(vars(sim.vessel.controls), before_controls)
+        sim.board_linked()
+        sim.board_controls(physics.Controls(sas=True, rcs=True))
+        self.assertEqual(sim.editor_mode, "cargo")
+        self.assertIn("editor=cargo,custom1", sim.ship_report())
+        revision = sim.ship_revision
+        sim.set_editor_group("sas")
+        self.assertGreater(sim.ship_revision, revision)
+        self.assertIn("editor=cargo,sas", sim.ship_report())
+
     def test_sample_matches_the_plugin_format_and_the_pi_fixture(self):
         from kspsim import ships
         # hmi-cpp/tests/data/ship_report_v1.txt is also the plugin formatter's expected output

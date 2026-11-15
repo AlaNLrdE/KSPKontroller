@@ -89,6 +89,7 @@ def main(argv=None) -> int:
     ap.add_argument("--skin", choices=("classic", "apollo"),
                     help="ask the Pi HMI for this look on the UDP 50002 context reply (default: its own config)")
     ap.add_argument("--scene", choices=SCENES, help="start in this game scene (default flight)")
+    ap.add_argument("--editor-mode", choices=("construction", "actions", "crew", "cargo"), default="construction")
     ap.add_argument("--ship", choices=[n for n in ships.NAMES if n] + ["none"],
                     help="editor ship the KSPHMI service reports in the VAB (default kerbal_x; none = no service, "
                          "as without KSPSerialIO.Hmi.dll)")
@@ -106,6 +107,7 @@ def main(argv=None) -> int:
         sim.set_skin(args.skin)
     if args.ship:
         sim.set_ship("" if args.ship == "none" else args.ship)
+    sim.set_editor_mode(args.editor_mode)
     if args.node:
         dv, _, seconds = args.node.partition(",")
         sim.set_node(float(dv), float(seconds or 300))

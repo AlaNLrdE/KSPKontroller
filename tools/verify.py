@@ -904,6 +904,49 @@ def check_ship_report_contract(ctx):
     report("PASS" if result.returncode == 0 else "FAIL", "ship report: plugin format", (result.stdout + result.stderr).strip()[-600:])
 
 
+def check_editor_modes(ctx):
+    """Editor screens preserve the shared wire extension and isolate serial controls from flight."""
+    import runpy
+    fixture = read(os.path.join(ROOT, "hmi-cpp", "tests", "data", "editor_report_v1.txt"))
+    ships = runpy.run_path(os.path.join(ROOT, "tools", "kspsim", "ships.py"))
+    expected = ships["report_text"](57, ships["editor_sample"](ships["ship"]("kerbal_x"), "actions"))
+    errors = []
+    if expected != fixture:
+        errors.append("simulator editor fixture differs")
+    sources = {
+        "KSPSerialIO/KSPSerialIO/EditorSerialLink.cs": ("Startup.EditorAny", "EditorNavigation.Consume", "TrySendPacket(VData)", "PortCleanup()"),
+        "KSPSerialIO/KSPSerialIO.Hmi/EditorDetails.cs": ("SelectPanelParts", "SelectPanelActions", "SelectPanelCrew", "SelectPanelCargo", "GetCrewSeat"),
+        "KSPSerialIO/KSPSerialIO.Hmi/EditorShipReport.cs": ("onEditorScreenChange.Add", "onEditorScreenChange.Remove", "EditorNavigation.StepRequested +=", "EditorNavigation.StepRequested -="),
+        "hmi-cpp/src/apollo.cpp": ("editor(c, art, s)", "stage_detail_lines"),
+        "hmi-cpp/src/display.cpp": ("editor_report(snap)", "stage_detail_lines"),
+    }
+    for path, tokens in sources.items():
+        source = read(os.path.join(ROOT, path))
+        for token in tokens:
+            if token not in source:
+                errors.append(path + " missing " + token)
+    for kind in ("editor=", "ac=", "seat=", "inv=", "cargo=", "sp="):
+        if not any(line.startswith(kind) for line in fixture.splitlines()):
+            errors.append("editor fixture missing " + kind)
+    report("FAIL" if errors else "PASS", "editor modes: contract", "; ".join(errors) if errors else
+           "four modes, real skins, named staging, shared fixture and editor-only button routing")
+
+    smoke = os.path.join(ROOT, "build", "editor-hmi-sim", "smoke.json")
+    if os.path.isfile(smoke):
+        with open(smoke, encoding="utf-8") as stream:
+            result = json.load(stream)
+        expected = {skin + ":" + mode for skin in ("classic", "apollo") for mode in ("construction", "actions", "crew", "cargo")}
+        ok = result.get("passed") is True and set(result.get("screens", [])) == expected
+        sources = [os.path.join(ROOT, folder, file) for folder, _, files in os.walk(os.path.join(ROOT, "hmi-cpp"))
+                   for file in files if file.endswith((".cpp", ".hpp"))]
+        sources += [os.path.join(ROOT, "tools", "test_editor_hmi.py")]
+        stale = any(os.path.getmtime(source) > os.path.getmtime(smoke) for source in sources)
+        report("FAIL" if not ok else "WARN" if stale else "PASS", "editor modes: end-to-end",
+               "C++ HMI followed all four modes in both real skins" + ("; sources changed: rerun test_hmi --sim" if stale else ""))
+    else:
+        report("WARN", "editor modes: end-to-end", "not tested: ./ci test_hmi --sim")
+
+
 def check_install_hmi_service(ctx):
     """KSPSerialIO.Hmi.dll (the Pi's VAB report) installed in GameData/KSPSerialIO/Plugins and identical to the build,
     with its KSPSerialIO.Hmi.xml (kRPC reads the service documentation from it and warns at every launch without it).
@@ -1060,7 +1103,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_verify_newlines, check_documentation, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_editor_modes, check_verify_newlines, check_documentation, check_hmi_desktop, check_git]
 
 
 def main():

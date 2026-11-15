@@ -104,9 +104,48 @@ internal static class Program
         Check(ShipMath.CrewAboard(stale, new Dictionary<uint, int> { { 1u, 1 } }) == 1, "unmatched ids: capped at the seats");
     }
 
+    private static void EditorContract(string root)
+    {
+        var f = Sample();
+        f.EditorMode = "actions";
+        f.SelectedGroup = "custom1";
+        f.Actions.Add(new ActionFacts { Group = "custom1", Part = "Communotron 16", Name = "Toggle antenna" });
+        for (int i = 0; i < 3; ++i)
+            f.Manifest.Add(new SeatFacts { PartId = "1", Part = "Mk1-3 Pod", Seat = i,
+                Name = i == 0 ? "Valentina Kerman" : "", Role = i == 0 ? "Pilot" : "", Level = i == 0 ? 1 : 0 });
+        f.Inventories.Add(new InventoryFacts { Key = "1:0", Part = "Mk1-3 Pod", Slots = 3,
+            Mass = .022, MassCapacity = .05, Volume = 84, VolumeCapacity = 120 });
+        f.Cargo.Add(new CargoFacts { Inventory = "1:0", Slot = 0, Name = "Repair kit", Quantity = 2, Mass = .010, Volume = 20 });
+        f.Cargo.Add(new CargoFacts { Inventory = "1:0", Slot = 1, Name = "EVA cylinder", Quantity = 1, Mass = .012, Volume = 64 });
+        var names = new Dictionary<string,string> { {"engines","Engine"}, {"clamps","Launch clamp"}, {"decouplers","Decoupler"}, {"chutes","Parachute"} };
+        foreach (StageFacts st in f.Stages)
+            foreach (var e in st.Events)
+                st.Items.Add(new StagePartFacts { Stage = st.Stage, Kind = e.Key, Name = names[e.Key], Count = e.Value });
+        string golden = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "editor_report_v1.txt")).Replace("\r\n", "\n");
+        Check(ShipReportFormat.Text(57, ShipReportFormat.Body(f)) == golden, "extended editor fixture");
+        var tally = new StageTally();
+        tally.Add(0, "chutes", "Chute, A=B%");
+        tally.Add(0, "chutes", "Chute, A=B%");
+        Check(tally.Items(0).Count == 1 && tally.Items(0)[0].Count == 2, "staged names aggregate quantities");
+        f.DeltaVPending = true;
+        string pending = ShipReportFormat.Body(f);
+        Check(pending.Contains("editor=actions,custom1") && pending.Contains("seat=") && !pending.Contains("\nst="),
+              "editor screens keep data while delta-v is pending");
+        ShipReportCache.Clear();
+        ShipReportCache.Publish(f);
+        uint previous = ShipReportCache.Revision;
+        f.EditorMode = "crew";
+        Check(ShipReportCache.Publish(f) && ShipReportCache.Revision == previous + 1, "mode change advances revision");
+        previous = ShipReportCache.Revision;
+        f.SelectedGroup = "sas";
+        Check(ShipReportCache.Publish(f) && ShipReportCache.Revision == previous + 1, "group change advances revision");
+        ShipReportCache.Clear();
+    }
+
     private static int Main(string[] args)
     {
         string root = args.Length > 0 ? args[0] : Path.Combine("..", "..");
+        EditorContract(root);
         // A comma decimal separator must not leak into the report.
         Thread.CurrentThread.CurrentCulture = new CultureInfo("es-MX");
         string golden = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "ship_report_v1.txt")).Replace("\r\n", "\n");

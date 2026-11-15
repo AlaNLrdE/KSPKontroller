@@ -1,5 +1,10 @@
 # Changelog
 
+* **0.19.5.0**: 20261115
+  Editor modes on the Pi: action assignments, seat manifests, inventory capacity and named staging parts.
+  A dedicated editor serial owner routes SAS/RCS to synchronized screen navigation.
+  Both existing Apollo and Classic skins are extended without a visual redesign.
+
 * **0.19.4.1**: 20261115
   `KSPSerialIO.Hmi.dll` fixes from the first live VAB test (stock Kerbal X, KSP 1.12.5). Stage delta-v and TWR follow
   the delta-v app's situation the way the app picks them (sea level / altitude / vacuum fields of `DeltaVStageInfo`,

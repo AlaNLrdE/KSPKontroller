@@ -58,6 +58,7 @@ private:
     void navball(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void facility(Canvas& c, bool art, const Snapshot& s);
     /// VAB editor ship report (Snapshot::ship): DELTA-V group, stage table, destination lamps, VEHICLE readouts.
+    void editor(Canvas& c, bool art, const Snapshot& s);
     void vab(Canvas& c, bool art, const Snapshot& s);
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
 

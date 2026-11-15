@@ -43,6 +43,7 @@ public:
     void waiting(const Snapshot& s, double now);
     void facility(const Snapshot& s);
     /// VAB scene with an editor ship report: delta-v, stages, destinations ([vab] in config.toml) and vehicle.
+    void editor_report(const Snapshot& s);
     void vab_report(const Snapshot& s);
     /// The highlighted destination: from KSP's delta-v app body (choose_target), else the configured [vab] target.
     TargetChoice vab_target(const ShipReport* report) const;

@@ -63,6 +63,10 @@
       <HintPath>$(KSPManaged)\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="KSPSerialIO">
+      <HintPath>..\KSPSerialIO\bin\$(Configuration)\KSPSerialIO.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="KRPC.Core">
       <HintPath>$(KRPCDir)\KRPC.Core.dll</HintPath>
       <Private>False</Private>
@@ -71,6 +75,7 @@
   <ItemGroup>
     <Compile Include="ShipReportFormat.cs" />
     <Compile Include="EditorShipReport.cs" />
+    <Compile Include="EditorDetails.cs" />
     <Compile Include="HmiService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

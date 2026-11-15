@@ -306,3 +306,14 @@ The project targets .NET 4.7.1, not 3.5 like ``KSPSerialIO.dll``: kRPC 0.7.0's a
 read-only. There is deliberately no ``KSPAssemblyDependency`` on kRPC: kRPC declares no ``KSPAssembly``
 attribute, so KSP could refuse to load the DLL even with kRPC installed. The log tag is ``KSPSerialIO[HMI]``
 (``ship report rev N: ...`` on each change; a failure is logged once per distinct message).
+
+
+Editor serial ownership
+-----------------------
+
+From 0.19.5.0 ``EditorSerialLink`` owns the common transport in the editor, alongside the flight-only owner
+``KSPSerialIO``. Discovery and reopens stay on the supervisor thread; Unity sends neutral telemetry and routes
+only fresh SAS/RCS press events to ``EditorNavigation``. ``KSPSerialIO.Hmi`` subscribes on its main-thread addon
+and requests the stock editor screen; it remains the only assembly referencing kRPC. The main assembly exposes
+only a plain C# event. The port closes on leaving the editor, and packet/control/button state is cleared before
+the next scene. See :doc:`hmi` for the optional editor report fields and the retained Apollo/Classic skins.

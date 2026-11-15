@@ -35,6 +35,17 @@ def report_text(revision: int, ship: dict) -> str:
     summary += " parts=%d crew=%d seats=%d size=%s,%s engines=%d" % (
         ship["parts"], ship["crew"], ship["seats"], number(ship["height"], 1), number(ship["width"], 1), ship["engines"])
     lines.append(summary)
+    if "editor_mode" in ship:
+        lines.append("editor=%s,%s" % (escape(ship["editor_mode"]), escape(ship.get("selected_group", ""))))
+        for a in ship.get("actions", []):
+            lines.append("ac=" + ",".join(escape(v) for v in a))
+        for part_id, part, seat, name, role, level in ship.get("manifest", []):
+            lines.append("seat=%s,%s,%d,%s,%s,%d" % (escape(part_id), escape(part), seat, escape(name), escape(role), level))
+        for key, part, slots, mass, mass_cap, volume, volume_cap in ship.get("inventories", []):
+            lines.append("inv=%s,%s,%d,%s,%s,%s,%s" % (escape(key), escape(part), slots, number(mass, 6),
+                number(mass_cap, 6), number(volume, 3), number(volume_cap, 3)))
+        for key, slot, name, quantity, mass, volume in ship.get("cargo", []):
+            lines.append("cargo=%s,%d,%s,%d,%s,%s" % (escape(key), slot, escape(name), quantity, number(mass, 6), number(volume, 3)))
     if ship.get("pending"):
         lines.append("dv=pending")
     else:
@@ -43,6 +54,9 @@ def report_text(revision: int, ship: dict) -> str:
                       number(st["burn"], 0)]
             fields += ["%s:%d" % (escape(kind), n) for kind, n in st["events"]]
             lines.append("st=" + ",".join(fields))
+        for st in ship["stages"]:
+            for kind, title, count in st.get("items", []):
+                lines.append("sp=%d,%s,%s,%d" % (st["stage"], escape(kind), escape(title), count))
         if ship["stages"]:  # Kerbin sea-level delta-v per stage (plugin 0.19.4.1+); the samples are kerbin_asl
             lines.append("kasl=" + ",".join("%d:%s" % (st["stage"], number(st.get("kasl", st["dv"]), 0))
                                             for st in ship["stages"]))
@@ -77,3 +91,17 @@ def ship(name: str) -> dict | None:
     if name == "":
         return None
     raise ValueError("unknown sample ship %r (choose from %s)" % (name, ", ".join(n or '""' for n in NAMES)))
+
+
+def editor_sample(sample: dict, mode: str = "construction", selected: str = "custom1") -> dict:
+    """Sample editor details shared by simulator UI, serial navigation and kRPC."""
+    sample = dict(sample, editor_mode=mode, selected_group=selected)
+    populated = sample["parts"] > 0
+    sample["actions"] = [("custom1", "Communotron 16", "Toggle antenna")] if populated else []
+    sample["manifest"] = [("1", "Mk1-3 Pod", i, "Valentina Kerman" if i < sample["crew"] else "",
+        "Pilot" if i < sample["crew"] else "", 1 if i < sample["crew"] else 0) for i in range(sample["seats"])]
+    sample["inventories"] = [("1:0", "Mk1-3 Pod", 3, .022, .05, 84, 120)] if populated else []
+    sample["cargo"] = [("1:0", 0, "Repair kit", 2, .010, 20), ("1:0", 1, "EVA cylinder", 1, .012, 64)] if populated else []
+    sample["stages"] = [dict(st, items=[(kind, {"engines":"Engine", "clamps":"Launch clamp", "decouplers":"Decoupler",
+        "chutes":"Parachute", "fairings":"Fairing"}.get(kind,kind), count) for kind,count in st["events"]]) for st in sample["stages"]]
+    return sample

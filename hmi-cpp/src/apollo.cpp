@@ -363,6 +363,7 @@ ApolloSkin::Key ApolloSkin::key_for(const Snapshot& s) const {
         k.screen = VAB;
         const TargetChoice t = d_.vab_target(s.ship.get());
         if (t.destination) k.scene = t.destination->key + (t.from_app ? "@app" : "@config");
+        k.scene += "@" + s.ship->editor_mode;
     } else if (s.state == State::NoVessel && find_view(s.scene)) {
         k.screen = FACILITY, k.scene = s.scene;
     } else {
@@ -444,7 +445,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
         line2 = upper(s.body) + "   \xC2\xB7   " + upper(fmt::situation(s.situation));
     } else if (screen == VAB && s.ship) {
         title = upper(s.ship->name.empty() ? "Untitled ship" : s.ship->name);
-        line2 = "VAB   \xC2\xB7   \xCE\x94V " + s.ship->situation_label();
+        line2 = "VAB   \xC2\xB7   " + editor_mode_label(s.ship->editor_mode);
     } else if (screen == FACILITY) {
         title = "KSP KONTROLLER", line2 = upper(find_view(s.scene)->subtitle);
     } else {
@@ -473,8 +474,8 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
         auto twr_lamp = [&](int col, TwrLevel level) {
             show(1, col, level == TwrLevel::Warn || level == TwrLevel::Bad, level == TwrLevel::Bad ? L_RED : L_AMBER);
         };
-        twr_lamp(0, s.ship ? launch_twr_level(*s.ship, limits) : TwrLevel::None);
-        twr_lamp(1, s.ship ? upper_twr_level(*s.ship, limits) : TwrLevel::None);
+        twr_lamp(0, s.ship && s.ship->editor_mode == "construction" ? launch_twr_level(*s.ship, limits) : TwrLevel::None);
+        twr_lamp(1, s.ship && s.ship->editor_mode == "construction" ? upper_twr_level(*s.ship, limits) : TwrLevel::None);
         return;
     }
     show(0, 3, flight_now && s.nav && s.nav->sas, L_WHITE);
@@ -808,7 +809,41 @@ void ApolloSkin::staging(Canvas& c, bool art, const Rect& rect, const Snapshot& 
     }
 }
 
+void ApolloSkin::editor(Canvas& c, bool art, const Snapshot& s) {
+    const ShipReport& report = *s.ship;
+    const EditorPage page = editor_page(report);
+    const double u = c.u, gap = 1.6 * u, x = 2.5 * u, width = c.w - 5 * u;
+    const double metric_w = (width - 3 * gap) / 4;
+    for (size_t i = 0; i < page.metrics.size(); ++i)
+        tile(c, art, d_, Rect::f(x + i * (metric_w + gap), 13 * u, metric_w, 7 * u), page.metrics[i].first.c_str(),
+             "888888", {page.metrics[i].second, ""}, theme::VALUE);
+    const double panel_w = (width - gap) / 2;
+    auto table = [&](double px, const std::string& title, const std::vector<EditorRow>& rows) {
+        const Rect box = Rect::f(px, 23 * u, panel_w, 70 * u);
+        if (art) { frame(c, box, title.c_str()); return; }
+        if (d_.on_vab_panel) d_.on_vab_panel(title, box);
+        const double left = box.x + 1.3 * u, right = box.right() - 1.3 * u, room = right - left;
+        const PageSlice slice = page_slice(rows.size(), 10, s.received);
+        for (size_t i = slice.begin; i < slice.end; ++i) {
+            const auto& row = rows[i];
+            const double y = box.y + 3.2 * u + (i - slice.begin) * 6 * u;
+            const double label_room = row.value.empty() ? room : room * .52;
+            label(c, row.label, std::min(2.0f, fit(c, {row.label}, 2.0f, label_room)), left, y, Anchor::TopLeft, row.warning ? L_AMBER : INK, false);
+            if (!row.value.empty()) label(c, row.value, std::min(2.0f, fit(c, {row.value}, 2.0f, room * .45)), right, y,
+                                         Anchor::TopRight, row.warning ? L_AMBER : INK, false);
+            if (!row.detail.empty()) label(c, row.detail, std::min(1.65f, fit(c, {row.detail}, 1.65f, room)), left,
+                                          y + 2.6 * u, Anchor::TopLeft, DIM_INK, false);
+        }
+        label(c, fmt::str("PAGE %zu / %zu%s", slice.page + 1, slice.pages, slice.pages > 1 ? "  /  AUTO 8s" : ""),
+              1.5, left, box.bottom() - 3 * u, Anchor::TopLeft, DIM_INK, false);
+    };
+    table(x, page.left_title, page.left);
+    table(x + panel_w + gap, page.right_title, page.right);
+    if (!art) label(c, "EDITOR SYNC  /  SAS NEXT  /  RCS PREVIOUS", 1.7, x, 96 * u, Anchor::TopLeft, DIM_INK, false);
+}
+
 void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
+    if (s.ship && s.ship->editor_mode != "construction") { editor(c, art, s); return; }
     const double u = c.u;
     const ShipReport* r = s.ship.get();
     if (!art && !r) return;
@@ -887,7 +922,7 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
     const double gap = 1.3 * u;
     const double cx_stage = x0 + .6 * u, cx_dv = cx_stage + stage.w + gap, cx_vac = cx_dv + dv.w + gap,
                  cx_twr = cx_vac + dv.w + gap, cx_burn = cx_twr + twr.w + gap, cx_ev = cx_burn + burn.w + gap;
-    constexpr int ROWS = 8;  // one more slot below them for "+N MORE STAGES" or the pending note
+    constexpr int ROWS = 4;  // metric windows plus two full-width lines of named staging components
     const double ev_room = left_w - .6 * u - cx_ev, row0 = ty + 2.2 * u;
     const double pitch = std::max(dv.h + .8 * u, (bottom - 1.5 * u - row0) / (ROWS + 1));
     if (art) {
@@ -919,9 +954,10 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
         } else if (r->stages.empty()) {
             label(c, "NO STAGES", 1.7f, (x0 + left_w) / 2, row0 + ROWS * pitch + .6 * u, Anchor::MidTop, DIM_INK, false);
         }
-        for (int i = 0; !pending && i < static_cast<int>(r->stages.size()) && i < ROWS; ++i) {
+        const PageSlice stages = page_slice(r->stages.size(), ROWS, s.received);
+        for (size_t i = stages.begin; !pending && i < stages.end; ++i) {
             const StageReport& st = r->stages[i];
-            const float y = float(row0 + i * pitch);
+            const float y = float(row0 + (i - stages.begin) * pitch);
             const TwrLevel level = twr_level(*r, static_cast<size_t>(i), d_.config().vab.twr);
             const Color twr_color = level == TwrLevel::Bad ? seg::RED : level == TwrLevel::Warn ? seg::AMBER : seg::GREEN;
             seg::draw(c, float(cx_stage), y, stage, fmt::str("%02d", std::min(st.stage, 99)), seg::GREEN);
@@ -934,9 +970,15 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
             const std::string ev = events_text(st);
             if (!ev.empty() && ev_room > u)
                 label(c, ev, std::min(1.4f, fit(c, {ev}, 1.4f, ev_room)), cx_ev, y + dv.h / 2, Anchor::MidLeft, INK, true, .06f);
+            const auto details = stage_detail_lines(st);
+            const PageSlice parts = page_slice(details.size(), 2, s.received / stages.pages);
+            const double room = left_w - x0 - .6 * u;
+            for (size_t j = parts.begin; j < parts.end; ++j)
+                label(c, details[j], std::min(1.35f, fit(c, {details[j]}, 1.35f, room)), x0,
+                      y + (3.5 + 1.8 * (j - parts.begin)) * u, Anchor::TopLeft, INK, false);
         }
-        if (!pending && static_cast<int>(r->stages.size()) > ROWS)
-            label(c, fmt::str("+%d MORE STAGES", static_cast<int>(r->stages.size()) - ROWS), 1.5f, cx_stage,
+        if (!pending)
+            label(c, fmt::str("STAGES PAGE %zu / %zu  /  AUTO 8s", stages.page + 1, stages.pages), 1.5f, cx_stage,
                   row0 + ROWS * pitch + .6 * u, Anchor::TopLeft, DIM_INK);
     }
 
@@ -1014,7 +1056,7 @@ void ApolloSkin::vab(Canvas& c, bool art, const Snapshot& s) {
         tile(c, art, d_, Rect::f(x1 + (i % 2) * (vcol + metric_gap), vy + (i / 2) * (row_h + metric_gap), vcol, row_h),
              tiles[i].name, tiles[i].pattern, tiles[i].value, tiles[i].color);
     if (!art)
-        label(c, fmt::str("EDITOR SHIP REPORT  \xC2\xB7  REVISION %u", r->revision), 1.5f, x1, veh_frame.bottom() + 1.4 * u,
+        label(c, fmt::str("SAS NEXT / RCS PREVIOUS  \xC2\xB7  REVISION %u", r->revision), 1.5f, x1, veh_frame.bottom() + 1.4 * u,
               Anchor::TopLeft, DIM_INK);
 }
 

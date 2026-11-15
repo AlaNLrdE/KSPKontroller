@@ -242,7 +242,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - Format v1 lives in four places that must agree: the plugin's `ShipReportFormat.cs`, `src/shipreport.cpp`,
   `tools/kspsim/ships.py` and the fixture `hmi-cpp/tests/data/ship_report_v1.txt` (tested by all three;
   `check_ship_report_contract`). Bump `v` for anything an old Pi would misread; new line kinds are ignored.
-- Apollo's VAB art is keyed only by size and `[vab]` config (fixed 8 stage rows, the target ring is art), never by
+- Apollo's VAB art is keyed only by size and `[vab]` config (fixed 4 detailed stage rows, the target ring is art), never by
   the ship. `KSPHMI_SHOTS=DIR` writes `classic_vab*.png` / `apollo_vab*.png` from the fixture.
 - End to end without the game: kspsim `--scene vab --ship heavy|kerbal_x|pending|none` and
   `ksphmi --address 127.0.0.1 --config <toml with discovery = false and the sim ports> --screenshot`.
@@ -251,3 +251,10 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   UPPER TWR lamps (`[vab] launch_twr_min/launch_twr_warn/upper_twr_warn`); only stages with delta-v are judged. The
   apollo VAB header uses its own lamp table (`VAB_LAMPS`, fitted on its own so the flight lamps keep their size);
   `ApolloSkin::on_lamp` reports every lamp evaluated live for tests.
+
+- Editor modes (0.19.5.0): optional editor/ac/seat/inv/cargo/sp lines keep format v1 backward compatible.
+  editor_report_v1.txt is the cross-language fixture. Use the existing skins and include mode in Apollo
+  static-art keys, never crew, action or inventory contents. Set KSPHMI_SHOTS inside WSL for real captures.
+
+- Screenshot integration tests must let --seconds end the HMI normally: SIGTERM bypasses main exit and
+  does not save --screenshot. Assert that each fresh capture exists before recording smoke.json as passed.
