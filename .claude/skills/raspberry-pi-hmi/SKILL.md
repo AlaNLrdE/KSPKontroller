@@ -154,3 +154,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   per 2520x1680 frame on the PC). The GPU path keeps batched `SDL_RenderGeometry` with feathered edges.
 - Never type `cat > file` without a heredoc in a Bash call: it waits on stdin until the tool times out.
 - `hmi-cpp/` is LF (`.gitattributes`): it is built on the Pi; the kiosk script and the unit must stay LF.
+- Measure on the Pi GPU before keeping a render optimisation: the layer cache (render target + NavBall-only
+  frames) matched a full redraw pixel for pixel and helped in software, but on the V3D (kmsdrm/opengl, 2520x1680,
+  `--bench 300 [--bench-anim] --layer-cache on|off`) a full redraw took 2.8 ms draw + 11.8 ms present while cached
+  frames took 5.3 + 20.5 ms with the same CPU. Default `layer_cache = "off"`.
