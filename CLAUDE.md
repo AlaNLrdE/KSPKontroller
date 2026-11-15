@@ -87,6 +87,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 
 - Repo text files are CRLF. Edit multi-line text with a small Python script that keeps CRLF (see the `edit()` helper
   pattern in `tools/` docs/skill) and `assert s.count(old) == 1`; anchors with `\n` silently fail otherwise.
+- PowerShell pipelines may replace non-ASCII characters with `?` in Python source sent over stdin. For
+  non-ASCII edits use a UTF-8 script file or a literal patch; read/write text with explicit UTF-8 and preserve
+  the target file line endings. Assert anchors before writing so an encoding mismatch cannot truncate a file.
 - Heredocs containing quotes break in the Bash tool: write scripts with the Write tool, run them with
   `build/venv/Scripts/python.exe` (system `python` is not installed). `Write` needs a prior Read on existing files.
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
