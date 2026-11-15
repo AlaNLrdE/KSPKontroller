@@ -452,6 +452,8 @@ after its first frame and at each unblank (start, then every 30 s), so neither t
 survive behind its frames. ``./ci verify`` reports each missing piece in ``hmi: kiosk boot``.
 
 .. uml:: diagrams/seq_hmi_boot.puml
+   :caption: The boot splash animates until the HMI writes its ready file after the first presented frame.
+
 Do not cut power to shut down Linux; use ``sudo poweroff`` first to avoid filesystem damage.
 
 On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/config`` (``HostName`` = the Pi's
