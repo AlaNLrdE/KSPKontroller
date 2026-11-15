@@ -1,17 +1,18 @@
 """Tests of the simulator, no board needed: ``./ci test_sim``.
 
-The kRPC test runs the real HMI client (hmi-pi/ksphmi/telemetry.py, krpc 0.7) against the stand-in server on
-free local ports, so the Pi's code path is checked end to end on the PC.
+The kRPC test runs the stock krpc 0.7 Python client against the stand-in server on free local ports, over the
+procedures the C++ HMI reads; ./ci test_hmi --sim runs the HMI itself against the simulator.
 """
 import math
 import os
+import re
 import sys
 import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-sys.path[:0] = [os.path.dirname(HERE), os.path.join(ROOT, "hmi-pi")]
+sys.path[:0] = [os.path.dirname(HERE)]
 
 from kspsim import arduino, physics  # noqa: E402
 from kspsim.sim import Simulator  # noqa: E402
@@ -407,107 +408,105 @@ class BoardLinkTest(unittest.TestCase):
 
 
 class KrpcTest(unittest.TestCase):
-    def test_hmi_client_end_to_end(self):
+    """The stand-in server against the stock krpc 0.7 Python client: the procedures and streams the C++ HMI reads
+    (hmi-cpp/src/telemetry.cpp). The C++ client itself runs against kspsim in ./ci test_hmi --sim (Linux/WSL)."""
+
+    @staticmethod
+    def context(port, request=b"KSPHMI/1"):
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(1.0)
+            sock.sendto(request, ("127.0.0.1", port))
+            return sock.recv(256).decode("ascii")
+
+    def test_krpc_client_end_to_end(self):
+        import krpc
         from kspsim.krpcserver import KrpcServer
-        from ksphmi.telemetry import FLIGHT, NO_VESSEL, CONNECTING, KrpcSource
 
         sim = Simulator("orbit")
         sim.start()
         server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
-        src = KrpcSource("127.0.0.1", server.rpc_port, server.stream_port, rate_hz=20, retry_seconds=0.5,
-                         discovery=False)
-        src.context_port = server.context_port
-        src.start()
+        rpc_port, stream_port = server.rpc_port, server.stream_port
+
+        def connect():
+            return krpc.connect(name="test", address="127.0.0.1", rpc_port=rpc_port, stream_port=stream_port)
 
         def wait(pred, timeout=10.0):
             end = time.monotonic() + timeout
             while time.monotonic() < end:
-                s = src.latest()
-                if pred(s):
-                    return s
+                if pred():
+                    return
                 time.sleep(0.05)
-            self.fail("timeout, last snapshot %r" % (src.latest(),))
+            self.fail("timeout")
 
+        conn = connect()
         try:
-            s = wait(lambda s: s.state == FLIGHT)
-            self.assertEqual((s.vessel, s.body, s.situation), ("Orbiter", "Kerbin", "orbiting"))
-            self.assertAlmostEqual(s.apoapsis, 250_000, delta=5)
-            self.assertAlmostEqual(s.periapsis, 80_000, delta=5)
-            self.assertAlmostEqual(s.inclination, 0.4, places=6)
-            wait(lambda s: s.nav is not None)
-            self.assertEqual(src.latest().nav.speed_mode, 'orbit')
-            self.assertAlmostEqual(src.latest().nav.speed, src.latest().orbital_speed, delta=1)
-            initial_axes = src.latest().orbit_state.axes
+            sc = conn.space_center
+            vessel = sc.active_vessel
+            orbit = vessel.orbit
+            body = orbit.body
+            self.assertEqual((vessel.name, body.name, vessel.situation.name), ("Orbiter", "Kerbin", "orbiting"))
+            self.assertAlmostEqual(orbit.apoapsis_altitude, 250_000, delta=5)
+            self.assertAlmostEqual(orbit.periapsis_altitude, 80_000, delta=5)
+            self.assertAlmostEqual(math.degrees(orbit.inclination), 0.4, places=6)
+            name = conn.add_stream(getattr, vessel, "name")
+            altitude = conn.add_stream(getattr, vessel.flight(body.reference_frame), "mean_altitude")
+            wait(lambda: altitude() > 70_000)
+
             sim.set_manual_mode(True)
-            circular_speed = math.sqrt(physics.MU / 700000)
-            sim.set_manual_values(pitch=35, heading=135, roll=-45, speed_mode=2,
-                                  target_enabled=1, relative_up=3, relative_north=0, relative_east=4,
-                                  node_enabled=1, node_dv=200, node_remaining=125, node_time=240,
-                                  position_x=700000, position_y=0, position_z=0,
-                                  velocity_x=0, velocity_y=0, velocity_z=circular_speed + .05)
-            s = wait(lambda s: s.nav is not None and s.nav.node_remaining == 125 and s.nav.speed_mode == 'target')
-            self.assertEqual((s.nav.pitch, s.nav.heading, s.nav.roll), (35, 135, -45))
-            self.assertAlmostEqual(s.nav.speed, 5)
-            self.assertIsNotNone(s.nav.target)
-            self.assertIsNotNone(s.nav.maneuver)
-            self.assertGreater(s.nav.burn_seconds, 0)
-            before = s.orbit_state
-            sim.set_manual_values(velocity_z=circular_speed - .05, true_anomaly=math.pi)
-            s = wait(lambda s: s.orbit_state is not None and abs(s.orbit_state.velocity[2] - (circular_speed - .05)) < 1e-6)
-            self.assertEqual(s.orbit_state.axes, initial_axes)
-            self.assertEqual(s.orbit_state.vessel_point, before.vessel_point)
+            sim.set_manual_values(pitch=35, heading=135, roll=-45, speed_mode=2, target_enabled=1, relative_up=3,
+                                  relative_north=0, relative_east=4, node_enabled=1, node_dv=200, node_remaining=125,
+                                  node_time=240)
+            surface = vessel.flight(vessel.surface_reference_frame)
+            self.assertEqual((surface.pitch, surface.heading, surface.roll), (35, 135, -45))
+            self.assertEqual(vessel.control.speed_mode.name, "target")
+            self.assertAlmostEqual(vessel.flight(vessel.target_speed_reference_frame).speed, 5)
+            self.assertEqual(len(vessel.control.nodes), 1)
+            self.assertEqual(vessel.control.nodes[0].remaining_delta_v, 125)
+
             sim.set_manual_values(electric_charge=0, electric_capacity=200, liquid_fuel=10, liquid_capacity=100,
                                   monoprop_capacity=0, stage_number=1, stage_delta_v=450, stage_parts=3)
-            s = wait(lambda s: s.systems is not None and s.systems.current_stage == 1
-                     and s.systems.stages and s.systems.stages[0].delta_v == 450)
-            levels = {r.name: r for r in s.systems.resources}
-            self.assertEqual(levels['ElectricCharge'].fraction, 0)
-            self.assertAlmostEqual(levels['LiquidFuel'].fraction, .1)
-            self.assertIsNone(levels['MonoPropellant'].fraction)
-            self.assertEqual(s.systems.stages[0].parts, 3)
-            sim.set_manual_values(stage_number=0)
-            s = wait(lambda s: s.systems is not None and s.systems.current_stage == 0
-                     and len(s.systems.stages) == 1)
-            self.assertEqual(s.systems.stages[0].number, 0)
+            resources = vessel.resources
+            self.assertEqual(resources.amount("ElectricCharge"), 0)
+            self.assertEqual(resources.max("ElectricCharge"), 200)
+            self.assertAlmostEqual(resources.amount("LiquidFuel") / resources.max("LiquidFuel"), .1, places=6)
+            self.assertEqual(resources.max("MonoPropellant"), 0)
+            self.assertEqual(vessel.control.current_stage, 1)
+            self.assertEqual(sorted(s.number for s in vessel.stages), [0, 1])
             sim.set_manual_values(target_enabled=0, node_enabled=0, speed_mode=1)
-            s = wait(lambda s: s.nav is not None and s.nav.node_remaining is None and s.nav.speed_mode == 'surface')
-            self.assertIsNone(s.nav.target)
-            self.assertIsNone(s.nav.maneuver)
+            self.assertIsNone(sc.target_vessel)
+            self.assertEqual(len(vessel.control.nodes), 0)
             sim.set_manual_mode(False)
 
-            sim.set_orbit(400_000, 120_000, 5.0, 180)  # edited in the window: same vessel, new values
-            sim.set_vessel(name="Renamed")
-            s = wait(lambda s: s.vessel == "Renamed" and abs(s.periapsis - 120_000) < 5)
-            self.assertAlmostEqual(s.apoapsis, 400_000, delta=5)
-            self.assertAlmostEqual(s.altitude, 400_000, delta=50)  # at the apoapsis
-            self.assertAlmostEqual(s.inclination, 5.0, places=6)
+            sim.set_vessel(name="Renamed")  # streamed: the HMI shows a rename at once
+            wait(lambda: name() == "Renamed")
 
-            sim.set_manual_mode(True)  # typed values reach the HMI client exactly
-            sim.set_manual_values(vertical_speed=-42.5, periapsis=-12_000.0, situation="sub_orbital")
-            s = wait(lambda s: s.vertical_speed == -42.5)
-            self.assertEqual((s.periapsis, s.situation), (-12_000.0, "sub_orbital"))
-            sim.set_manual_mode(False)
-
-            sim.set_scene("space_center")
-            wait(lambda s: s.state == NO_VESSEL and s.scene == "space_center")
-            from ksphmi.scenes import VIEWS
-            for scene in VIEWS:
+            # every scene the HMI has a view for is served on the UDP context channel; elsewhere no vessel
+            with open(os.path.join(ROOT, "hmi-cpp", "src", "scenes.cpp"), encoding="utf-8") as f:
+                views = re.findall(r'^        \{"(\w+)", "', f.read(), re.M)
+            self.assertIn("space_center", views)
+            for scene in views:
                 sim.set_scene(scene)
-                wait(lambda s: s.state == NO_VESSEL and s.scene == scene)
+                self.assertEqual(self.context(server.context_port), "KSPHMI/1 " + scene)
+                self.assertIsNone(sc.active_vessel)
             sim.set_scene("flight")
-            sim.load("escape")  # a new vessel: the client must re-open its streams on it
-            s = wait(lambda s: s.state == FLIGHT and s.vessel == "Voyager")
-            self.assertGreater(s.eccentricity, 1)
-            self.assertEqual(s.situation, "escaping")
-
-            sim.set_scene("closed")
-            wait(lambda s: s.state == CONNECTING)
-            sim.set_scene("flight")  # the ports reopen; the client reconnects by itself
-            wait(lambda s: s.state == FLIGHT)
+            sim.load("escape")  # a new vessel: a client must re-open its streams on it
+            wait(lambda: sc.active_vessel is not None and sc.active_vessel.name == "Voyager")
+            self.assertGreater(sc.active_vessel.orbit.eccentricity, 1)
+            self.assertEqual(sc.active_vessel.situation.name, "escaping")
         finally:
-            src.stop()
+            conn.close()
+
+        try:
+            sim.set_scene("closed")  # KSP closed: the ports refuse connections
+            self.assertRaises(OSError, connect)
+            sim.set_scene("flight")  # the ports reopen; a client reconnects
+            conn = connect()
+            self.assertEqual(conn.space_center.active_vessel.name, "Voyager")
+            conn.close()
+        finally:
             server.stop()
             sim.stop()
 

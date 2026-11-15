@@ -27,10 +27,10 @@ constexpr float GAUGE_LABEL = 1.9f, GAUGE_AMOUNT = 1.8f, GAUGE_GAP = .3f;
 // Ring between two radii and two fractions of the dial, as convex quads (Canvas::polygon wants convex shapes).
 void dial_sector(Canvas& c, double cx, double cy, double r_out, double r_in, double f0, double f1, Color color,
                  double step_degrees = 4.0) {
-    auto fs = gauges::steps(f0, f1, step_degrees);
-    for (size_t i = 0; i + 1 < fs.size(); ++i) {
-        auto a = gauges::point(cx, cy, r_out, fs[i]), b = gauges::point(cx, cy, r_out, fs[i + 1]);
-        auto d = gauges::point(cx, cy, r_in, fs[i + 1]), e = gauges::point(cx, cy, r_in, fs[i]);
+    auto pts = gauges::sector(cx, cy, r_out, r_in, f0, f1, step_degrees);
+    const size_t n = pts.size();
+    for (size_t i = 0; i + 1 < n / 2; ++i) {
+        auto a = pts[i], b = pts[i + 1], d = pts[n - 2 - i], e = pts[n - 1 - i];
         c.polygon({{float(a.first), float(a.second)}, {float(b.first), float(b.second)},
                    {float(d.first), float(d.second)}, {float(e.first), float(e.second)}}, color, false);
     }
@@ -397,7 +397,7 @@ void Display::gauge(const Resource& resource, const std::string& label, double c
     if (on_gauge) on_gauge(label, Rect::f(cx - radius, cy - radius, 2 * radius, 2 * radius));
     if (SDL_Texture* face = gauge_face(r, state, resource.name)) {
         float side = static_cast<float>(2 * r + 4);
-        // pygame centres the face with integer rects: get_rect(center=(int(cx), int(cy)))
+        // the face is centred with integer rects on (int(cx), int(cy))
         int left = static_cast<int>(cx) - (2 * r + 4) / 2, top = static_cast<int>(cy) - (2 * r + 4) / 2;
         c_.image(face, static_cast<float>(left), static_cast<float>(top), side, side);
     }

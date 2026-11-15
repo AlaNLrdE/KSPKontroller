@@ -3,7 +3,7 @@ Raspberry Pi HMI
 
 The Arduino panel keeps KSPSerialIO and its serial port for buttons, LEDs and potentiometers. A Raspberry Pi 4
 with a monitor shows the flight data next to it: apoapsis, periapsis, altitude, speeds, orbital elements and a
-drawing of the orbit. The code lives in ``hmi-pi/``.
+drawing of the orbit. The code lives in ``hmi-cpp/`` (C++17, SDL2); the Pi builds it from source.
 
 Why kRPC and not KSPSerialIO
 ----------------------------
@@ -21,14 +21,22 @@ also send commands, so touch controls can be added later without touching the pl
 How it works
 ------------
 
-``python -m ksphmi`` runs two threads:
+``ksphmi`` runs two threads:
 
-* a **source** (``ksphmi/telemetry.py``) publishes immutable ``Snapshot`` objects. ``KrpcSource`` connects to
+* a **source** (``src/telemetry.cpp``) publishes immutable ``Snapshot`` objects. ``KrpcSource`` connects to
   kRPC, opens streams on the active vessel and re-opens them when the vessel or the sphere of influence changes;
   it reconnects forever, so starting the Pi before KSP is fine. ``DemoSource`` flies an 80 x 250 km Kerbin
   orbit, so the screens can be worked on without the game.
-* the **display** (``ksphmi/display.py``, pygame) draws the latest snapshot at ``fps`` frames per second. The
-  layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
+* the **display** (``src/display.cpp``, SDL2 + SDL2_ttf) draws the latest snapshot at ``fps`` frames per second.
+  The layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
+
+The kRPC wire protocol (protocol version 1, the same as the krpc 0.7 clients) is encoded by hand in
+``src/pb.cpp`` / ``src/krpc.cpp`` instead of libprotobuf: a few hundred lines, no ``protoc`` step, no library
+version coupling. Shapes are batched into ``SDL_RenderGeometry`` calls, text comes from per-size glyph atlases
+(FreeSansBold), the NavBall labels are pre-rendered once into a sprite atlas and drawn as foreshortened, rotated
+quads with limb fading, and the NavBall lighting is one texture per size. A frame is redrawn only when a new
+snapshot arrives (or the screen animates: waiting view, stale counter). The HMI replaced a Python/pygame version
+in November 2026: on the Pi 4 it uses about 43 % of one core against 91 % for the Python one.
 
 The ten flight metrics occupy a compact two-column block in the upper left (less than 40% of screen height),
 leaving resource gauges and a read-only staging queue below them. Each resource is a classic car fuel gauge:
@@ -40,23 +48,25 @@ red when low). The resource label and the vessel-wide amount/capacity go under t
 LiquidFuel, Oxidizer and MonoPropellant; SolidFuel and XenonGas appear when installed. Zero capacity means not
 installed (dark-grey face, no needle, ``N/A``), an empty installed tank shows the needle at E and 0%, and
 unavailable telemetry shows a light-grey face, no needle and ``--``. The static faces are drawn once per size,
-state and resource (``ksphmi/gauges.py`` holds the pure geometry); each frame draws only the needle, the hub,
-the window digits and the labels. Quantities use KSP resource units. The queue shows the current stage number and up to four remaining
-activation stages with part counts and KSP's stage delta-v. Resource and stage streams refresh at 2 Hz, and
-their collections are rebuilt when the vessel's parts or staging queue changes (including docking/decoupling).
-These displays do not activate stages or transfer resources.
+state and resource (``src/gauges.cpp`` holds the pure geometry); each frame draws only the needle, the hub,
+the window digits and the labels. Quantities use KSP resource units. The queue shows the current stage number
+and up to four remaining activation stages with part counts and KSP's stage delta-v. Resource and stage streams
+refresh at 2 Hz, and their collections are rebuilt when the vessel's parts or staging queue changes (including
+docking/decoupling). These displays do not activate stages or transfer resources.
 
 The flight layout places compact orbital data on the left, a smaller ORBIT diagram at the upper right,
-and a stock-inspired NavBall below it. ``ksphmi/navball.py`` renders the blue/brown sphere and graduations
+and a stock-inspired NavBall below it. ``src/navball.cpp`` renders the blue/brown sphere and graduations
 from kRPC's surface-frame attitude quaternion, including inverted and vertical flight. Fixed boresight,
 heading, pitch/roll, Orbit/Surface/Target speed, SAS/RCS, throttle, G-force, all six orbital direction markers,
 target/anti-target and maneuver markers follow the game's live telemetry. SAS mode buttons are read-only
 status indicators. Zero-velocity frames and missing targets/nodes hide their undefined markers.
 The maneuver readout includes remaining delta-v, countdown, progress and an estimated burn duration/start
 using current mass, available thrust and specific impulse; this estimate assumes a constant engine configuration
-and is not a staging-aware copy of KSP's burn prediction. Missing navigation telemetry leaves the orbital data usable.
+and is not a staging-aware copy of KSP's burn prediction. Missing navigation telemetry leaves the orbital data
+usable. On the launch pad kRPC refuses some values (the surface speed frame is singular, a stage may have no
+delta-v): each optional value fails on its own and is retried, the attitude and the session stay up.
 The simulator's manual fields include attitude, speed mode (0 orbit, 1 surface, 2 target), target vectors and
-node/engine parameters. ``./ci verify`` runs headless navigation render checks when ``build/hmi-venv`` exists.
+node/engine parameters.
 
 Outside flight, dedicated preparation checklists are shown for Space Center, VAB, SPH, Mission Control,
 Astronaut Complex, Research & Development, Administration and Tracking Station. These are contextual guides,
@@ -82,39 +92,38 @@ where true anomaly and the periapsis direction are ill-conditioned. Ap/Pe are hi
 orbits without a meaningful apsis direction. This is a 2D inertial projection, not a surface-longitude map;
 switching vessels or bodies initializes a new view. The clip still contains unbounded escape trajectories.
 
-On the Pi there is no desktop: frames are drawn in memory and copied to the Linux framebuffer ``/dev/fb0``
-(``output = fbdev``, set by the service through ``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode
-but left the screen black on the Pi 4; fbdev needs no EGL and no DRM master, costs about 21 ms per
-2520x1680 frame, and when the HMI stops the text console shows again.
+On the Pi there is no desktop: frames are drawn with SDL's software renderer and only the changed rows are
+copied to the Linux framebuffer ``/dev/fb0`` (RGB565 or XRGB8888; ``output = fbdev``, set by the service through
+``KSPHMI_OUTPUT``). SDL's ``kmsdrm`` driver set the HDMI mode but left the screen black on the Pi 4 (seen with
+the old pygame build); fbdev needs no EGL and no DRM master, and when the HMI stops the text console shows again.
+``KSPHMI_OUTPUT=sdl SDL_VIDEODRIVER=kmsdrm`` tries the GPU renderer instead (needs Mesa EGL/GLES and DRM master).
 The framebuffer can be left *blanked* (``/sys/class/graphics/fb0/blank`` = 4, powered down; it happened after
 the kmsdrm attempts): frames are then written but nothing shows, while the HMI log looks healthy. The HMI
 unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./ci verify`` checks the value.
 The console underneath (fbcon, tty1) still blinks its cursor into the framebuffer between frames; only
-root can turn that off, hence the tmpfiles rule above. With blinking off the cursor is never redrawn and the
+root can turn that off, hence the tmpfiles rule below. With blinking off the cursor is never redrawn and the
 next frame covers it. The waiting screens show this display's own address (the one it uses to reach the
 kRPC server first) and the server it looks for, to find the Pi without a keyboard.
 
-.. important::
-
-   The pygame wheels from pip bundle an SDL **without** ``kmsdrm`` (``pygame.error: kmsdrm not available``).
-   The Pi uses Debian's ``python3-pygame`` (pygame 2.6.1 on the system SDL) through a venv created with
-   ``--system-site-packages``; only ``krpc`` comes from pip. The PC venv pins the same pygame 2.6.1.
-   SDL's ``kmsdrm`` also needs Mesa EGL/GLES (``pygame.error: EGL not initialized`` without them), which
-   Raspberry Pi OS Lite does not install; ``./ci deploy_hmi`` checks for every package it needs.
-   The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
-   Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
+The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
+Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
 
 Settings
 --------
 
-``hmi-pi/config.toml`` (deployed) holds the defaults: kRPC ports and sample rate, ``fps``, screen size
-(0 = the monitor's own) and ``day_hours`` (6 for the KSP calendar). On the Pi, ``~/ksphmi/config.local.toml``
-overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds ``KSPHMI_KRPC_ADDRESS``, which
-``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to ``HMI_KRPC_ADDRESS`` if set).
+``hmi-cpp/config.toml`` (deployed to ``~/ksphmi/cpp``) holds the defaults: kRPC ports and sample rate, ``fps``,
+screen size (0 = the monitor's own) and ``day_hours`` (6 for the KSP calendar). The binary finds it through
+``KSPHMI_APP_DIR`` (the unit sets ``~/ksphmi/cpp``), else next to or one level above itself, so a build tree
+under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
+(``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
+``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
+``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
+--config FILE --fps N --bench N --offscreen`` (``ksphmi --help``).
 
 The Pi initiates all connections, so a DHCP change of its own address does not affect the display.
 If the configured PC address stops working, the HMI broadcasts ``KSPHMI/1`` on UDP 50002 to the local
-IPv4 network and retries kRPC at the responding KSPSerialIO server. This reuses the scene responder;
+IPv4 network and retries kRPC at the responding KSPSerialIO server; only private, link-local or loopback
+peers are accepted. This reuses the scene responder;
 no additional plugin or Pi address registry is needed. Both machines must be on the same broadcast network,
 with UDP 50002 and kRPC TCP 50000/50001 allowed. With multiple KSP PCs the first responder is selected.
 If broadcast is blocked, the configured address remains the fallback; use a DHCP reservation for that case.
@@ -124,12 +133,12 @@ The SSH alias is separate: use a DHCP reservation or a resolvable hostname to ke
 One-time setup
 --------------
 
-On the Pi (Raspberry Pi OS Lite 64-bit, wired to the same LAN), as your user:
+On the Pi (Raspberry Pi OS Lite 64-bit, bookworm, wired to the same LAN), as your user:
 
 .. code-block:: bash
 
-   # pygame with the kmsdrm-capable system SDL, plus the Mesa EGL/GLES libraries kmsdrm needs (not in Lite)
-   sudo apt install -y python3-pygame libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri
+   # compiler, CMake and the SDL2 / SDL2_ttf development packages, plus the font the HMI draws with
+   sudo apt install -y build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf
    sudo loginctl enable-linger $USER        # start the user service at boot, nobody logged in
    # stop the text console's cursor blinking over the HMI frames (now and at every boot)
    echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
@@ -139,10 +148,11 @@ After deploying the HMI, enable appliance-style boot once on the Pi:
 
 .. code-block:: bash
 
-   sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh
+   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh
 
 This backs up the boot files with a ``.ksphmi-backup`` suffix, hides firmware splash and console boot text,
-masks the tty1 login prompt and persists the cursor setting. SSH stays available. The HMI service is enabled
+masks the tty1 login prompt and persists the cursor setting (it uses the system ``python3`` to edit the boot
+command line; ctest checks that part). SSH stays available. The HMI service is enabled
 by deployment and starts without login through lingering. Boot changes take effect at the next reboot;
 the display is blank until the HMI paints its waiting or live screen. Do not cut power to shut down Linux;
 use ``sudo poweroff`` first to avoid filesystem damage.
@@ -151,8 +161,8 @@ On the PC: an SSH key copied to the Pi and a ``Host ksphmi`` entry in ``~/.ssh/c
 address, ``User``, ``IdentityFile``). The repo never stores the address or the user name; ``HMI_HOST`` overrides
 the alias. A DHCP reservation on the router keeps the Pi's address fixed.
 
-In KSP (with KSP closed): kRPC **0.7.0** (built for KSP 1.12.5, protocol version 1, matching ``krpc==0.7.0``
-on the Pi; the 0.5.x mods speak protocol 0 and the 0.7 client refuses them) from
+In KSP (with KSP closed): kRPC **0.7.0** (built for KSP 1.12.5, protocol version 1, as the HMI's client and
+``krpc==0.7.0`` in ``tools/requirements.txt`` for kspsim; the 0.5.x mods speak protocol 0) from
 `github.com/krpc/krpc/releases <https://github.com/krpc/krpc/releases>`_, ``GameData/kRPC`` copied as is. The
 shipped ``PluginData/settings.cfg`` is empty (kRPC writes defaults on first start, listening on ``127.0.0.1``
 only), so it is replaced by copying the repo's complete ``tools/krpc/settings.cfg`` over it:
@@ -184,81 +194,67 @@ has no firewall rule of its own, so an administrator PowerShell must allow the p
      -LocalPort 50000,50001 -RemoteAddress LocalSubnet `
      -Program "C:\Users\alanl\wk\wk-rea\Kerbal Space Program\KSP_x64.exe"
 
-``./ci verify`` (``check_krpc``) checks the mod version against the Pi's client, the server settings (auto-start,
-auto-accept, not localhost), fails if ``maxTimePerUpdate`` or ``recvTimeout`` is missing or 0, warns if
-``adaptiveRateControl``/``blockingRecv`` are False or if any key differs from ``tools/krpc/settings.cfg``
-(window positions ignored), and checks the firewall rule. ``tools/kspsim`` must not run while KSP does: both want port
-50000 (and COM5).
+``./ci verify`` (``check_krpc``) checks the mod version against ``tools/requirements.txt``, the server settings
+(auto-start, auto-accept, not localhost), fails if ``maxTimePerUpdate`` or ``recvTimeout`` is missing or 0, warns
+if ``adaptiveRateControl``/``blockingRecv`` are False or if any key differs from ``tools/krpc/settings.cfg``
+(window positions ignored), and checks the firewall rule. ``tools/kspsim`` must not run while KSP does: both want
+port 50000 (and COM5).
 
-C++ runtime (``hmi-cpp/``)
---------------------------
+Deploy
+------
 
-The Python/pygame display costs about 80 ms per 2520x1680 frame on the Pi 4 plus about 21 ms to copy it to
-``/dev/fb0``. ``hmi-cpp/`` is a C++17 port of everything that runs on the Pi (telemetry and kRPC client,
-reconnect and LAN discovery, scene context, navigation, systems, ORBIT, NavBall, display, formatting, network
-info, settings, demo source, command line). The Python package stays the reference until parity is confirmed on
-the Pi; tests, ``tools/kspsim`` and ``tools/verify.py`` stay in Python.
+``./ci deploy_hmi`` (KSP may be running; it only talks to the Pi over SSH):
 
-* **Same settings**: it reads ``hmi-pi/config.toml`` (``KSPHMI_APP_DIR`` or found next to / above the binary),
-  then ``config.local.toml`` / ``KSPHMI_LOCAL_CONFIG``, then ``KSPHMI_KRPC_ADDRESS``, and takes the same options
-  (``--demo --address --windowed --size --screenshot --seconds --config``) plus ``--fps N``, ``--bench N`` and
-  ``--offscreen``.
-* **Stack**: SDL2 + SDL2_ttf (Debian packages, nothing vendored). The kRPC wire protocol (protocol version 1) is
-  encoded by hand in ``src/pb.cpp`` / ``src/krpc.cpp`` instead of libprotobuf: a few hundred lines, no ``protoc``
-  step, no library version coupling. Text uses FreeSansBold at pygame's default-font scale (0.6875), so the
-  layout matches the Python screens pixel for pixel in practice.
-* **Cheap frames**: shapes are batched into ``SDL_RenderGeometry`` calls, text comes from per-size glyph atlases
-  (no texture upload when a value changes), the NavBall labels are pre-rendered once into a sprite atlas and
-  drawn as foreshortened, rotated quads with limb fading, and the NavBall lighting is one texture per size.
-  A frame is redrawn only when a new snapshot arrives (or the screen animates: waiting view, stale counter).
-* **Outputs**: ``fbdev`` (default of the unit, as the Python service) draws with SDL's software renderer and
-  writes only changed rows to ``/dev/fb0`` (RGB565 or XRGB8888, unblanked every 30 s); ``sdl`` opens a window or,
-  on the console, SDL's ``kmsdrm`` driver with the GPU renderer (needs Mesa EGL/GLES; it left the screen black
-  under pygame, so it is opt-in: ``KSPHMI_OUTPUT=sdl SDL_VIDEODRIVER=kmsdrm``).
-* **Measured** on the PC (x86-64, WSL, software renderer, 2520x1680): about 9 ms per flight frame against
-  ~40 ms for the first naive version; the Pi number is still to be measured with
-  ``build/hmi-cpp/ksphmi --bench 20 --offscreen --size 2520x1680`` (prints ``HMI_RENDER_MS``, never touches the
-  screen).
+#. checks the apt packages above and lingering on the Pi (prints the one-time ``sudo`` command if missing) and
+   warns when the console cursor rule is missing;
+#. copies ``hmi-cpp/`` (``CMakeLists.txt``, ``config.toml``, ``src``, ``tests``, ``systemd``) to ``~/ksphmi/cpp``,
+   replacing everything there except ``build/`` (kept so CMake rebuilds incrementally);
+#. on the Pi: ``cmake -S . -B build -DCMAKE_BUILD_TYPE=Release``, ``cmake --build build -j4`` and ``ctest`` in
+   ``build``. A failure stops here and the running service keeps its old binary;
+#. writes ``~/ksphmi/env``, disables and removes a leftover ``ksphmi-cpp.service`` (the trial unit) and the old
+   Python ``~/ksphmi/app`` and ``~/ksphmi/venv``, installs ``hmi-cpp/systemd/ksphmi.service`` into
+   ``~/.config/systemd/user``, enables and restarts it;
+#. waits 8 s, requires ``active`` with ``NRestarts=0`` (``Restart=always`` hides a crash loop behind
+   ``active``) and prints the last 15 log lines.
 
-Build on the Pi (Raspberry Pi OS bookworm), once:
+Building on this PC
+-------------------
 
-.. code-block:: bash
+Windows has no C++ toolchain here: ``./ci build_hmi``, ``./ci hmi`` and ``./ci test_hmi`` re-run themselves inside
+WSL. Without root there, the SDL2 packages are unpacked into ``build/hmi-cpp-deps`` with ``apt-get download``
+(Ubuntu 24.04 names). ``./ci test_hmi --sim`` also starts ``tools/kspsim --no-board --headless`` on
+127.0.0.1:50300 and checks that the HMI follows the simulated vessel and saves a frame to
+``build/hmi-cpp-sim/flight.png`` (needs ``python3`` with ``krpc`` and ``protobuf``; set ``KSPSIM_PYTHON`` to
+choose the interpreter).
 
-   sudo apt install build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf
-   ./ci build_hmi_cpp            # cmake into build/hmi-cpp
-   ./ci test_hmi_cpp             # unit + layout tests (ctest)
-
-On Windows ``./ci build_hmi_cpp`` / ``./ci test_hmi_cpp`` run the same target inside WSL. Without root there,
-the SDL2 packages are unpacked into ``build/hmi-cpp-deps`` with ``apt-get download`` (Ubuntu 24.04 names).
-``./ci test_hmi_cpp --sim`` also starts ``tools/kspsim --no-board --headless`` on 127.0.0.1:50300 and checks that
-the C++ HMI follows the simulated vessel and saves a frame to ``build/hmi-cpp-sim/flight.png`` (needs ``python3``
-with ``krpc`` and ``protobuf``; set ``KSPSIM_PYTHON`` to choose the interpreter).
-
-Tests (``hmi-cpp/tests``) port ``hmi-pi/tests``: formatting, Kepler solver, demo source, attitude quaternions and
+Tests (``hmi-cpp/tests``, ctest): ``core`` (formatting, Kepler solver, demo source, attitude quaternions and
 burn time, label projection and limb fade, front-hemisphere clipping, inertial orbit geometry (RCS cannot move
-the vessel ring), resource fractions, scene replies, discovery address filter and broadcast, settings layers,
-protobuf values, the kRPC client against an in-process server, the handshake timeout and reconnect discovery,
-and off-screen layout checks (ten metric tiles below 40 % of the height, text inside its tile, ORBIT and NavBall
-never drawing outside their panels, apsis labels, facility views).
+the vessel ring), resource fractions, gauge geometry and layout, scene replies, discovery address filter and
+broadcast, settings layers, protobuf values, the kRPC client against an in-process server, the handshake timeout,
+reconnect discovery and the launch-pad errors), ``render`` (off-screen layout checks: ten metric tiles below 40 %
+of the height, text inside its tile, dials inside the resources panel, ORBIT and NavBall never drawing outside
+their panels, apsis labels, facility views, the software frame time) and ``kiosk`` (the boot file edit of
+``setup-kiosk.sh``, when ``python3`` is found).
 
-``hmi-cpp/systemd/ksphmi-cpp.service`` is a user unit variant (``Conflicts=ksphmi.service``). ``./ci deploy_hmi``
-does not install it yet: copy the source to ``~/ksphmi/cpp``, build there and switch units by hand as described
-at the top of the unit file.
+Measured: about 9 ms per 2520x1680 flight frame on the PC (x86-64, WSL, software renderer).
+``ksphmi --bench 20 --offscreen --size 2520x1680`` prints ``HMI_RENDER_MS`` without touching the screen;
+``./ci verify`` runs it on the Pi (``hmi: Pi render budget``).
 
 Commands
 --------
 
 ==========================  ===========================================================================
-``./ci hmi --demo``         Run the HMI on the PC in a window with the simulated orbit
+``./ci hmi --demo``         Build the HMI and run it on the PC in a window with the simulated orbit
 ``./ci hmi``                Same against KSP on this PC (``--address`` for another one)
-``./ci test_hmi``           Unit tests (formatting, Kepler solver, demo source, settings layers)
-``./ci deploy_hmi``         Tests, copies ``hmi-pi`` to ``~/ksphmi/app``, updates the venv, installs and
-                            restarts the ``ksphmi`` user service, prints its log
+``./ci build_hmi``          Build into ``build/hmi-cpp`` (on Windows inside WSL)
+``./ci test_hmi [--sim]``   Build and run ctest; ``--sim`` adds the run against ``tools/kspsim``
+``./ci deploy_hmi``         Copy ``hmi-cpp`` to ``~/ksphmi/cpp``, build and test it on the Pi, install and
+                            restart the ``ksphmi`` user service, print its log
 ``./ci hmi_logs [N]``       Last N lines of the service log on the Pi
-``./ci verify``             Includes ``check_hmi``: unit tests, service state, kRPC address still this PC
-``./ci build_hmi_cpp``      Build the C++ HMI (``hmi-cpp/``) into ``build/hmi-cpp`` (on Windows inside WSL)
-``./ci test_hmi_cpp``       Its unit and layout tests; ``--sim`` adds the run against ``tools/kspsim``
+``./ci verify``             ``hmi:`` lines: views and resources, local test build current, service state and
+                            unit, kRPC address still this PC, screen, cursor, kiosk, Pi render budget
 ==========================  ===========================================================================
 
-``python -m ksphmi --screenshot out.png --size 2520x1680 --demo`` with ``SDL_VIDEODRIVER=dummy`` renders a frame
-without any window, which is how screen changes are reviewed.
+``build_hmi_cpp`` and ``test_hmi_cpp`` are old names of ``build_hmi`` and ``test_hmi`` and still work.
+``ksphmi --demo --size 2520x1680 --screenshot out.png`` renders a frame without any window, which is how
+screen changes are reviewed (inside WSL, with the environment ``./ci`` sets up: ``hmi_env`` in ``ci``).

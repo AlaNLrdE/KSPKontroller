@@ -62,7 +62,7 @@ std::string find_font() {
 
 // =============================================================================================== Font
 Font::Font(SDL_Renderer* renderer, const std::string& path, int px, bool bold) : renderer_(renderer) {
-    // pygame.font.Font(None, px) scales the size of its default font (freesansbold) by 0.6875.
+    // Font sizes are given as line heights: the point size is 0.6875 of them (the layout was tuned that way).
     font_ = TTF_OpenFont(path.c_str(), std::max(1, static_cast<int>(px * 0.6875)));
     if (!font_) throw std::runtime_error("cannot open font " + path + ": " + TTF_GetError());
     if (bold) TTF_SetFontStyle(font_, TTF_STYLE_BOLD);
@@ -362,7 +362,7 @@ void Canvas::arc(float cx, float cy, float radius, double start, double stop, fl
         for (int k = 0; k < rings; ++k) {
             bool edge = aa_ && (k == 0 || k == 3);
             float rk = std::max(0.0f, rs[k]);
-            vertex(cx + rk * ca, cy - rk * sa, edge ? transparent(c) : c);  // y up, as pygame's arc
+            vertex(cx + rk * ca, cy - rk * sa, edge ? transparent(c) : c);  // y up (mathematical angles)
         }
     }
     for (int i = 0; i < n; ++i)

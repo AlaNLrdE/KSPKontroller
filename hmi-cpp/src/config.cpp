@@ -172,11 +172,11 @@ std::string find_app_dir() {
     if (n > 0) {
         exe[n] = 0;
         std::string dir = dirname(exe);
-        // installed next to config.toml, one level below it, or a build tree under build/hmi-cpp*
-        for (const char* rel : {"", "/..", "/../../hmi-pi", "/../../../hmi-pi"}) candidates.push_back(dir + rel);
+        // next to config.toml, one level below it (~/ksphmi/cpp/build on the Pi), or a build tree build/hmi-cpp*
+        for (const char* rel : {"", "/..", "/../../hmi-cpp", "/../../../hmi-cpp"}) candidates.push_back(dir + rel);
     }
     candidates.push_back(".");
-    candidates.push_back("hmi-pi");
+    candidates.push_back("hmi-cpp");
     for (const auto& d : candidates)
         if (is_file(d + "/config.toml")) return d;
     return ".";

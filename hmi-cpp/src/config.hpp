@@ -1,4 +1,4 @@
-// Settings (port of config.py): the same hmi-pi/config.toml, then config.local.toml (KSPHMI_LOCAL_CONFIG),
+// Settings: hmi-cpp/config.toml (the defaults), then config.local.toml (KSPHMI_LOCAL_CONFIG),
 // then the KSPHMI_KRPC_ADDRESS environment variable written by ./ci deploy_hmi.
 #pragma once
 
@@ -42,7 +42,7 @@ TomlValues parse_toml(const std::string& text);
 void apply_toml(Config& cfg, const TomlValues& values);
 
 /// config.toml next to the application (see find_app_dir), then the local file, then the environment.
-/// With `path`, only that file (plus the environment), as python -m ksphmi --config.
+/// With `path` (--config), only that file (plus the environment).
 Config load_config(const std::string& path = "");
 
 /// Directory holding config.toml: $KSPHMI_APP_DIR, else next to / above the executable, else the source tree.

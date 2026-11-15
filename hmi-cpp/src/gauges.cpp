@@ -41,6 +41,16 @@ std::vector<double> steps(double f0, double f1, double step_degrees) {
     return out;
 }
 
+std::vector<std::pair<double, double>> sector(double cx, double cy, double r_out, double r_in, double f0, double f1,
+                                              double step_degrees) {
+    auto fs = steps(f0, f1, step_degrees);
+    std::vector<std::pair<double, double>> out;
+    out.reserve(2 * fs.size());
+    for (double f : fs) out.push_back(point(cx, cy, r_out, f));
+    for (auto it = fs.rbegin(); it != fs.rend(); ++it) out.push_back(point(cx, cy, r_in, *it));
+    return out;
+}
+
 Layout layout(double x, double y, double w, double h, int count, double text_h, double pad) {
     Layout out;
     if (count <= 0) return out;

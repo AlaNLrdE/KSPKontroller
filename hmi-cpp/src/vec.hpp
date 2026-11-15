@@ -1,4 +1,4 @@
-// Vectors, quaternions and the attitude conventions of hmi-pi/ksphmi/navigation.py.
+// Vectors, quaternions and the kRPC attitude conventions of the NavBall.
 // Surface axes are (up, north, east); vessel axes are right, forward, down.
 #pragma once
 

@@ -1,5 +1,5 @@
 // Entry point: ksphmi [--demo] [--windowed] [--address HOST] [--screenshot FILE] [--bench N] ...
-// Same options and settings as python -m ksphmi (hmi-pi/ksphmi/__main__.py), plus --fps, --bench and --offscreen.
+// Settings: config.toml + config.local.toml + KSPHMI_* environment (config.hpp); see --help.
 #include <SDL.h>
 
 #include <csignal>
@@ -38,7 +38,7 @@ void usage(FILE* out) {
     std::fprintf(out,
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed] [--size WxH]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N] [--offscreen]\n\n"
-                 "KSP flight data display (kRPC client), C++ build of hmi-pi/ksphmi.\n\n"
+                 "KSP flight data display (kRPC client), for the Raspberry Pi.\n\n"
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"

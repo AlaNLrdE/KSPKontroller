@@ -1,4 +1,4 @@
-// Drawing on an SDL_Renderer with pygame's semantics (rects, circles, rings, arcs, thick lines, anchored text).
+// Drawing on an SDL_Renderer: rects, circles, rings, arcs, thick lines and anchored text.
 //
 // Everything is batched into SDL_RenderGeometry calls: consecutive shapes share one draw call, text comes from a
 // per-size glyph atlas (no texture upload per changed string) and the batch is only flushed when the texture or
@@ -25,7 +25,7 @@ struct Color {
     bool operator==(const Color& o) const { return r == o.r && g == o.g && b == o.b && a == o.a; }
 };
 
-/// Integer rectangle with pygame.Rect semantics (truncating constructor, C integer halves).
+/// Integer rectangle (truncating constructor, C integer halves).
 struct Rect {
     int x = 0, y = 0, w = 0, h = 0;
     Rect() = default;
@@ -65,7 +65,7 @@ struct Pt {
 
 enum class Anchor { TopLeft, TopRight, Center, MidTop, MidLeft, MidRight };
 
-/// One font size of FreeSansBold (pygame's default font) with a glyph atlas texture.
+/// One font size of FreeSansBold with a glyph atlas texture.
 class Font {
 public:
     Font(SDL_Renderer* renderer, const std::string& path, int px, bool bold);
@@ -119,13 +119,13 @@ public:
     void fill_rect(float x, float y, float w, float h, Color c);
     void rounded_rect(const Rect& r, float radius, Color c);
     void circle(float cx, float cy, float radius, Color c);
-    /// pygame.draw.circle with a width: a ring whose outer edge is `radius`.
+    /// A ring of `width` pixels whose outer edge is `radius`.
     void ring(float cx, float cy, float radius, float width, Color c);
     void line(Pt a, Pt b, float width, Color c);
     void polyline(const std::vector<Pt>& points, bool closed, float width, Color c);
     /// Filled convex polygon; `feather` adds the anti-aliased edge (off for tiling cells).
     void polygon(const std::vector<Pt>& points, Color c, bool feather = true);
-    /// pygame.draw.arc on the square around (cx, cy): thickness inwards, angles counter-clockwise in radians.
+    /// Arc on the square around (cx, cy): thickness inwards, angles counter-clockwise in radians.
     void arc(float cx, float cy, float radius, double start, double stop, float width, Color c);
     /// Raw triangles (positions in pixels, texture coordinates normalised).
     void triangles(SDL_Texture* texture, const SDL_Vertex* vertices, int count_vertices, const int* indices,

@@ -410,44 +410,18 @@ def check_git(ctx):
 
 
 # --------------------------------------------------------------------------------------------- Raspberry Pi HMI
-HMI_DIR = os.path.join(ROOT, "hmi-pi")
+HMI_DIR = os.path.join(ROOT, "hmi-cpp")
 
 
 def check_hmi_render(ctx):
-    """Navball orientation and bounds checks need the development pygame environment."""
-    candidates = (os.path.join(ROOT, 'build', 'hmi-venv', 'Scripts', 'python.exe'),
-                  os.path.join(ROOT, 'build', 'hmi-venv', 'bin', 'python'))
-    python = next((p for p in candidates if os.path.isfile(p)), None)
-    if not python:
-        report('WARN', 'hmi: navball render', 'run ./ci hmi --demo once to create the pygame environment')
-        return
-    result = subprocess.run([python, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'],
-                            cwd=HMI_DIR, capture_output=True, text=True, timeout=30,
-                            env=dict(os.environ, SDL_VIDEODRIVER='dummy', PYTHONDONTWRITEBYTECODE='1'))
-    report('PASS' if result.returncode == 0 else 'FAIL', 'hmi: navball render',
-           'navigation, compact metrics, resource gauges and staging bounds at three resolutions' if result.returncode == 0
-           else result.stderr[-500:])
-    # Draw only in memory; never replace the live framebuffer with demo data.
-    script = """import os, time
-os.environ['SDL_VIDEODRIVER'] = 'dummy'
-from ksphmi import config
-from ksphmi.display import Display
-from ksphmi.telemetry import DemoSource
-import pygame
-d = Display(config.load(), windowed=True, size=(2520, 1680))
-s = DemoSource()
-d.draw(s.sample(0))
-start = time.perf_counter()
-for i in range(5):
-    d.draw(s.sample(i))
-print('HMI_RENDER_MS=%.1f' % ((time.perf_counter() - start) * 200))
-pygame.quit()
-"""
+    """Draw time of the installed HMI on the Pi: ksphmi --bench draws demo frames in memory only (--offscreen never
+    replaces the live framebuffer). The layout and clipping checks themselves are ctest's (./ci test_hmi)."""
     host = os.environ.get('HMI_HOST', 'ksphmi')
+    bench = ('KSPHMI_APP_DIR=~/ksphmi/cpp KSPHMI_LOCAL_CONFIG=/dev/null '
+             '~/ksphmi/cpp/build/ksphmi --bench 5 --offscreen --size 2520x1680')
     try:
-        remote = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', host,
-                                 'cd ~/ksphmi/app && ../venv/bin/python -'], input=script,
-                                capture_output=True, text=True, timeout=15)
+        remote = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', host, bench],
+                                capture_output=True, text=True, timeout=30)
         match = re.search(r'HMI_RENDER_MS=([\d.]+)', remote.stdout)
     except (OSError, subprocess.SubprocessError):
         match = None
@@ -456,13 +430,13 @@ pygame.quit()
         report('PASS' if milliseconds < 75 else 'WARN', 'hmi: Pi render budget',
                '%.1f ms/frame at 2520x1680, excluding framebuffer copy (~21 ms)' % milliseconds)
     else:
-        report('WARN', 'hmi: Pi render budget', 'offscreen benchmark unavailable over SSH')
+        report('WARN', 'hmi: Pi render budget', 'ksphmi --bench unavailable over SSH (./ci deploy_hmi)')
 
 
 def check_hmi_context(ctx):
     """Keep the optional read-only scene channel consistent across game, HMI and simulator."""
     source = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "HmiContext.cs"))
-    client = read(os.path.join(ROOT, "hmi-pi", "ksphmi", "scenes.py"))
+    client = read(os.path.join(HMI_DIR, "src", "scenes.cpp")) + read(os.path.join(HMI_DIR, "src", "scenes.hpp"))
     server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
     ok = all("KSPHMI/1" in s and "50002" in s for s in (source, client, server))
     for facility in ("AstronautComplex", "MissionControl", "RnDComplex", "AdministrationFacility"):
@@ -483,69 +457,44 @@ def check_hmi_context(ctx):
            "UDP 50002 rule present" if "50002" in out else "missing KSP HMI scene context rule (UDP 50002)")
 
 
-def check_hmi_except_names(ctx):
-    """An undefined exception name in an ``except`` clause only fails when that exception happens
-    (2026-11-14: RPCError imported in one method, caught in another, dropped every flight session)."""
-    import ast
-    import builtins
-    import glob
-    bad = []
-    for path in sorted(glob.glob(os.path.join(ROOT, "hmi-pi", "ksphmi", "*.py"))):
-        tree = ast.parse(read(path))
-        module = {n.asname or n.name.split(".")[0] for node in tree.body
-                  if isinstance(node, (ast.Import, ast.ImportFrom)) for n in node.names}
-        module |= {node.name for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef))}
-        module |= {t.id for node in tree.body if isinstance(node, ast.Assign) for t in node.targets
-                   if isinstance(t, ast.Name)}
-        for func in ast.walk(tree):
-            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            local = {n.asname or n.name.split(".")[0] for node in ast.walk(func)
-                     if isinstance(node, (ast.Import, ast.ImportFrom)) for n in node.names}
-            for node in ast.walk(func):
-                if not isinstance(node, ast.ExceptHandler) or node.type is None:
-                    continue
-                types = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
-                for t in types:
-                    if isinstance(t, ast.Name) and t.id not in local | module and not hasattr(builtins, t.id):
-                        bad.append("%s:%d %s" % (os.path.basename(path), node.lineno, t.id))
-    report("FAIL" if bad else "PASS", "hmi: except names defined",
-           ", ".join(bad) if bad else "every caught exception name is imported in its function or module")
-
 def check_hmi_cpp(ctx):
-    """The C++ HMI port (hmi-cpp/) must keep the Python reference's scene contract, views and resource order."""
-    src = os.path.join(ROOT, "hmi-cpp", "src")
-    if not os.path.isdir(src):
-        report("WARN", "hmi-cpp: parity with hmi-pi", "hmi-cpp/ missing")
-        return
-    py_scenes = read(os.path.join(HMI_DIR, "ksphmi", "scenes.py"))
+    """The HMI (hmi-cpp/) must have a view for every scene the plugin and the simulator report, read the resources
+    the simulator serves, and keep its LF rule (it is built on the Pi)."""
+    src = os.path.join(HMI_DIR, "src")
     cpp_scenes = read(os.path.join(src, "scenes.cpp"))
+    views = re.findall(r'^        \{"(\w+)", "', cpp_scenes, re.M)
     problems = []
-    for key in re.findall(r'^    "(\w+)": \(', py_scenes, re.M):
-        if '{"%s",' % key not in cpp_scenes:
-            problems.append("view %s" % key)
-    for text in re.findall(r'\("([A-Z0-9]+)", "([^"]+)", "([^"]+)"\)', py_scenes):
-        if '{"%s", "%s", "%s"}' % text not in cpp_scenes:
-            problems.append("card %s" % text[1])
-    if "KSPHMI/1" not in cpp_scenes or "50002" not in read(os.path.join(src, "scenes.hpp")):
-        problems.append("UDP 50002 KSPHMI/1 protocol")
-    names = re.search(r"RESOURCE_NAMES = \(([^)]*)\)", read(os.path.join(HMI_DIR, "ksphmi", "systems.py")))
+    sim = re.search(r"^SCENES = \(([^)]*)\)", read(os.path.join(ROOT, "tools", "kspsim", "sim.py")), re.M)
+    sim_scenes = set(re.findall(r'"(\w+)"', sim.group(1)) if sim else ()) - {"flight", "closed"}
+    if not sim_scenes or sim_scenes != set(views):
+        problems.append("views %s vs kspsim scenes %s" % (sorted(views), sorted(sim_scenes)))
+    plugin = read(os.path.join(ROOT, "KSPSerialIO", "KSPSerialIO", "HmiContext.cs"))
+    for scene in set(re.findall(r'(?:facility|scene) = "(\w+)"', plugin)) - {"spacecenter", "trackstation"}:
+        if scene not in views:
+            problems.append("plugin scene %s has no view" % scene)
     model = read(os.path.join(src, "model.hpp"))
-    if not names or re.findall(r"'(\w+)'", names.group(1)) != re.findall(
-            r'"(\w+)"', model.split("RESOURCE_NAMES", 1)[1].split(";", 1)[0]):
-        problems.append("RESOURCE_NAMES order")
+    names = re.findall(r'"(\w+)"', model.split("RESOURCE_NAMES", 1)[1].split(";", 1)[0])
+    served = re.search(r"fields = \{(.*?)\}\r?\n", read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py")), re.S)
+    if not served or names != re.findall(r"'(\w+)': \(", served.group(1)):
+        problems.append("RESOURCE_NAMES order vs kspsim")
     if "hmi-cpp/** text eol=lf" not in read(os.path.join(ROOT, ".gitattributes")):
         problems.append(".gitattributes LF rule")
-    report("FAIL" if problems else "PASS", "hmi-cpp: parity with hmi-pi",
-           ", ".join(problems) if problems else "scene views and cards, UDP 50002 contract, resource order")
+    report("FAIL" if problems else "PASS", "hmi: views and resources",
+           ", ".join(problems) if problems else "%d scene views, %d resources, LF rule" % (len(views), len(names)))
 
 
 def check_hmi(ctx):
-    """hmi-pi unit tests, then (if the Pi answers over SSH) its service state and the kRPC address it uses."""
-    p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], cwd=HMI_DIR,
-                       capture_output=True, text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-    last = (p.stderr.strip().splitlines() or ["no output"])[-1]
-    report("PASS" if p.returncode == 0 else "FAIL", "hmi: unit tests", last if p.returncode == 0 else p.stderr.strip()[-300:])
+    """Local C++ test build is current, then (if the Pi answers over SSH) its service state and the kRPC address."""
+    # ctest needs a Linux toolchain (WSL here): only check that ./ci test_hmi ran after the last source change.
+    tests = [os.path.join(ROOT, "build", "hmi-cpp", n) for n in ("ksphmi_tests", "ksphmi_render_tests")]
+    sources = [os.path.join(d, f) for d, _, files in os.walk(HMI_DIR) for f in files]
+    newest = max((os.path.getmtime(f) for f in sources), default=0)
+    if not all(os.path.isfile(t) for t in tests):
+        report("WARN", "hmi: C++ tests", "never built here: ./ci test_hmi")
+    elif min(os.path.getmtime(t) for t in tests) < newest:
+        report("WARN", "hmi: C++ tests", "hmi-cpp changed since the last build: ./ci test_hmi")
+    else:
+        report("PASS", "hmi: C++ tests", "test binaries newer than hmi-cpp/ (./ci test_hmi)")
 
     host = os.environ.get("HMI_HOST", "ksphmi")
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
@@ -555,6 +504,8 @@ def check_hmi(ctx):
              "echo \"cursorrule=$(test -f /etc/tmpfiles.d/ksphmi-cursor.conf && echo yes || echo no)\"; "
              "echo \"linger=$(loginctl show-user $(id -un) -p Linger --value)\"; "
              "echo \"autostart=$(systemctl --user is-enabled ksphmi.service)\"; "
+             "echo \"execstart=$(systemctl --user show ksphmi.service -p ExecStart --value | tr -d ' ')\"; "
+             "echo \"oldunit=$(test -e ~/.config/systemd/user/ksphmi-cpp.service && echo yes || echo no)\"; "
              "echo \"tty1=$(systemctl is-enabled getty@tty1.service)\"; "
              "bootfile=/boot/firmware/cmdline.txt; test -r $bootfile || bootfile=/boot/cmdline.txt; "
              "echo \"bootquiet=$(test -r $bootfile && ! grep -qw console=tty1 $bootfile "
@@ -603,7 +554,11 @@ def check_hmi(ctx):
     kiosk = env.get("tty1") == "masked" and env.get("bootquiet") == "yes"
     report("PASS" if kiosk else "WARN", "hmi: kiosk boot",
            "login console masked and boot text hidden" if kiosk else
-           "run sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh on the Pi")
+           "run sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi")
+    cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
+    report("PASS" if cpp else "WARN", "hmi: C++ unit",
+           "ksphmi.service runs ~/ksphmi/cpp/build/ksphmi" if cpp else
+           "ksphmi.service is not the C++ unit or ksphmi-cpp.service is left over: ./ci deploy_hmi")
 
 
 FIREWALL_RULE = "KSP kRPC (wk-rea)"
@@ -648,14 +603,15 @@ def check_krpc(ctx):
     if not os.path.isdir(mod):
         report("FAIL", "kRPC: installed", "no GameData/kRPC: the Pi HMI gets no game data (docs/hmi.rst)")
         return
-    want = re.search(r"^krpc==([\d.]+)", read(os.path.join(ROOT, "hmi-pi", "requirements.txt")), re.M)
+    # The HMI's own client speaks the same protocol as this krpc version (hmi-cpp/src/krpc.hpp); kspsim uses it too.
+    want = re.search(r"^krpc==([\d.]+)", read(os.path.join(ROOT, "tools", "requirements.txt")), re.M)
     try:
         v = json.loads(read(os.path.join(mod, "kRPC.version")))["VERSION"]
         have = "%d.%d.%d" % (v["MAJOR"], v["MINOR"], v["PATCH"])
     except (OSError, ValueError, KeyError):
         have = "?"
     if want and have != want.group(1):
-        report("FAIL", "kRPC: version", "mod %s but the Pi client is krpc==%s (protocol mismatch)" % (have, want.group(1)))
+        report("FAIL", "kRPC: version", "mod %s but the HMI and kspsim speak krpc==%s (protocol mismatch)" % (have, want.group(1)))
     else:
         report("PASS", "kRPC: version", have)
     cfg_path = os.path.join(mod, "PluginData", "settings.cfg")
@@ -710,8 +666,9 @@ def check_krpc(ctx):
 
 
 def check_sim(ctx):
-    """kspsim tests: wire packing against the firmware sizes, the flight model, and the HMI kRPC client
-    against the simulated server (catches a krpc client upgrade that the stand-in no longer serves)."""
+    """kspsim tests: wire packing against the firmware sizes, the flight model, and the krpc client against the
+    simulated server (catches a krpc client upgrade that the stand-in no longer serves). The C++ HMI against the
+    simulator is ./ci test_hmi --sim (needs WSL)."""
     p = subprocess.run([sys.executable, "-m", "unittest", os.path.join("tools", "kspsim", "test_kspsim.py")],
                        cwd=ROOT, capture_output=True, text=True, timeout=300,
                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
@@ -734,7 +691,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_except_names, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
+          check_reconnect_guards, check_install, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_git]
 
 
 def main():

@@ -249,7 +249,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     const double r = radius;
     const int size = static_cast<int>(std::ceil(2 * r + 4));
     const double origin = size / 2.0;
-    // The ball is composed at an integer offset, as pygame blits its ball surface.
+    // The ball is composed at an integer offset (whole-pixel blit of its surface).
     const int bx = static_cast<int>(cx - origin), by = static_cast<int>(cy - origin);
     auto point = [&](const Vec3& v) { return Pt{static_cast<float>(bx + origin + v.x * r), static_cast<float>(by + origin + v.y * r)}; };
 
@@ -326,7 +326,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
     const float fx = static_cast<float>(cx), fy = static_cast<float>(cy), fr = static_cast<float>(r);
     const float fu = static_cast<float>(u);
     c.ring(fx, fy, fr + 1.7f * fu, std::max(2.0f, rnd(2.6 * u)), {91, 104, 114});
-    // pygame's arc rect is 2 * (r + 1.7u) wide, truncated to whole pixels.
+    // The arc rect is 2 * (r + 1.7u) wide, truncated to whole pixels.
     float bezel = static_cast<int>(2 * (r + 1.7 * u)) / 2.0f;
     c.arc(fx, fy, bezel, PI / 4, 5 * PI / 4, std::max(1.0f, rnd(.7 * u)), {151, 164, 171});
     c.arc(fx, fy, bezel, 5 * PI / 4, 9 * PI / 4, std::max(1.0f, rnd(.7 * u)), {48, 57, 64});

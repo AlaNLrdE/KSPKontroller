@@ -11,7 +11,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 | Wire protocol, packet sizes | `docs/protocol.rst`, `docs/vesseldata.rst` |
 | Plugin behaviour, settings, perf/port logs | `docs/plugin.rst` |
 | Firmware, pins, LED matrix, recovery | `docs/firmware.rst`, `docs/overview.rst` |
-| Raspberry Pi HMI (`hmi-pi/`, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
+| Raspberry Pi HMI (`hmi-cpp/`, C++, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
 | Testing board/HMI without KSP (`./ci sim`) | `docs/simulator.rst` |
 | Build, deploy, flash | `docs/building.rst`, `./ci help` |
 | Past decisions | `KSPSerialIO/CHANGELOG.md` (top entries), `git log -10` |
@@ -65,11 +65,14 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   outside flight and does not distinguish the Space Center building dialogs. Use facility spawn/despawn events.
 - HMI reconnects discover the PC by broadcasting the same context request on UDP 50002 after the saved address
   fails. Disable discovery in isolated client tests so an open real game cannot redirect their connections.
-- Pi kiosk boot setup is `sudo sh ~/ksphmi/app/systemd/setup-kiosk.sh` (run by the user): hide boot text and
+- Pi kiosk boot setup is `sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh` (run by the user): hide boot text and
   firmware splash, mask tty1 getty, persist cursor settings; user-service lingering starts the HMI without login.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
-  the repo). pip's pygame has no `kmsdrm`: the Pi uses Debian `python3-pygame`; anything needing `sudo` there
-  is run by the user. `hmi-pi/` is LF (`.gitattributes`), not CRLF.
+  the repo). Anything needing `sudo` there is run by the user. `hmi-cpp/` is LF (`.gitattributes`), not CRLF.
+- The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). The Pi builds it:
+  `./ci deploy_hmi` copies it to `~/ksphmi/cpp`, runs cmake/ctest there and restarts `ksphmi.service`. On this PC
+  `./ci build_hmi`/`hmi`/`test_hmi` run inside WSL (no Windows C++ toolchain). Tests and tools stay Python.
+- HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
   `target_speed_reference_frame`: `orbital_reference_frame` co-moves with the vessel and reads zero speed.
@@ -79,8 +82,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   do not cover the brown ground. The fixed yellow boresight includes a center dot. Marker
   edge margins must account for the complete glyph size, so larger symbols cannot spill outside the globe.
 - NavBall volume lighting is a cached low-resolution alpha map, scaled once per size. Shade the globe and
-  graduations before drawing navigation markers; avoid per-pixel Python work inside the Pi's frame loop.
-- ORBIT must clip its contents to the panel interior and restore the caller's clip in a finally block:
+  graduations before drawing navigation markers; avoid per-pixel work inside the Pi's frame loop (software
+  renderer: opaque batches with `SDL_BLENDMODE_NONE`, static art cached per size).
+- ORBIT must clip its contents to the panel interior and restore the caller's clip on every exit path (exceptions too):
   hyperbolic curves and distant vessel markers can extend arbitrarily far beyond the diagram scale.
 - NavBall degree labels must not be hidden by screen-space rectangle collision tests: rolling changes rounded
   rectangles and causes flicker. Use continuous foreshortening and limb fading; pitch ladders have 10-degree
