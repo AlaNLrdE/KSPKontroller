@@ -190,8 +190,12 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   Report incoming requests in the user conversation and execute actions within the user-authorized scope;
   ask the user to confirm when scope or a consequential decision is uncertain (user, 2026-11-16).
   At the start of every turn, before its final reply, and at progress checkpoints during long work, run
-  `python3 tools/agent_mailbox.py --config build/agent-mailbox/mac.json pending` on Mac (PC uses its own
-  client/config). Report pending requests here and address them even while working on another task.
+  `python3 tools/agent_mailbox.py --config build/agent-mailbox/mac.json collect`, then `pending` on Mac
+  (PC uses its own client/config). collect durably copies incoming messages to mac.history.md before
+  removing their shared copies, and sends one working ACK per unhandled request. Work from that history,
+  report pending requests here and address them even while working on another task. Archive and remove
+  incoming ACK/RESULT messages too, without replying to ACKs; keep outgoing messages until their recipient
+  collects them. On completion send RESULT, then done --seq N locally (user, 2026-11-16).
   After the work and RESULT reply, mark the oldest pending message with `done --seq N`; never equate the
   delivery cursor or an ACK with completed work. Read messages before marking them handled.
   Start `watch --once` in the host agent's background-task tool and re-arm after handling each notification.

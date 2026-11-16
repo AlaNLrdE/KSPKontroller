@@ -10,7 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from agent_mailbox import Journal, make_server, receive, request, pending_messages, mark_handled
+from agent_mailbox import Journal, make_server, receive, request, pending_messages, mark_handled, collect, history_messages, digest
 
 
 class MailboxTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class MailboxTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.journal = Journal(self.root / 'shared.jsonl')
-        self.server = make_server('127.0.0.1', 0, self.journal, 'test-only-secret')
+        self.server = make_server('127.0.0.1', 0, self.journal, 'test-only-secret', self.root / 'evidence')
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.config = dict(url='http://127.0.0.1:%s' % self.server.server_port,
@@ -109,6 +109,68 @@ class MailboxTest(unittest.TestCase):
         self.assertFalse(handled.exists())
         mark_handled(self.config, handled, 103)
         self.assertEqual(pending_messages(self.config, handled), [])
+
+    def test_collect_copies_before_removing_and_requests_survive_in_history(self):
+        first = self.send(text='REQUEST: investigate orbit')
+        config_path = self.root / 'pc.json'
+        history = collect(self.config, config_path)
+        self.assertEqual(history_messages(history), [first])
+        self.assertNotIn(first, self.journal.messages)
+        self.assertEqual([m['seq'] for m in pending_messages(self.config, self.root / 'pc.handled.json')], [1])
+        ack = self.journal.messages[0]
+        self.assertTrue(ack['text'].startswith('ACK #1:'))
+        self.assertEqual(ack['to'], 'mac')
+        collect(self.config, config_path)
+        self.assertEqual(len(self.journal.messages), 1)  # retry does not multiply ACKs
+        mark_handled(self.config, self.root / 'pc.handled.json', 1)
+        self.assertEqual(pending_messages(self.config, self.root / 'pc.handled.json'), [])
+
+    def test_archive_failure_leaves_shared_message_and_wrong_recipient_cannot_delete(self):
+        first = self.send(text='REQUEST: important')
+        from unittest.mock import patch
+        with patch('agent_mailbox.archive_message', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                collect(self.config, self.root / 'pc.json')
+        self.assertEqual(self.journal.messages, [first])
+        with self.assertRaises(ValueError):
+            self.journal.remove(1, 'mac', digest(first))
+        with self.assertRaises(ValueError):
+            self.journal.remove(1, 'pc', 'wrong copied digest')
+
+    def test_empty_queue_restart_keeps_monotonic_ids_and_deleted_send_dedup(self):
+        first = self.send()
+        self.journal.remove(first['seq'], 'pc', digest(first))
+        restarted = Journal(self.journal.path)
+        self.assertEqual(restarted.messages, [])
+        self.assertEqual(restarted.last_seq, 1)
+        receipt = restarted.append(dict(sender='mac', to='pc', text='Ready to test: Δv', id='one'))
+        self.assertTrue(receipt['archived'])
+        self.assertEqual(restarted.messages, [])
+        new = restarted.append(dict(sender='mac', to='pc', text='Next', id='next'))
+        self.assertEqual(new['seq'], 2)
+        self.assertEqual(restarted.events(1, 0), [new])
+
+    def test_ack_and_result_are_archived_without_ack_loops(self):
+        self.send(text='ACK #12: working')
+        self.send(id='two', text='RESULT #12: complete')
+        history = collect(self.config, self.root / 'pc.json')
+        self.assertEqual(len(history_messages(history)), 2)
+        self.assertEqual(self.journal.messages, [])
+        self.assertEqual(request(self.config, '/health')['last_seq'], 2)
+
+    def test_named_evidence_download_rejects_traversal_and_credentials(self):
+        folder = self.root / 'evidence'
+        folder.mkdir()
+        (folder / 'orbit.png').write_bytes(b'png-fixture')
+        req = urllib.request.Request(self.config['url'] + '/artifact?name=orbit.png',
+                                     headers={'Authorization': 'Bearer test-only-secret'})
+        with urllib.request.urlopen(req) as response:
+            self.assertEqual(response.read(), b'png-fixture')
+        for name in ('../config.json', 'config.json', 'x%5Cconfig.txt'):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                request(self.config, '/artifact?name=' + name)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
 
     def test_partial_final_write_recovered_but_middle_corruption_rejected(self):
         self.send()
