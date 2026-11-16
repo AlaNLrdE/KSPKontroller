@@ -328,15 +328,37 @@ void ReduxSource::send_inputs(net::socket_t fd, uint64_t& sequence) {
 }
 
 void ReduxSource::run() {
-    // The numeric PC address already configured for kRPC (KSPHMI_REDUX_ADDRESS overrides it). No discovery.
+    // The PC address already configured for kRPC (KSPHMI_REDUX_ADDRESS overrides it), a name or a number. No
+    // discovery. A name is resolved again while Redux stays silent, so a DHCP change or a name that does not resolve
+    // yet at boot never needs a restart; the kRPC fallback keeps running meanwhile (user, 2026-11-16).
     const char* address = std::getenv("KSPHMI_REDUX_ADDRESS");
     const std::string host = address ? address : options_.address;
-    auto remote = net::resolve_ipv4(host, REDUX_PORT);
-    if (!remote) throw std::runtime_error("Redux address does not resolve: " + host);
-    net::Fd socket(net::open_socket(SOCK_DGRAM));
-    if (!socket || ::connect(socket.get(), reinterpret_cast<const sockaddr*>(&*remote), sizeof(*remote)) != 0)
-        throw std::runtime_error("Cannot create the Redux UDP socket: " + net::error_text(net::last_error()));
-    net::set_nonblocking(socket.get(), true);
+    net::Fd socket;
+    std::string endpoint;  // the address the socket is connected to
+    double next_resolve = 0;
+    std::string resolve_problem;
+    auto open_endpoint = [&] {
+        auto remote = net::resolve_ipv4(host, REDUX_PORT);
+        if (!remote) {
+            if (resolve_problem != "dns") log::warning(LOG, "Redux address does not resolve yet: " + host);
+            resolve_problem = "dns";
+            return;
+        }
+        const std::string ip = net::to_string(remote->sin_addr);
+        if (socket && ip == endpoint) return;  // same address: keep the socket
+        net::Fd fresh(net::open_socket(SOCK_DGRAM));
+        if (!fresh || ::connect(fresh.get(), reinterpret_cast<const sockaddr*>(&*remote), sizeof(*remote)) != 0) {
+            if (resolve_problem != "socket")
+                log::warning(LOG, "cannot open the Redux UDP socket: " + net::error_text(net::last_error()));
+            resolve_problem = "socket";
+            return;
+        }
+        net::set_nonblocking(fresh.get(), true);
+        socket = std::move(fresh);
+        if (ip != host) log::info(LOG, "Redux endpoint " + host + " is " + ip + (endpoint.empty() ? "" : " (was " + endpoint + ")"));
+        endpoint = ip;
+        resolve_problem.clear();
+    };
     std::unique_ptr<KrpcSource> krpc;
     if (fallback_) {
         krpc = std::make_unique<KrpcSource>(options_);
@@ -356,68 +378,77 @@ void ReduxSource::run() {
     std::string view_problem;
     while (!stopping()) {
         const double started = now();
-        // Editor report at 2 Hz, only while the last snapshot was the VAB; older servers never answer it.
-        if (in_vab && started >= next_ship) {
-            next_ship = started + 0.5;
-            if (auto reply = redux_ship_exchange(socket.get(), std::to_string(++sequence), 0.05)) {
-                ship = *reply;
-                ship_at = now();
+        // While Redux is silent, look the address up again: every 3 s before the first socket, every 10 s after.
+        if (!socket || (started - last_redux > 10 && started >= next_resolve)) {
+            if (started >= next_resolve) {
+                next_resolve = started + (socket ? 10 : 3);
+                open_endpoint();
             }
         }
-        // VESSEL panel at 2 Hz in flight: state every time, shape only when the state's revision is not the shape's.
-        if (in_flight && started >= next_view) {
-            next_view = started + 0.5;
-            std::string why;
-            auto state = redux_text_exchange(socket.get(), "KSP2VSTA", std::to_string(++sequence), 0.05);
-            if (!state) why = "no answer (plugin older than beta.11?)";
-            else if (!*state) why = "no vessel view in the game";
-            else {
-                VesselView next = shape ? *shape : VesselView{};
-                if (!shape || !apply_vessel_state(next, **state)) {
-                    auto text = redux_text_exchange(socket.get(), "KSP2VSHP", std::to_string(++sequence), 0.05);
-                    auto parsed = text && *text ? parse_vessel_shape(**text) : std::nullopt;
-                    if (!parsed) why = "the vessel shape does not parse";
-                    else {
-                        if (!shape || shape->revision != parsed->revision)
-                            log::info(LOG, fmt::str("vessel view: %zu parts (shape revision %u)", parsed->parts.size(), parsed->revision));
-                        shape = *parsed;
-                        next = *parsed;
-                        if (!apply_vessel_state(next, **state)) why = "the vessel state does not match its shape";
+        if (socket) {
+            // Editor report at 2 Hz, only while the last snapshot was the VAB; older servers never answer it.
+            if (in_vab && started >= next_ship) {
+                next_ship = started + 0.5;
+                if (auto reply = redux_ship_exchange(socket.get(), std::to_string(++sequence), 0.05)) {
+                    ship = *reply;
+                    ship_at = now();
+                }
+            }
+            // VESSEL panel at 2 Hz in flight: state every time, shape only when the state's revision is not the shape's.
+            if (in_flight && started >= next_view) {
+                next_view = started + 0.5;
+                std::string why;
+                auto state = redux_text_exchange(socket.get(), "KSP2VSTA", std::to_string(++sequence), 0.05);
+                if (!state) why = "no answer (plugin older than beta.11?)";
+                else if (!*state) why = "no vessel view in the game";
+                else {
+                    VesselView next = shape ? *shape : VesselView{};
+                    if (!shape || !apply_vessel_state(next, **state)) {
+                        auto text = redux_text_exchange(socket.get(), "KSP2VSHP", std::to_string(++sequence), 0.05);
+                        auto parsed = text && *text ? parse_vessel_shape(**text) : std::nullopt;
+                        if (!parsed) why = "the vessel shape does not parse";
+                        else {
+                            if (!shape || shape->revision != parsed->revision)
+                                log::info(LOG, fmt::str("vessel view: %zu parts (shape revision %u)", parsed->parts.size(), parsed->revision));
+                            shape = *parsed;
+                            next = *parsed;
+                            if (!apply_vessel_state(next, **state)) why = "the vessel state does not match its shape";
+                        }
+                    }
+                    if (why.empty()) {
+                        view = std::make_shared<const VesselView>(std::move(next));
+                        view_at = now();
                     }
                 }
-                if (why.empty()) {
-                    view = std::make_shared<const VesselView>(std::move(next));
-                    view_at = now();
+                if (why != view_problem && !why.empty()) log::warning(LOG, "vessel view unavailable: " + why);
+                view_problem = why;
+            }
+            const std::string nonce = std::to_string(++sequence);
+            // Alternate during discovery so beta.6 servers remain usable; prefer v2 once observed.
+            const std::string request = (version2 || sequence % 2 ? "KSP2HMI2 " : "KSP2HMI1 ") + nonce;
+            if (auto reply = redux_exchange(socket.get(), request, nonce, 0.08)) {
+                version2 = reply->version2;
+                reply->snapshot.server = "KSP2 Redux UDP :50003";
+                reply->snapshot.game = "ksp2";  // skin auto picks ksp2
+                in_vab = reply->snapshot.state == State::NoVessel && reply->snapshot.scene == "vab";
+                in_flight = reply->snapshot.state == State::Flight;
+                if (!in_vab) ship.reset();
+                else if (ship && now() - ship_at <= 2) reply->snapshot.ship = ship;
+                if (!in_flight) {
+                    shape.reset();
+                    view.reset();
+                } else if (view && now() - view_at <= 2) reply->snapshot.vessel_view = view;
+                publish(std::move(reply->snapshot));
+                last_redux = now();
+                if (!linked) {
+                    log::info(LOG, std::string("Redux UDP replies received (") + (version2 ? "v2" : "v1") + ")");
+                    linked = true;
+                    std::lock_guard<std::mutex> lock(input_mutex_);
+                    linked_ = true;
+                    if (krpc_) krpc_->hold(Held{});
                 }
+                send_inputs(socket.get(), sequence);
             }
-            if (why != view_problem && !why.empty()) log::warning(LOG, "vessel view unavailable: " + why);
-            view_problem = why;
-        }
-        const std::string nonce = std::to_string(++sequence);
-        // Alternate during discovery so beta.6 servers remain usable; prefer v2 once observed.
-        const std::string request = (version2 || sequence % 2 ? "KSP2HMI2 " : "KSP2HMI1 ") + nonce;
-        if (auto reply = redux_exchange(socket.get(), request, nonce, 0.08)) {
-            version2 = reply->version2;
-            reply->snapshot.server = "KSP2 Redux UDP :50003";
-            reply->snapshot.game = "ksp2";  // skin auto picks ksp2
-            in_vab = reply->snapshot.state == State::NoVessel && reply->snapshot.scene == "vab";
-            in_flight = reply->snapshot.state == State::Flight;
-            if (!in_vab) ship.reset();
-            else if (ship && now() - ship_at <= 2) reply->snapshot.ship = ship;
-            if (!in_flight) {
-                shape.reset();
-                view.reset();
-            } else if (view && now() - view_at <= 2) reply->snapshot.vessel_view = view;
-            publish(std::move(reply->snapshot));
-            last_redux = now();
-            if (!linked) {
-                log::info(LOG, std::string("Redux UDP replies received (") + (version2 ? "v2" : "v1") + ")");
-                linked = true;
-                std::lock_guard<std::mutex> lock(input_mutex_);
-                linked_ = true;
-                if (krpc_) krpc_->hold(Held{});
-            }
-            send_inputs(socket.get(), sequence);
         }
         if (now() - last_redux > 1) {
             if (linked) {

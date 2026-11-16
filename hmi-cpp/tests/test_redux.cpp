@@ -1,5 +1,6 @@
 // KSP 2 Redux source: wire decoding, facility scenes, ship/VESSEL text replies, remote keyboard requests and the
 // nonce matching of the UDP exchange (loopback only, no game).
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <sstream>
@@ -200,6 +201,20 @@ TEST(redux_late_replies_do_not_shift_nonces) {
     auto status = redux_ack_exchange(client.get(), "KSP2KEY 5 stage 0", "KSP2KEY", "5", 0.5);
     ack.join();
     CHECK(status && *status == "queued");
+}
+
+TEST(redux_unresolved_name_keeps_the_source_alive) {
+    // A PC name that does not resolve yet (boot, DHCP) once ended the worker; it now waits and retries.
+    KrpcSource::Options o;
+    o.address = "no-such-host.invalid";
+    o.discovery = false;
+    ReduxSource src(o, false);
+    src.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    auto snap = src.latest();
+    src.stop();
+    CHECK(snap && snap->state == State::Connecting);
+    CHECK(snap && snap->detail.find("Redux") != std::string::npos);
 }
 
 int main(int argc, char** argv) { return RUN_TESTS(argc, argv); }
