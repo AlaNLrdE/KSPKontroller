@@ -14,6 +14,7 @@
 #include <sstream>
 
 #include "apollo.hpp"
+#include "gameskin.hpp"
 #include "bootstate.hpp"
 #include "check.hpp"
 #include "config.hpp"
@@ -88,7 +89,7 @@ Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 }  // namespace
 
 TEST(out_of_range_clock_telemetry_renders_in_both_skins) {
-    for (const char* skin : {"classic", "apollo", "steampunk"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
         Screen s(1260, 840, skin);
         Snapshot snap = demo();
         snap.ut = 1e100;
@@ -672,7 +673,7 @@ TEST(apollo_full_frame_software_render_time) {
 TEST(instrument_review_screenshots_on_request) {
     const char* dir = std::getenv("KSPHMI_SHOTS");
     if (!dir) return;
-    for (const char* skin : {"classic", "apollo", "steampunk"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
     Screen s(2520, 1680, skin);
     const std::string prefix = std::string(dir) + "/" + skin;
     Snapshot connecting;
@@ -836,7 +837,7 @@ TEST(vab_report_software_render_time) {
 TEST(vab_review_screenshots_on_request) {
     const char* dir = std::getenv("KSPHMI_SHOTS");
     if (!dir) return;
-    for (const char* skin : {"classic", "apollo", "steampunk"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
         Screen s(2520, 1680, skin, repo_config());
         for (const char* variant : {"", "pending", "heavy", "kerbalx", "duna", "empty"}) {
             s.display->draw(vab(sample_ship(variant)), monotonic());
@@ -848,7 +849,7 @@ TEST(vab_review_screenshots_on_request) {
 
 TEST(editor_modes_keep_real_skin_geometry_and_cache_stable) {
     const char* shots = std::getenv("KSPHMI_SHOTS");
-    for (const char* skin : {"classic", "apollo", "steampunk"})
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"})
         for (const auto& size : SIZES) {
             Screen screen(size.first, size.second, skin, repo_config());
             std::ifstream file(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/editor_report_v1.txt");
@@ -1043,6 +1044,57 @@ TEST(steampunk_destination_jewels_preserve_reachability_colours) {
     CHECK(green>20); CHECK(red>20);
 }
 
+TEST(game_themes_cache_art_and_keep_native_resource_names_and_absence_semantics) {
+    for(const char* skin:{"ksp1","ksp2"}) {
+        Screen screen(1260,840,skin);
+        auto snap=demo(600);snap.received=0;
+        std::vector<std::string> text,gauges;
+        screen.canvas->on_text=[&](const std::string& value,const Rect&){text.push_back(value);};
+        screen.display->on_gauge=[&](const std::string& name,const Rect&){gauges.push_back(name);};
+        screen.display->draw(snap,0);
+        auto* renderer=screen.display->game_skin();CHECK(renderer);const int before=renderer->builds;
+        snap.altitude+=10;snap.vessel="A different name";screen.display->draw(snap,0);
+        CHECK_EQ(renderer->builds,before);
+        snap.systems->native_resources=true;
+        snap.systems->resources={{"Methalox",10.0,20.0},{"Hydrogen",0.0,100.0},{"ElectricCharge",{},100.0}};
+        text.clear();gauges.clear();screen.display->draw(snap,0);
+        CHECK_EQ(renderer->builds,before+1);
+        CHECK(std::find(gauges.begin(),gauges.end(),"Methalox")!=gauges.end());
+        CHECK(std::find(gauges.begin(),gauges.end(),"Hydrogen")!=gauges.end());
+        CHECK(std::find(text.begin(),text.end(),"UNKNOWN")!=text.end());
+        CHECK(std::find(gauges.begin(),gauges.end(),"LiquidFuel")==gauges.end());
+        snap.systems->stages.clear();text.clear();screen.display->draw(snap,0);
+        CHECK(std::find(text.begin(),text.end(),"STAGE DATA UNAVAILABLE")!=text.end());
+        CHECK(std::find(text.begin(),text.end(),"LOW FUEL")!=text.end());
+        snap.ut=std::numeric_limits<double>::quiet_NaN();text.clear();screen.display->draw(snap,0);
+        CHECK(std::find(text.begin(),text.end(),"HISTORY DATA UNAVAILABLE")!=text.end());
+        text.clear();snap.state=State::Connecting;screen.display->draw(snap,0);
+        CHECK(std::find(text.begin(),text.end(),"WAITING FOR GAME")!=text.end());
+        CHECK(std::find(text.begin(),text.end(),"SAS")==text.end());
+        CHECK(std::find(text.begin(),text.end(),"THROTTLE")==text.end());
+        CHECK(!screen.display->orbit_crt&&!screen.display->orbit_body&&screen.display->panel_titles);
+    }
+}
+
+TEST(game_themes_restore_typefaces_and_keep_every_scene_inside_the_screen) {
+    for(const char* skin:{"ksp1","ksp2"})for(const auto& size:SIZES) {
+        Screen screen(size.first,size.second,skin,repo_config());
+        const auto original=screen.canvas->font_path();
+        screen.canvas->on_text=[&](const std::string& label,const Rect& r){
+            if(!Rect(0,0,size.first,size.second).contains(r))check::fail(__FILE__,__LINE__,std::string(skin)+" off-screen "+label);
+        };
+        auto snap=demo(600);screen.display->draw(snap,0);
+        CHECK_EQ(screen.canvas->font_path(),original);
+        snap.vessel=std::string(180,'W')+" "+"\xc3\xa1";screen.display->draw(snap,0);
+        Snapshot waiting;screen.display->draw(waiting,0);
+        waiting.state=State::NoVessel;screen.display->draw(waiting,0);
+        for(const auto& scene:views()){waiting.scene=scene.key;screen.display->draw(waiting,0);}
+        snap.vessel="Demo Orbiter";
+        screen.display->choose_skin("classic");screen.display->draw(snap,0);
+        CHECK_EQ(screen.canvas->font_path(),original);
+    }
+}
+
 TEST(steampunk_dials_calibrate_signed_values_and_never_invent_missing_measurements) {
     SteamDial d{50,0,100,1,"u"};
     CHECK_EQ(*steam_dial_fraction(d),.5);
@@ -1166,7 +1218,7 @@ TEST(all_themes_change_orbit_material_when_telemetry_changes_body) {
         Screen screen(1920,1080,skin);
         auto snap=demo(600); snap.received=0;
         screen.display->navball().hold=attitude(0,0,0);
-        const auto layout=flight_layout(*screen.canvas,std::string(skin)=="apollo");
+        const auto layout=flight_layout(*screen.canvas,(std::string(skin)=="apollo"||std::string(skin)=="ksp1"||std::string(skin)=="ksp2"));
         auto draw=[&](const char* body) {
             snap.body=body;
             // Keep orbital geometry fixed to isolate the material, but do not invent a lunar atmosphere.
@@ -1239,7 +1291,7 @@ TEST(apollo_orbit_is_entirely_green_crt_including_maneuvers_and_live_markers) {
 
 TEST(navball_only_frames_over_the_layer_cache_match_a_full_redraw) {
     const Quat before = attitude(5, 30, 0), after = attitude(25, 75, 20);
-    for (const char* skin : {"classic", "apollo", "steampunk"})
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"})
         for (const auto& size : {std::pair<int, int>{1260, 840}, {2520, 1680}}) {
             const int w = size.first, h = size.second;
             Snapshot snap = demo(600);

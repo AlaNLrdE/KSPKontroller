@@ -52,7 +52,7 @@ Source map
    * - ``canvas.*`` / ``fmt.*``
      - Primitives, fonts, texture/clip helpers and value formatting.
      - Restore rendering state; centralize units and negative-zero handling.
-   * - ``display.*`` / ``apollo.*`` / ``flightdeck.*`` / ``steampunk.*`` / ``steamdials.*`` / ``orbitart.*`` / ``segments.*``
+   * - ``display.*`` / ``apollo.*`` / ``flightdeck.*`` / ``gameskin.*`` / ``steampunk.*`` / ``steamdials.*`` / ``orbitart.*`` / ``segments.*``
      - Screen composition, skins, cached instrument art and digital readouts.
      - Consume snapshots without network calls.
    * - ``navball.*`` / ``gauges.*``
@@ -167,6 +167,16 @@ needles and exact readouts use the current snapshot. ``steam_dial_fraction`` rej
 non-finite values and invalid spans before geometry. The generated tube housing is
 three-sliced around a separately computed live resource-fill rectangle. Artwork and
 production generation prompts are retained under ``assets/steampunk``.
+
+``GameSkin`` implements the approved KSP1 Stock / KSP2 Redux renderers for all screen
+families using shared telemetry models. Its cached panel keys include size, state,
+facility/editor mode and the visible native resource names/page; live values and
+selected action-group/manifest contents do not rebuild art. Native Canvas primitives
+provide raised/flat frames, tabs, icons and an odometer, while generated empty bezel
+annuli surround the shared quaternion-driven NavBall. KSP1 uses the stock degree grid;
+KSP2 uses the pole-safe Flight Deck grid. The shortened globe rectangle reserves space
+for node values, reference controls and SAS modes. Scoped fonts and material hooks keep
+all five skins isolated. Unknown/non-finite history samples never reach draw geometry.
 
 The optional layer cache stores a full frame and the background under the globe; ``animate()`` can
 then redraw only the NavBall between telemetry samples. Any changed data/skin/screen requires a full

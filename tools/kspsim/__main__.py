@@ -86,7 +86,7 @@ def main(argv=None) -> int:
                          "dashed orbit (the window's Maneuver node tab changes or deletes it)")
     sas_names = [m.replace(" ", "-") for m in physics.SAS_MODES]
     ap.add_argument("--sas", choices=sas_names, help="start with SAS on in this mode")
-    ap.add_argument("--skin", choices=("classic", "apollo", "steampunk"),
+    ap.add_argument("--skin", choices=("classic", "apollo", "steampunk", "ksp1", "ksp2"),
                     help="ask the Pi HMI for this look on the UDP 50002 context reply (default: its own config)")
     ap.add_argument("--scene", choices=SCENES, help="start in this game scene (default flight)")
     ap.add_argument("--editor-mode", choices=("construction", "actions", "crew", "cargo"), default="construction")

@@ -41,7 +41,7 @@ def navball_blue_pixels(path):
 def main(binary):
     with tempfile.TemporaryDirectory(prefix="ksphmi-shots-") as folder:
         for batching in ("1", "0"):
-            for skin in ("steampunk", "apollo", "classic"):
+            for skin in ("steampunk", "apollo", "classic", "ksp1", "ksp2"):
                 path = Path(folder) / f"{skin}-{batching}.png"
                 env = dict(os.environ, SDL_RENDER_BATCHING=batching)
                 result = subprocess.run(

@@ -49,7 +49,7 @@ class App:
         ttk.Label(skin_row, text="HMI skin").pack(side="left")
         self.skin = tk.StringVar(value=sim.skin or "config")
         skin_box = ttk.Combobox(skin_row, textvariable=self.skin, state="readonly", width=9,
-                                values=("config", "classic", "apollo", "steampunk"))
+                                values=("config", "classic", "apollo", "steampunk", "ksp1", "ksp2"))
         skin_box.pack(side="left", padx=4)
         skin_box.bind("<<ComboboxSelected>>",
                       lambda _e: sim.set_skin("" if self.skin.get() == "config" else self.skin.get()))

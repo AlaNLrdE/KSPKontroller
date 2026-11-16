@@ -791,6 +791,10 @@ TEST(keyboard_maps_ksp_default_flight_keys) {
     CHECK_EQ(kb.down(digit(1, true), 0).skin, "classic");
     CHECK_EQ(kb.down(digit(2, true), 0).skin, "apollo");
     CHECK_EQ(kb.down(digit(3, true), 0).skin, "steampunk");
+    CHECK_EQ(kb.down(digit(4, true), 0).skin, "ksp1");
+    CHECK_EQ(kb.down(digit(5, true), 0).skin, "ksp2");
+    CHECK(kb.down(digit(4, true), 0).commands.empty());
+    CHECK(kb.down(digit(5, true), 0).commands.empty());
     CHECK(kb.down(digit(3, true), 0).commands.empty());
     CHECK(kb.down(digit(2, true), 0).commands.empty());
     CHECK(kb.down(digit(0, true), 0).vessel_mode);  // Ctrl+0: VESSEL fuel / heat

@@ -19,6 +19,7 @@
 namespace ksphmi {
 
 class ApolloSkin;
+class GameSkin;
 class OrbitArt;
 
 /// Shared right-column layout profiles: ORBIT and VESSEL above the NavBall. The default keeps the classic
@@ -97,12 +98,12 @@ public:
     std::optional<Pt> last_node_marker;
     /// ORBIT draws its own title and INERTIAL caption (the apollo skin paints them on the bezel instead).
     bool panel_titles = true;
-    /// The skin drawn now: "classic", "apollo" or "steampunk". The context reply's skin (simulator) wins over [display] skin.
+    /// The skin drawn now: "classic", "apollo", "steampunk", "ksp1" or "ksp2". The context reply's skin (simulator) wins over [display] skin.
     const std::string& skin() const { return skin_; }
     static bool known_skin(const std::string& name);
     /// Switch at once (logged); unknown names are ignored. The next draw re-applies the context or config choice.
     void set_skin(const std::string& name, const char* why = "request");
-    /// Skin chosen on the keyboard (Ctrl+1 classic, Ctrl+2 apollo, Ctrl+3 steampunk): wins over the context reply and [display] skin.
+    /// Skin chosen on the keyboard (Ctrl+1 classic, Ctrl+2 apollo, Ctrl+3 steampunk, Ctrl+4 ksp1, Ctrl+5 ksp2): wins over the context reply and [display] skin.
     /// "" returns to those. Unknown names are ignored.
     void choose_skin(const std::string& name);
     /// ORBIT's body and apsis labels go through this when set (the apollo skin paints them in its lettering).
@@ -113,6 +114,7 @@ public:
     bool orbit_crt = false;
     Color orbit_ink(Color original) const;
     ApolloSkin* apollo() { return apollo_.get(); }
+    GameSkin* game_skin() { return skin_=="ksp1"?ksp1_.get():skin_=="ksp2"?ksp2_.get():nullptr; }
     int maneuver_builds = 0;
 
 private:
@@ -169,6 +171,7 @@ private:
     std::unique_ptr<OrbitArt> orbit_art_;
     std::unique_ptr<ApolloSkin> apollo_;
     std::unique_ptr<ApolloSkin> steampunk_;
+    std::unique_ptr<GameSkin> ksp1_, ksp2_;
 };
 
 }  // namespace ksphmi

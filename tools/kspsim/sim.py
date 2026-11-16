@@ -13,7 +13,7 @@ log = logging.getLogger("kspsim")
 
 EDITOR_MODES = ("construction", "actions", "crew", "cargo")
 
-SKINS = ("", "classic", "apollo", "steampunk")  # "" sends no skin field (as KSPSerialIO): the HMI's config decides
+SKINS = ("", "classic", "apollo", "steampunk", "ksp1", "ksp2")  # "" sends no skin field (as KSPSerialIO): the HMI's config decides
 SCENES = ("flight", "space_center", "vab", "sph", "mission_control", "astronaut_complex",
           "research", "administration", "tracking_station", "closed")  # closed = KSP not running: kRPC ports closed, no telemetry
 
@@ -301,7 +301,7 @@ class Simulator:
             return ships.report_text(self.ship_revision, ships.editor_sample(sample, self.editor_mode, self.editor_group)) if sample else ""
 
     def set_skin(self, skin: str) -> None:
-        """Ask the Raspberry Pi HMI for a look ("classic", "apollo", "steampunk"), or "" to leave it to its config."""
+        """Ask the Raspberry Pi HMI for a look ("classic", "apollo", "steampunk", "ksp1", "ksp2"), or "" to leave it to its config."""
         assert skin in SKINS
         with self.lock:
             changed, self.skin = skin != self.skin, skin

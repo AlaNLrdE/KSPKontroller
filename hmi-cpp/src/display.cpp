@@ -1,4 +1,5 @@
 #include "display.hpp"
+#include "gameskin.hpp"
 #include "orbitart.hpp"
 #include "resource_ui.hpp"
 
@@ -128,7 +129,7 @@ Display::Display(const Config& cfg, Canvas& canvas)
     log::info("ksphmi.display", "skin: " + skin_ + " (config)");
 }
 
-bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo" || name == "steampunk"; }
+bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo" || name == "steampunk" || name == "ksp1" || name == "ksp2"; }
 
 void Display::set_skin(const std::string& name, const char* why) {
     if (!known_skin(name) || name == skin_) return;
@@ -342,7 +343,12 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     if (!chosen_skin_.empty()) set_skin(chosen_skin_, "keyboard");
     else if (known_skin(snap.skin)) set_skin(snap.skin, "context");
     else set_skin(config_skin_, "config");
-    navball_.flight_deck = skin_ == "apollo";
+    navball_.flight_deck = skin_ == "apollo" || skin_ == "ksp2";
+    if (skin_ == "ksp1" || skin_ == "ksp2") {
+        auto& skin=skin_=="ksp2"?ksp2_:ksp1_;
+        if(!skin)skin=std::make_unique<GameSkin>(*this,skin_=="ksp2");
+        skin->draw(snap,now);return;
+    }
     if (skin_ == "steampunk") {
         if (!steampunk_) steampunk_ = std::make_unique<ApolloSkin>(*this, cfg_, true);
         steampunk_->draw(snap, now);

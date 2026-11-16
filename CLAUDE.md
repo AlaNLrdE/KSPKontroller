@@ -238,6 +238,11 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   Verify committed asset bytes against their originals before pushing new art/fonts; text normalization can
   silently corrupt them even when a local renderer still reads the untouched working-copy files.
 
+- KSP1 Stock (ksp1 / Ctrl+4) and KSP2 Redux (ksp2 / Ctrl+5) are independent of telemetry source.
+  Preserve native resource names and empty/unknown/absent semantics in every skin; key static resource art
+  by names/page, not amounts. Keep flight controls out of facility/editor screens. Match approved materials,
+  fonts and instrument housings with actual renderer captures across the full scene matrix.
+
 - Review theme changes across waiting/no-vessel, every facility, all editor modes and flight/stale states.
   Shared frame artwork does not automatically restyle local illustrations/cards. Changing lamp legends must
   not be baked into static art; material changes must preserve red/green warning and reachability semantics.

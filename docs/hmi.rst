@@ -88,8 +88,8 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
        flight camera)
    * - F5 / F9 (held 1 s)
      - quicksave / quickload
-   * - Ctrl+1 / Ctrl+2 / Ctrl+3
-     - classic / apollo / steampunk skin until the HMI exits, over the context reply and ``[display] skin``
+   * - Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4 / Ctrl+5
+     - classic / apollo / steampunk / ksp1 / ksp2 skin until the HMI exits, over the context reply and ``[display] skin``
    * - Ctrl+0
      - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
    * - Esc
@@ -616,7 +616,43 @@ SDL2 itself (no new runtime image library). Static art is baked once per size/sc
 normal telemetry frames draw the live values and plots only. Font atlases are keyed by
 family and size. See ``assets/steampunk/README.md`` for provenance and demo capture commands.
 
-``[display] skin`` selects ``apollo`` (shipped default), ``steampunk`` or ``classic``.
+``[display] skin`` selects ``apollo`` (shipped default), ``steampunk``, ``classic``,
+``ksp1`` or ``ksp2``.
+
+KSP1 Stock and KSP2 Redux themes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Approved concepts live in ``docs/design/ksp-stock-themes``. ``ksp1`` (Ctrl+4) uses
+moulded grey frames, raised/inset controls, green condensed figures, a live mechanical
+altitude odometer, resource pictograms and a generated silver/graphite NavBall bezel.
+``ksp2`` (Ctrl+5) uses dark navy cards, blue-violet title bands, technical Chakra Petch
+lettering, cyan units, green active states and a segmented dark NavBall ring.
+Both retain the current orbital physics and show the shared body catalog in colour.
+KSP1 uses the complete stock-style degree grid; KSP2 keeps the pole-safe local pitch
+ladder and twelve meridians around the zenith.
+
+The full scene families use their own chrome: flight metrics/resources/history/staging,
+link search and no-vessel state, all eight facility checklists, VAB construction, actions,
+crew and cargo. Flight-only instruments are absent outside flight. Editor mode strips
+show the game-selected mode; the existing keyboard and report service remain unchanged.
+The construction report preserves the actual app and mission delta-v, destination
+selection, TWR warning thresholds, named stage events and capacity/cost figures.
+
+Skin and game source are independent: either skin works with KSP1 kRPC or Redux UDP.
+Resource lists use actual Redux names instead of inventing LiquidFuel/Oxidizer slots;
+more than six native resources page at eight-second intervals. Missing, absent and empty
+resources remain distinct. Static cache identity includes resource names/page, scene,
+editor mode and display size, but never live values or selected action-group contents.
+Typeface and orbit hooks are restored on exit, including exceptional exits.
+
+Bundled OFL fonts and generated source/runtime bezels live under ``assets/fonts``,
+``assets/ksp1`` and ``assets/ksp2``; exact production prompts are recorded there. Canvas
+builds the panel chrome once per cache key. Normal frames update live values/plots and
+navigation geometry. Renderer tests capture both skins in every scene family and check
+cache reuse, native resource names, keyboard shortcuts and NavBall-only animation.
+Apollo Flight Deck
+^^^^^^^^^^^^^^^^^^
+
 Apollo Flight Deck (approved 2026-11-16) implements proposal A's light painted aluminum
 mounting plates, steel fasteners, charcoal inset modules, smoked instrument windows,
 Barlow Condensed headings and green seven-segment readings, combined with proposal B's

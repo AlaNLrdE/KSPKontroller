@@ -79,6 +79,7 @@ add_library(ksphmi_ui STATIC
   src/display.cpp
   src/fbdev.cpp
   src/flightdeck.cpp
+  src/gameskin.cpp
   src/navball.cpp
   src/orbitart.cpp
   src/png.cpp
