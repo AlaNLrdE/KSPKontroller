@@ -889,7 +889,13 @@ deploy_hmi() {
   local tar_opts=()
   [ "$(uname -s)" = Darwin ] && tar_opts=(--no-xattrs --no-mac-metadata)
   (cd "$HMI_DIR" && COPYFILE_DISABLE=1 tar ${tar_opts[@]+"${tar_opts[@]}"} -cf - CMakeLists.txt config.toml include src tests systemd assets) |
-    hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -xf -
+    # Extracted files get the current time (-m), then unchanged ones get their old time back: a changed source is
+    # always newer than the Pi's objects, even when another machine deployed (and built) in between with a later
+    # clock time than this checkout's edit; unchanged sources keep the build incremental.
+    hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -mxf -
+      (cd cpp.new && find . -type f) | while IFS= read -r f; do
+        if [ -f "cpp/$f" ] && cmp -s "cpp.new/$f" "cpp/$f"; then touch -r "cpp/$f" "cpp.new/$f"; fi
+      done
       find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
       mv cpp.new/* cpp/; rmdir cpp.new'
 
