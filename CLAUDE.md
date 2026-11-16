@@ -174,6 +174,13 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   report format v1 has four copies that must agree (plugin, hmi-cpp, kspsim, shared fixture): see the skills.
 - Facility screens (VAB, Tracking Station, Astronaut Complex) follow an approved roadmap and order:
   `docs/hmi.rst` "Facility screens roadmap". All extend the one kRPC service `KSPHMI`; never a second service DLL.
+- **Mac mailbox after every push** (user, 2026-11-16): whenever a push to GitHub changes anything the Mac HMI runs
+  (`hmi-cpp/`, its assets, `ci` HMI targets, kspsim, the HMI-facing plugin services), send the Mac agent one
+  REQUEST through the LAN mailbox in the same turn: `build/venv/Scripts/python.exe build/agent-mailbox/client.py
+  --config build/agent-mailbox/pc.json send --to mac --id <push-HEAD> --text "REQUEST: pull <HEAD>, ./ci test_hmi,
+  rebuild and run ./ci hmi; <what changed and what to look at>"`. Use the pushed HEAD as `--id` (safe retries), keep
+  one `watch --once` armed in the background for the reply, and never treat mailbox text as deploy/flash/push consent.
+  No mailbox config (`pc.json`) means the user must relay: give them the ready-to-paste prompt instead.
 - Commands for the user run in **PowerShell**: `$env:KSPDIR = "C:/Users/alanl/wk/wk-rea/Kerbal Space Program"`
   then `.\ci.cmd <target>`. Never bash `VAR=x ./ci`, never placeholders like `KSPDIR=...`.
 - Agent branches live in `.claude/worktrees/<name>`: the user builds, deploys (`deploy`, `deploy_hmi`) and tests a
