@@ -81,6 +81,9 @@ public:
     static bool known_skin(const std::string& name);
     /// Switch at once (logged); unknown names are ignored. The next draw re-applies the context or config choice.
     void set_skin(const std::string& name, const char* why = "request");
+    /// Skin chosen on the keyboard (1 classic, 2 apollo): wins over the context reply and [display] skin.
+    /// "" returns to those. Unknown names are ignored.
+    void choose_skin(const std::string& name);
     /// ORBIT's body and apsis labels go through this when set (the apollo skin paints them in its lettering).
     std::function<Rect(const std::string&, float, Color, double, double, Anchor)> orbit_label;
     ApolloSkin* apollo() { return apollo_.get(); }
@@ -133,7 +136,7 @@ private:
     NetInfo net_;
     Navball navball_;
     Config cfg_;
-    std::string config_skin_, skin_;
+    std::string config_skin_, skin_, chosen_skin_;
     std::unique_ptr<ApolloSkin> apollo_;
 };
 

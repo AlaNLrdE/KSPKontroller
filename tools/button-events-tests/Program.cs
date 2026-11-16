@@ -64,6 +64,18 @@ class Program
         EditorNavigation.Consume(new[] { new ButtonEvents.Press { Bit = 7, Received = int.MaxValue - 5 } }, int.MinValue + 5);
         Check(steps.Count == 3, "editor navigation survives TickCount rollover");
         EditorNavigation.StepRequested -= navigate;
-        Console.WriteLine("PASS button events: stage pulse, SAS/RCS transitions, baseline, timestamps, reset, concurrency");
+        // HMI keyboard axes: clamped, expire after the timeout, and never override a deflected board axis
+        HmiKeyboard.SetAxes(100f, -1f, 0f, 2f, 0f, float.NaN, 0.5f);
+        Check(HmiKeyboard.Axis(HmiKeyboard.Pitch, 100.2f) == -1f && HmiKeyboard.Axis(HmiKeyboard.Roll, 100.2f) == 1f &&
+            HmiKeyboard.Axis(HmiKeyboard.Y, 100.2f) == 0f && HmiKeyboard.Axis(HmiKeyboard.Z, 100.2f) == 0.5f,
+            "keyboard axes are clamped to -1..1 and NaN reads as zero");
+        Check(HmiKeyboard.Axis(HmiKeyboard.Pitch, 100f + HmiKeyboard.Timeout + 0.01f) == 0f, "stale keyboard axes read as zero");
+        Check(HmiKeyboard.Axis(HmiKeyboard.Pitch, 99f) == 0f, "keyboard axes from the future read as zero");
+        Check(HmiKeyboard.Merge(0.3f, true, -1f) == 0.3f, "a deflected board axis wins over a held key");
+        Check(HmiKeyboard.Merge(0.3f, false, -1f) == -1f, "a held key sets an axis the board leaves neutral");
+        Check(HmiKeyboard.Merge(0.3f, false, 0f) == 0.3f, "no key leaves the axis as it was");
+        HmiKeyboard.Clear();
+        Check(HmiKeyboard.Axis(HmiKeyboard.Pitch, 100.1f) == 0f, "Clear releases every axis");
+        Console.WriteLine("PASS button events: stage pulse, SAS/RCS transitions, baseline, timestamps, reset, concurrency, HMI keyboard axes");
     }
 }

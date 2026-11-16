@@ -12,10 +12,18 @@ namespace KSPSerialIO
             foreach (ButtonEvents.Press press in presses)
             {
                 int age = unchecked(now - press.Received);
-                if (age < 0 || age > 1000 || (press.Bit != 6 && press.Bit != 7)) continue;
-                Action<int> handler = StepRequested;
-                if (handler != null) handler(press.Bit == 7 ? 1 : -1);
+                if (age < 0 || age > 1000) continue;
+                Press(press.Bit);
             }
+        }
+
+        /// <summary>One SAS (bit 7, next screen) or RCS (bit 6, previous) press on Unity's main thread: a board
+        /// press from Consume, or the HMI keyboard through the KSPHMI.Press kRPC procedure. Other bits are ignored.</summary>
+        public static void Press(int bit)
+        {
+            if (bit != 6 && bit != 7) return;
+            Action<int> handler = StepRequested;
+            if (handler != null) handler(bit == 7 ? 1 : -1);
         }
     }
 }

@@ -12,11 +12,29 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
+#include "keyboard.hpp"
 #include "krpc.hpp"
 #include "model.hpp"
 
 namespace ksphmi {
+
+/// KSP's own Shift / Ctrl throttle rate: the whole range in two seconds (FlightInputHandler).
+constexpr double KEY_THROTTLE_RATE = 0.5;
+
+/// Send one keyboard command the way the game's own key acts. In flight (vessel != 0): SAS, RCS, gear, lights,
+/// brakes, abort, staging, action groups and SAS modes through kRPC Control (one-shot changes, like the keys and
+/// the board's edge toggles); throttle full / cut through KSPHMIFlight.SetThrottle (KSPSerialIO.Hmi.dll: a
+/// one-shot change, so the PC's own Shift / Ctrl keep working); time warp and quicksave / quickload through
+/// SpaceCenter. In the VAB only SAS / RCS, through KSPHMI.Press, the board's editor navigation (SAS next screen,
+/// RCS previous). Any other scene ignores keys. Returns what happened, for the log. Errors propagate.
+std::string send_command(krpc::Client& c, const Command& cmd, uint64_t vessel, const std::string& scene);
+
+/// The held keys, in flight: KSPHMIFlight.SetAxes with the six axes when `axes` (every tick while one is held, then
+/// once with zeros; the plugin drops values older than 0.5 s and the board's joystick wins over them) and
+/// KSPHMIFlight.NudgeThrottle(direction * KEY_THROTTLE_RATE * dt) while Shift / Ctrl are held.
+void send_held(krpc::Client& c, const Held& h, double throttle_dt, bool axes);
 
 class Source {
 public:
@@ -25,14 +43,21 @@ public:
     void stop();
     std::shared_ptr<const Snapshot> latest() const;
     const char* name() const { return name_; }
+    /// A keyboard command from the display thread. Never blocks: a source with a game link queues it for its own
+    /// thread, the others only log it.
+    virtual void command(const Command& c);
+    /// The held keys now (display thread, on every change). Ignored without a game link.
+    virtual void hold(const Held&) {}
 
 protected:
     explicit Source(const char* name);
     virtual void run() = 0;
     virtual void publish(Snapshot snap);
     virtual void on_stop() {}
-    /// Sleep up to `seconds`; true when stop() was called.
+    /// Sleep up to `seconds` or until wake(); true when stop() was called.
     bool wait(double seconds);
+    /// End the current wait() early (a queued keyboard press), without stopping.
+    void wake();
     bool stopping() const { return stop_; }
     /// Ask the thread to finish without joining it (callable from the thread itself).
     void request_stop();
@@ -44,6 +69,7 @@ private:
     std::condition_variable cv_;
     std::shared_ptr<const Snapshot> latest_;
     std::atomic<bool> stop_{false};
+    bool wake_ = false;  ///< guarded by mutex_
     std::thread thread_;
 };
 
@@ -88,6 +114,8 @@ public:
     explicit KrpcSource(Options options);
     ~KrpcSource() override;
     std::string address() const;
+    void command(const Command& c) override;
+    void hold(const Held& h) override;
 
 protected:
     void run() override;
@@ -98,6 +126,9 @@ protected:
     virtual void session(krpc::Client& conn);
     virtual std::string discover_server();
     void follow(krpc::Client& conn, uint64_t vessel);
+    /// Send the queued keyboard commands and the held keys (telemetry thread). An RpcError is logged and drops
+    /// that command only; a failing held-key call is logged once per distinct error.
+    void send_inputs(krpc::Client& conn, uint64_t vessel, const std::string& scene);
 
     Options options_;
     double period_;
@@ -110,6 +141,12 @@ private:
     std::string context_skin_;
     double context_at_ = -1e9;
     ShipReportPoller ship_;
+    std::mutex input_mutex_;
+    std::vector<Command> commands_;  ///< keyboard commands waiting for the telemetry thread (input_mutex_)
+    Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)
+    Held sent_;                      ///< held keys last sent (telemetry thread)
+    double nudged_at_ = -1;          ///< last NudgeThrottle, -1 while no throttle key is held
+    std::string held_problem_;       ///< last held-key error logged
 };
 
 constexpr double KERBIN_MU = 3.5316e12;

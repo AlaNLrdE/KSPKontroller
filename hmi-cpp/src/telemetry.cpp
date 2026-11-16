@@ -57,9 +57,21 @@ void Source::publish(Snapshot snap) {
 
 bool Source::wait(double seconds) {
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait_for(lock, std::chrono::duration<double>(std::max(0.0, seconds)), [this] { return stop_.load(); });
+    cv_.wait_for(lock, std::chrono::duration<double>(std::max(0.0, seconds)), [this] { return stop_.load() || wake_; });
+    wake_ = false;
     return stop_;
 }
+
+void Source::wake() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wake_ = true;
+    }
+    cv_.notify_all();
+}
+
+void Source::command(const Command& c) { log::info(LOG, "key " + command_name(c) + " ignored: no game link (" + name_ + ")"); }
+
 
 void Source::run_guarded() {
     try {
@@ -508,6 +520,106 @@ private:
 
 }  // namespace
 
+namespace {
+
+constexpr int WARP_RAILS = 0, WARP_PHYSICS = 1;  // kRPC SpaceCenter.WarpMode (None = 2)
+constexpr int PHYSICS_WARP_MAX = 3;
+
+int get_int(Client& c, const Call& call) { return pb::dec_sint32(c.invoke(call).data); }
+
+/// Flip one boolean Control property ("SAS", "RCS", "Gear", "Lights"); "SAS on" / "SAS off".
+std::string toggle(Client& c, uint64_t control, const std::string& property) {
+    const bool on = get_bool(c, sc("Control_get_" + property, {obj(control)}));
+    c.invoke(sc("Control_set_" + property, {obj(control), pb::enc_bool(!on)}));
+    return property + (on ? " off" : " on");
+}
+
+/// KSP's , . / keys: physics warp while it is the active mode or rails warp is not allowed here (atmosphere, low
+/// altitude), rails warp otherwise. Rails 0 / physics 0 is 1x. kRPC's RailsWarpFactor setter also cuts the
+/// throttle, so physics warp is never stopped through it.
+std::string warp(Client& c, Command::Kind kind) {
+    const int mode = get_int(c, sc("get_WarpMode"));
+    const int rails = get_int(c, sc("get_RailsWarpFactor"));
+    const int physics = get_int(c, sc("get_PhysicsWarpFactor"));
+    auto set = [&](bool on_rails, int factor) {
+        c.invoke(sc(on_rails ? "set_RailsWarpFactor" : "set_PhysicsWarpFactor", {pb::enc_sint32(factor)}));
+        return fmt::str("time warp %s %d", on_rails ? "rails" : "physics", factor);
+    };
+    if (kind == Command::WarpStop) {
+        if (mode == WARP_PHYSICS) return set(false, 0);
+        if (mode == WARP_RAILS && rails > 0) return set(true, 0);
+        return "time warp already 1x";
+    }
+    if (kind == Command::WarpDown) {
+        if (mode == WARP_PHYSICS && physics > 0) return set(false, physics - 1);
+        if (mode == WARP_RAILS && rails > 0) return set(true, rails - 1);
+        return "time warp already 1x";
+    }
+    if (mode == WARP_PHYSICS && physics > 0) return set(false, std::min(PHYSICS_WARP_MAX, physics + 1));
+    if (get_int(c, sc("get_MaximumRailsWarpFactor")) > 0) return set(true, rails + 1);  // kRPC clamps to the maximum
+    return set(false, std::min(PHYSICS_WARP_MAX, physics + 1));
+}
+
+}  // namespace
+
+std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const std::string& scene) {
+    const std::string name = command_name(cmd);
+    if (!vessel) {
+        const bool board_button = cmd.kind == Command::ToggleSas || cmd.kind == Command::ToggleRcs;
+        if (scene == "vab" && board_button) {
+            const bool sas = cmd.kind == Command::ToggleSas;
+            c.invoke(Call{"KSPHMI", "Press", {pb::enc_string(sas ? "SAS" : "RCS")}});
+            return std::string(sas ? "SAS" : "RCS") + " pressed in the VAB (" + (sas ? "next" : "previous") +
+                   " editor screen)";
+        }
+        return name + " ignored in scene '" + scene + "'";
+    }
+    auto control = [&] { return object(c, sc("Vessel_get_Control", {obj(vessel)})); };
+    switch (cmd.kind) {
+        case Command::ToggleSas: return toggle(c, control(), "SAS");
+        case Command::ToggleRcs: return toggle(c, control(), "RCS");
+        case Command::ToggleGear: return toggle(c, control(), "Gear");
+        case Command::ToggleLights: return toggle(c, control(), "Lights");
+        case Command::SetBrakes:
+            c.invoke(sc("Control_set_Brakes", {obj(control()), pb::enc_bool(cmd.value != 0)}));
+            return name;
+        case Command::Abort:
+            c.invoke(sc("Control_set_Abort", {obj(control()), pb::enc_bool(true)}));
+            return name;
+        case Command::Stage:
+            c.invoke(sc("Control_ActivateNextStage", {obj(control())}));
+            return name;
+        case Command::ActionGroup:
+            c.invoke(sc("Control_ToggleActionGroup", {obj(control()), pb::enc_uint32(uint32_t(cmd.value))}));
+            return name;
+        case Command::SasMode:
+            c.invoke(sc("Control_set_SASMode", {obj(control()), pb::enc_sint32(cmd.value)}));
+            return name;
+        case Command::ThrottleFull:
+        case Command::ThrottleCut:
+            c.invoke(Call{"KSPHMIFlight", "SetThrottle", {pb::enc_float(cmd.kind == Command::ThrottleFull ? 1.f : 0.f)}});
+            return name;
+        case Command::WarpUp:
+        case Command::WarpDown:
+        case Command::WarpStop: return warp(c, cmd.kind);
+        case Command::Quicksave:
+            c.invoke(sc("Quicksave"));
+            return name;
+        case Command::Quickload:
+            c.invoke(sc("Quickload"));
+            return name;
+    }
+    return name + " unknown";
+}
+
+void send_held(Client& c, const Held& h, double throttle_dt, bool axes) {
+    if (axes)
+        c.invoke(Call{"KSPHMIFlight", "SetAxes", {pb::enc_float(h.pitch), pb::enc_float(h.yaw), pb::enc_float(h.roll),
+                                                   pb::enc_float(h.x), pb::enc_float(h.y), pb::enc_float(h.z)}});
+    if (h.throttle && throttle_dt > 0)
+        c.invoke(Call{"KSPHMIFlight", "NudgeThrottle", {pb::enc_float(float(h.throttle * KEY_THROTTLE_RATE * throttle_dt))}});
+}
+
 // ================================================================================================ ShipReportPoller
 void ShipReportPoller::reset() {
     report_.reset();
@@ -605,6 +717,64 @@ void KrpcSource::publish(Snapshot snap) {
     Source::publish(std::move(snap));
 }
 
+void KrpcSource::command(const Command& c) {
+    {
+        std::lock_guard<std::mutex> lock(input_mutex_);
+        if (commands_.size() >= 16) return;  // hammered keys must not build a backlog
+        commands_.push_back(c);
+    }
+    wake();
+}
+
+void KrpcSource::hold(const Held& h) {
+    {
+        std::lock_guard<std::mutex> lock(input_mutex_);
+        if (h == held_) return;
+        held_ = h;
+    }
+    wake();
+}
+
+void KrpcSource::send_inputs(Client& conn, uint64_t vessel, const std::string& scene) {
+    std::vector<Command> todo;
+    Held held;
+    {
+        std::lock_guard<std::mutex> lock(input_mutex_);
+        todo.swap(commands_);
+        held = held_;
+    }
+    for (const Command& cmd : todo) {
+        try {
+            log::info(LOG, "key: " + send_command(conn, cmd, vessel, scene));
+        } catch (const RpcError& e) {  // old KSPSerialIO.Hmi.dll, scene changed, vessel gone, staging locked
+            log::warning(LOG, "key " + command_name(cmd) + " not applied: " + short_error(e));
+        }
+    }
+    if (!vessel) {  // held keys act in flight only; the plugin's 0.5 s timeout releases what was sent before
+        sent_ = Held{};
+        nudged_at_ = -1;
+        return;
+    }
+    const bool axes = held.axes() || sent_.axes();  // while held, then once more with zeros
+    if (!axes && !held.throttle) {
+        nudged_at_ = -1;
+        return;
+    }
+    const double now = monotonic();
+    const double dt = !held.throttle ? 0 : nudged_at_ < 0 ? period_ : std::min(0.25, now - nudged_at_);
+    try {
+        send_held(conn, held, dt, axes);
+        if (!held_problem_.empty()) log::info(LOG, "held keys applied again");
+        held_problem_.clear();
+    } catch (const RpcError& e) {  // no KSPHMIFlight service: KSPSerialIO.Hmi.dll older than 0.19.6.0
+        const std::string why = short_error(e);
+        if (why != held_problem_) log::warning(LOG, "held keys not applied: " + why);
+        held_problem_ = why;
+    }
+    sent_ = held;
+    nudged_at_ = held.throttle ? now : -1;
+}
+
 void KrpcSource::on_stop() {
     std::lock_guard<std::mutex> lock(client_mutex_);
     if (active_) active_->close();
@@ -694,6 +864,7 @@ void KrpcSource::session(Client& conn) {
             context_skin_ = ctx.skin;
             context_at_ = monotonic();
             // The VAB shows the editor ship report when KSPSerialIO.Hmi.dll serves it; polled about twice a second.
+            send_inputs(conn, 0, s.scene);
             const bool vab = s.scene == "vab";
             if (vab) s.ship = ship_.poll(conn, monotonic());
             else ship_.reset();
@@ -766,6 +937,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     while (!stopping()) {
         // Also a liveness probe: throws when the socket is gone (0 = left flight).
         if (object(c, sc("get_ActiveVessel")) != vessel) return;
+        send_inputs(c, vessel, "flight");
         if (stream_object(c, streams.id("body")) != body) return;  // sphere of influence change: new frames
         Snapshot s;
         s.state = State::Flight;

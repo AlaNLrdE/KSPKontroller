@@ -7,6 +7,7 @@
   <ItemGroup>
     <Compile Include="../../KSPSerialIO/KSPSerialIO/ButtonEvents.cs" Link="ButtonEvents.cs" />
     <Compile Include="../../KSPSerialIO/KSPSerialIO/EditorNavigation.cs" Link="EditorNavigation.cs" />
+    <Compile Include="../../KSPSerialIO/KSPSerialIO/HmiKeyboard.cs" Link="HmiKeyboard.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 </Project>

@@ -20,6 +20,7 @@
 #include "fake_krpc.hpp"
 #include "fmt.hpp"
 #include "gauges.hpp"
+#include "keyboard.hpp"
 #include "krpc.hpp"
 #include "log.hpp"
 #include "model.hpp"
@@ -455,7 +456,7 @@ TEST(config_layers_and_environment) {
     CHECK(!dir.empty());
     std::string app = dir, local = app + "/local.toml";
     std::ofstream(app + "/config.toml") << "source = \"krpc\"  # comment\n[krpc]\naddress = 'pc'\nrate_hz = 10\n"
-                                           "[display]\nfps = 10\nfullscreen = true\n[format]\nday_hours = 6\n";
+                                           "[display]\nfps = 10\nlayer_cache = \"on\"\n[format]\nday_hours = 6\n";
     std::ofstream(local) << "[display]\nfps = 5\n";
     check::set_env("KSPHMI_APP_DIR", app);
     check::set_env("KSPHMI_LOCAL_CONFIG", local);
@@ -465,7 +466,7 @@ TEST(config_layers_and_environment) {
     check::unset_env("KSPHMI_LOCAL_CONFIG");
     check::unset_env("KSPHMI_KRPC_ADDRESS");
     CHECK_EQ(cfg.display.fps, 5);
-    CHECK(cfg.display.fullscreen);  // untouched keys keep config.toml / defaults
+    CHECK_EQ(cfg.display.layer_cache, "on");  // untouched keys keep config.toml / defaults
     CHECK_EQ(cfg.krpc.address, "10.0.0.9");
     CHECK_EQ(cfg.krpc.rpc_port, 50000);
     CHECK_EQ(cfg.loaded.size(), size_t(2));
@@ -478,7 +479,7 @@ TEST(config_layers_and_environment) {
 }
 
 TEST(config_integer_fields_reject_invalid_conversions) {
-    for (const char* key : {"display.fps", "display.width", "display.height", "krpc.rpc_port", "krpc.stream_port"}) {
+    for (const char* key : {"display.fps", "krpc.rpc_port", "krpc.stream_port"}) {
         for (const char* value : {"1e100", "-1e100", "inf", "-inf", "nan", "1.5", "-0.5",
                                  "2147483648", "-2147483649"}) {
             Config cfg;
@@ -495,8 +496,8 @@ TEST(config_integer_fields_reject_invalid_conversions) {
     }
     for (int value : {std::numeric_limits<int>::min(), -1, 0, 60, std::numeric_limits<int>::max()}) {
         Config cfg;
-        apply_toml(cfg, parse_toml("[display]\nwidth = " + std::to_string(value)));
-        CHECK_EQ(cfg.display.width, value);
+        apply_toml(cfg, parse_toml("[krpc]\nrpc_port = " + std::to_string(value)));
+        CHECK_EQ(cfg.krpc.rpc_port, value);
     }
     Config cfg;
     apply_toml(cfg, parse_toml("[display]\nfps = 60.0"));
@@ -651,6 +652,168 @@ TEST(krpc_client_calls_errors_nulls_and_streams) {
     }
     CHECK(rpc_error);
     c.remove_stream(ut);
+}
+
+TEST(keyboard_maps_ksp_default_flight_keys) {
+    Keyboard kb;
+    auto key = [](Key k) { return KeyEvent{k}; };
+    auto digit = [](int d, bool ctrl = false, bool alt = false) { return KeyEvent{Key::Digit, d, ctrl, alt}; };
+    auto only = [](const KeyResult& r, Command c) { return r.commands.size() == 1 && r.commands[0] == c; };
+    // One-shot keys, as KSP binds them
+    CHECK(only(kb.down(key(Key::T), 0), Command{Command::ToggleSas}));
+    CHECK(kb.down(key(Key::T), 0).commands.empty());  // still held: auto-repeat is no new press
+    kb.up(key(Key::T), 0);
+    CHECK(only(kb.down(key(Key::R), 0), Command{Command::ToggleRcs}));
+    CHECK(only(kb.down(key(Key::Z), 0), Command{Command::ThrottleFull}));
+    CHECK(only(kb.down(key(Key::X), 0), Command{Command::ThrottleCut}));
+    CHECK(only(kb.down(key(Key::Space), 0), Command{Command::Stage}));
+    CHECK(only(kb.down(key(Key::Backspace), 0), Command{Command::Abort}));
+    CHECK(only(kb.down(key(Key::Period), 0), Command{Command::WarpUp}));
+    CHECK(only(kb.down(key(Key::Slash), 0), Command{Command::WarpStop}));
+    CHECK(only(kb.down(key(Key::F5), 0), Command{Command::Quicksave}));
+    // Held B = brakes while held; held F = SAS inverted while held
+    CHECK(only(kb.down(key(Key::B), 0), Command{Command::SetBrakes, 1}));
+    CHECK(only(kb.up(key(Key::B), 0), Command{Command::SetBrakes, 0}));
+    CHECK(only(kb.down(key(Key::F), 0), Command{Command::ToggleSas}));
+    CHECK(only(kb.up(key(Key::F), 0), Command{Command::ToggleSas}));
+    // Digits: action groups (0 = group 10); Alt+digit SAS modes in the HMI button order; Ctrl+1/2 skins
+    CHECK(only(kb.down(digit(1), 0), Command{Command::ActionGroup, 1}));
+    CHECK(only(kb.down(digit(0), 0), Command{Command::ActionGroup, 0}));
+    CHECK_EQ(command_name(Command{Command::ActionGroup, 0}), "action group 10");
+    CHECK(only(kb.down(digit(2, false, true), 0), Command{Command::SasMode, 2}));  // PRO = kRPC Prograde
+    CHECK(only(kb.down(digit(0, false, true), 0), Command{Command::SasMode, 1}));  // NODE = kRPC Maneuver
+    CHECK(only(kb.down(digit(6, false, true), 0), Command{Command::SasMode, 6}));  // R+ = kRPC Radial
+    CHECK_EQ(kb.down(digit(1, true), 0).skin, "classic");
+    CHECK_EQ(kb.down(digit(2, true), 0).skin, "apollo");
+    CHECK(kb.down(digit(2, true), 0).commands.empty());
+    CHECK(kb.down(key(Key::Escape), 0).quit);
+    CHECK(kb.down(key(Key::Q), 0).commands.empty() && !kb.down(key(Key::Q), 0).quit);  // Q is roll left, not quit
+    kb.release_all();
+    // Axes with KSP's FlightCtrlState signs
+    kb.down(key(Key::W), 0), kb.down(key(Key::D), 0), kb.down(key(Key::E), 0);
+    kb.down(key(Key::L), 0), kb.down(key(Key::K), 0), kb.down(key(Key::H), 0);
+    Held h = kb.held(0);
+    CHECK_EQ(h.pitch, -1.f);
+    CHECK_EQ(h.yaw, 1.f);
+    CHECK_EQ(h.roll, 1.f);
+    CHECK_EQ(h.x, -1.f);  // L = translate right
+    CHECK_EQ(h.y, 1.f);   // K = translate up (I is down)
+    CHECK_EQ(h.z, -1.f);  // H = translate forward
+    kb.down(key(Key::S), 0);
+    CHECK_EQ(kb.held(0).pitch, 0.f);  // W and S cancel, as in KSP
+    CHECK(kb.release_all().commands.empty());
+    CHECK(!kb.held(0).axes());
+    // Throttle ramp: Shift at once, Ctrl after a short delay, never for a Ctrl+digit chord
+    kb.down(key(Key::LeftShift), 0);
+    CHECK_EQ(kb.held(0).throttle, 1);
+    kb.up(key(Key::LeftShift), 0);
+    kb.down(key(Key::LeftCtrl), 10);
+    CHECK_EQ(kb.held(10.1).throttle, 0);
+    CHECK_EQ(kb.held(10 + Keyboard::CTRL_RAMP_DELAY).throttle, -1);
+    kb.up(key(Key::LeftCtrl), 11);
+    kb.down(key(Key::LeftCtrl), 20);
+    kb.down(digit(1, true), 20.05);
+    CHECK_EQ(kb.held(25).throttle, 0);
+    kb.up(key(Key::LeftCtrl), 25);
+    // F9 quickloads only after being held for a second, once
+    kb.down(key(Key::F9), 30);
+    CHECK(kb.tick(30.5).commands.empty());
+    CHECK(only(kb.tick(31), Command{Command::Quickload}));
+    CHECK(kb.tick(32).commands.empty());
+    kb.up(key(Key::F9), 32);
+    kb.down(key(Key::F9), 40);
+    kb.up(key(Key::F9), 40.3);
+    CHECK(kb.tick(42).commands.empty());
+    // Losing focus releases held brakes and SAS hold
+    kb.down(key(Key::B), 50), kb.down(key(Key::F), 50);
+    CHECK_EQ(kb.release_all().commands.size(), size_t(2));
+}
+
+TEST(keyboard_commands_reach_krpc_like_the_game_keys) {
+    std::mutex m;
+    std::vector<std::string> calls;
+    std::map<std::string, std::string> last_args;  // procedure -> encoded arguments after the object
+    bool sas = true, rcs = false, gear = true;
+    int warp_mode = 2, rails = 0, physics = 0, max_rails = 7;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        std::lock_guard<std::mutex> lock(m);
+        calls.push_back(proc);
+        std::string rest;
+        for (size_t i = proc.rfind("Control_", 0) == 0 ? 1 : 0; i < args.size(); ++i) rest += args[i];
+        last_args[proc] = rest;
+        if (proc == "Vessel_get_Control") return {pb::enc_object(42)};
+        if (proc == "Control_get_SAS") return {pb::enc_bool(sas)};
+        if (proc == "Control_get_RCS") return {pb::enc_bool(rcs)};
+        if (proc == "Control_get_Gear") return {pb::enc_bool(gear)};
+        if (proc == "Control_set_SAS") return sas = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "Control_set_RCS") return rcs = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "Control_set_Gear") return gear = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "get_WarpMode") return {pb::enc_sint32(warp_mode)};
+        if (proc == "get_RailsWarpFactor") return {pb::enc_sint32(rails)};
+        if (proc == "get_PhysicsWarpFactor") return {pb::enc_sint32(physics)};
+        if (proc == "get_MaximumRailsWarpFactor") return {pb::enc_sint32(max_rails)};
+        if (proc == "set_RailsWarpFactor") return rails = pb::dec_sint32(args.at(0)), warp_mode = 0, FakeResult{""};
+        if (proc == "set_PhysicsWarpFactor") return physics = pb::dec_sint32(args.at(0)), warp_mode = 1, FakeResult{""};
+        for (const char* ok : {"Press", "SetThrottle", "SetAxes", "NudgeThrottle", "Control_set_Brakes",
+                               "Control_set_Abort", "Control_ActivateNextStage", "Control_ToggleActionGroup",
+                               "Control_set_SASMode", "Quicksave", "Quickload"})
+            if (proc == ok) return {""};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    auto args_of = [&](const std::string& proc) {
+        std::lock_guard<std::mutex> lock(m);
+        return last_args[proc];
+    };
+    // Flight: one-shot changes through kRPC Control, like the keys and the board's edge toggles
+    CHECK_EQ(send_command(c, {Command::ToggleSas}, 7, "flight"), "SAS off");
+    CHECK_EQ(send_command(c, {Command::ToggleRcs}, 7, "flight"), "RCS on");
+    CHECK_EQ(send_command(c, {Command::ToggleGear}, 7, "flight"), "Gear off");
+    CHECK(!sas && rcs && !gear);
+    send_command(c, {Command::SetBrakes, 1}, 7, "flight");
+    CHECK_EQ(args_of("Control_set_Brakes"), pb::enc_bool(true));
+    send_command(c, {Command::ActionGroup, 0}, 7, "flight");
+    CHECK_EQ(args_of("Control_ToggleActionGroup"), pb::enc_uint32(0));
+    send_command(c, {Command::SasMode, 6}, 7, "flight");
+    CHECK_EQ(args_of("Control_set_SASMode"), pb::enc_sint32(6));
+    CHECK_EQ(send_command(c, {Command::Stage}, 7, "flight"), "stage");
+    // Throttle keys go through the plugin (one-shot), never kRPC's latched Control.Throttle
+    send_command(c, {Command::ThrottleFull}, 7, "flight");
+    CHECK_EQ(args_of("SetThrottle"), pb::enc_float(1));
+    // Time warp: rails where allowed, physics otherwise; physics is stopped through its own factor
+    CHECK_EQ(send_command(c, {Command::WarpUp}, 7, "flight"), "time warp rails 1");
+    CHECK_EQ(send_command(c, {Command::WarpDown}, 7, "flight"), "time warp rails 0");
+    max_rails = 0, warp_mode = 2;
+    CHECK_EQ(send_command(c, {Command::WarpUp}, 7, "flight"), "time warp physics 1");
+    CHECK_EQ(send_command(c, {Command::WarpUp}, 7, "flight"), "time warp physics 2");
+    CHECK_EQ(send_command(c, {Command::WarpStop}, 7, "flight"), "time warp physics 0");
+    // Held keys: SetAxes with six floats, NudgeThrottle at KSP's rate
+    Held h;
+    h.pitch = -1, h.z = 1, h.throttle = -1;
+    send_held(c, h, 0.1, true);
+    CHECK_EQ(args_of("SetAxes"), pb::enc_float(-1) + pb::enc_float(0) + pb::enc_float(0) + pb::enc_float(0) +
+                                     pb::enc_float(0) + pb::enc_float(1));
+    CHECK_EQ(args_of("NudgeThrottle"), pb::enc_float(float(-KEY_THROTTLE_RATE * 0.1)));
+    // VAB: only SAS / RCS, through the board's editor navigation
+    CHECK_EQ(send_command(c, {Command::ToggleSas}, 0, "vab"), "SAS pressed in the VAB (next editor screen)");
+    CHECK_EQ(args_of("Press"), pb::enc_string("SAS"));
+    CHECK_EQ(send_command(c, {Command::ToggleRcs}, 0, "vab"), "RCS pressed in the VAB (previous editor screen)");
+    CHECK_EQ(args_of("Press"), pb::enc_string("RCS"));
+    // Elsewhere nothing reaches the game
+    {
+        std::lock_guard<std::mutex> lock(m);
+        calls.clear();
+    }
+    CHECK(send_command(c, {Command::Stage}, 0, "vab").find("ignored") != std::string::npos);
+    CHECK(send_command(c, {Command::ToggleSas}, 0, "spacecenter").find("ignored") != std::string::npos);
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK(calls.empty());
+    }
 }
 
 TEST(krpc_stream_disconnect_overrides_cached_value) {

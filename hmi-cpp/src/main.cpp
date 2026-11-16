@@ -21,6 +21,7 @@
 #include "display.hpp"
 #include "fbdev.hpp"
 #include "fmt.hpp"
+#include "keyboard.hpp"
 #include "log.hpp"
 #include "png.hpp"
 #include "splash.hpp"
@@ -193,6 +194,16 @@ public:
         return ok;
     }
 
+    /// Re-reads the renderer's pixel size after a window or display change; true when it differs.
+    bool refresh_size() {
+        if (!window_) return false;
+        int w = 0, h = 0;
+        if (SDL_GetRendererOutputSize(renderer_, &w, &h) != 0 || w <= 0 || h <= 0) return false;
+        if (w == w_ && h == h_) return false;
+        w_ = w, h_ = h;
+        return true;
+    }
+
     SDL_Renderer* renderer() const { return renderer_; }
     bool video() const { return video_; }
     bool accelerated() const { return accelerated_; }
@@ -220,8 +231,12 @@ private:
         const bool anchor = args.desktop && monitor != 0 && wslg && SDL_GetDisplayBounds(monitor, &bounds) == 0;
         const bool desktop_fill = args.desktop && monitor != 0 && !wslg;  // --desktop also sets windowed
         bool fullscreen = !args.desktop && cfg.display.fullscreen && !args.windowed;
-        Uint32 flags = 0;
-        if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
+        Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
+        if (fullscreen) {
+            flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+            SDL_DisplayMode mode;
+            if (SDL_GetDesktopDisplayMode(monitor, &mode) == 0) want_w = mode.w, want_h = mode.h;
+        }
         if (desktop_fill) {
             flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
             if (want_w <= 0 || want_h <= 0) want_w = 1280, want_h = 800;  // the window size before it fills
@@ -269,6 +284,32 @@ private:
     int w_ = 0, h_ = 0;
     std::string kind_;
 };
+
+/// SDL key event -> Key. Letters and digits by key code (the character on the user's layout, as KSP's own key
+/// bindings read them); , . / also by physical position, since some layouts need Shift for them.
+KeyEvent key_event(const SDL_KeyboardEvent& k) {
+    KeyEvent e;
+    e.ctrl = (k.keysym.mod & KMOD_CTRL) != 0;
+    e.alt = (k.keysym.mod & KMOD_ALT) != 0;
+    const SDL_Keycode s = k.keysym.sym;
+    const SDL_Scancode sc = k.keysym.scancode;
+    if (s >= SDLK_0 && s <= SDLK_9) return e.key = Key::Digit, e.digit = int(s - SDLK_0), e;
+    if (s >= SDLK_KP_1 && s <= SDLK_KP_9) return e.key = Key::Digit, e.digit = int(s - SDLK_KP_1) + 1, e;
+    if (s == SDLK_KP_0) return e.key = Key::Digit, e.digit = 0, e;
+    if (s == SDLK_COMMA || sc == SDL_SCANCODE_COMMA) return e.key = Key::Comma, e;
+    if (s == SDLK_PERIOD || sc == SDL_SCANCODE_PERIOD) return e.key = Key::Period, e;
+    if (s == SDLK_SLASH || sc == SDL_SCANCODE_SLASH) return e.key = Key::Slash, e;
+    static const std::pair<SDL_Keycode, Key> keys[] = {
+        {SDLK_ESCAPE, Key::Escape}, {SDLK_t, Key::T}, {SDLK_r, Key::R}, {SDLK_f, Key::F}, {SDLK_z, Key::Z},
+        {SDLK_x, Key::X}, {SDLK_g, Key::G}, {SDLK_u, Key::U}, {SDLK_b, Key::B}, {SDLK_SPACE, Key::Space},
+        {SDLK_BACKSPACE, Key::Backspace}, {SDLK_F5, Key::F5}, {SDLK_F9, Key::F9}, {SDLK_w, Key::W},
+        {SDLK_s, Key::S}, {SDLK_a, Key::A}, {SDLK_d, Key::D}, {SDLK_q, Key::Q}, {SDLK_e, Key::E}, {SDLK_h, Key::H},
+        {SDLK_n, Key::N}, {SDLK_i, Key::I}, {SDLK_k, Key::K}, {SDLK_j, Key::J}, {SDLK_l, Key::L},
+        {SDLK_LSHIFT, Key::LeftShift}, {SDLK_LCTRL, Key::LeftCtrl}};
+    for (const auto& [code, key] : keys)
+        if (s == code) return e.key = key, e;
+    return e;
+}
 
 std::unique_ptr<Source> make_source(const Config& cfg, const Args& args) {
     if (args.demo || cfg.source == "demo") return std::make_unique<DemoSource>(cfg.demo.speed, cfg.krpc.rate_hz);
@@ -333,7 +374,7 @@ int run(int argc, char** argv) {
         cfg.display.monitor = args.monitor;
     }
     if (!args.address.empty()) cfg.krpc.address = args.address;  // one place: the source and the waiting screen
-    int want_w = cfg.display.width, want_h = cfg.display.height;
+    int want_w = 0, want_h = 0;
     if (!args.size.empty()) {
         size_t x = args.size.find_first_of("xX");
         if (x == std::string::npos) throw std::runtime_error("--size must look like 1920x1080");
@@ -345,8 +386,13 @@ int run(int argc, char** argv) {
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
     // Boot hand-over: the splash (ksphmi-splash.service) draws until this file exists; it is written after the
-    // first presented frame. Only the real screen announces itself, never a window, a screenshot or a benchmark.
+    // first presented frame. Only the real screen announces itself, never a window, a screenshot or a benchmark,
+    // and only on Linux: the boot splash is a Linux framebuffer service (the Pi), absent on macOS or a PC.
+#if defined(__linux__)
     const bool announce = !args.bench && args.screenshot.empty() && !args.offscreen && !args.windowed;
+#else
+    const bool announce = false;
+#endif
     if (announce) remove_ready_file();
     std::unique_ptr<Source> source;
     if (!args.bench) source = make_source(cfg, args);
@@ -357,16 +403,27 @@ int run(int argc, char** argv) {
     int code = 0;
     {
         Output out(cfg, args, want_w, want_h);
-        Canvas canvas(out.renderer(), out.w(), out.h(), out.accelerated());
-        Display display(cfg, canvas);
-        log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
-        {
+        if (!args.size.empty() && out.video() && !args.windowed)
+            log::warning(LOG, "--size ignored: a real screen uses its native resolution");
+        // Canvas and Display are sized for the screen: rebuilt when the window or display changes size.
+        std::unique_ptr<Canvas> canvas;
+        std::unique_ptr<Display> display;
+        std::string key_skin;  // Ctrl+1 / Ctrl+2 on the keyboard; survives a rebuild for a new screen size
+        Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
+        auto build_view = [&] {
+            display.reset();
+            canvas.reset();
+            canvas = std::make_unique<Canvas>(out.renderer(), out.w(), out.h(), out.accelerated());
+            display = std::make_unique<Display>(cfg, *canvas);
+            display->choose_skin(key_skin);
+            log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
             const std::string mode = args.layer_cache.empty() ? cfg.display.layer_cache : args.layer_cache;
             const bool want = mode == "on" || (mode != "off" && out.accelerated());
-            const bool on = display.set_layer_cache(want);
+            const bool on = display->set_layer_cache(want);
             log::info(LOG, fmt::str("layer cache: %s (%s%s)", on ? "on" : "off", mode.c_str(),
                                     want && !on ? ", no render targets" : ""));
-        }
+        };
+        build_view();
         const int fps = std::max(1, args.fps ? args.fps : cfg.display.fps);
         const double frame = 1.0 / fps;
         const double deadline = monotonic() + args.seconds;
@@ -381,31 +438,62 @@ int run(int argc, char** argv) {
         // --bench-anim turns the attitude 1.5 degrees per frame around a tilted axis; the sample never changes.
         auto bench_attitude = [](int i) { return attitude(10 + 20 * std::sin(i * .05), i * 1.5, 15 * std::cos(i * .03)); };
         if (args.bench) {  // warm-up frame: fonts, label atlas and lighting are built once, outside the timing
-            if (args.bench_anim) display.navball().hold = bench_attitude(0);
-            display.draw(*bench_snap, monotonic());
+            if (args.bench_anim) display->navball().hold = bench_attitude(0);
+            display->draw(*bench_snap, monotonic());
             if (args.bench_anim) last = bench_snap;
             out.present();
         }
+        // Apply what a key asked for: game commands to the source (its own thread sends them), skin, quit.
+        auto apply_keys = [&](const KeyResult& r) {
+            if (r.quit) quit_signal = 1;
+            if (source)
+                for (const Command& c : r.commands) source->command(c);
+            if (!r.skin.empty()) {
+                key_skin = r.skin;
+                display->choose_skin(key_skin);
+                last = nullptr;  // redraw now in the chosen skin
+            }
+        };
         for (int i = 0; !quit_signal; ++i) {
             double tick = monotonic();
             if (out.video()) {
                 SDL_Event ev;
-                while (SDL_PollEvent(&ev))
-                    if (ev.type == SDL_QUIT ||
-                        (ev.type == SDL_KEYDOWN && (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q)))
+                bool resized = false, reset = false;
+                while (SDL_PollEvent(&ev)) {
+                    // Keys (keyboard.hpp): KSP's default flight keys go to the game, Ctrl+1 / Ctrl+2 pick the
+                    // skin, Esc quits. Auto-repeat is not a new press.
+                    if (ev.type == SDL_QUIT)
                         quit_signal = 1;
+                    else if (ev.type == SDL_KEYDOWN && !ev.key.repeat)
+                        apply_keys(keyboard.down(key_event(ev.key), tick));
+                    else if (ev.type == SDL_KEYUP)
+                        apply_keys(keyboard.up(key_event(ev.key), tick));
+                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                        apply_keys(keyboard.release_all());  // no key-up events follow: never leave keys held
+                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+                        resized = true;
+                    else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
+                        reset = true;  // cached textures are gone: rebuild them even at the same size
+                }
+                apply_keys(keyboard.tick(tick));
+                if (source) source->hold(keyboard.held(tick));
+                const bool changed = (resized || reset) && out.refresh_size();
+                if (changed || reset) {
+                    build_view();
+                    last = nullptr;  // full redraw at the new size
+                }
             }
             std::shared_ptr<const Snapshot> snap;
             if (!args.bench) snap = source->latest();
-            else if (args.bench_anim) snap = bench_snap, display.navball().hold = bench_attitude(i + 1);
+            else if (args.bench_anim) snap = bench_snap, display->navball().hold = bench_attitude(i + 1);
             else snap = std::make_shared<const Snapshot>(bench_source.sample(i + 1));
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick. Between samples
             // only the NavBall turns: a NavBall-only frame over the cached layer when there is one.
             bool full = snap != last || snap->state != State::Flight || stale(*snap, tick);
-            bool anim = !full && snap->state == State::Flight && display.navball().animating();
+            bool anim = !full && snap->state == State::Flight && display->navball().animating();
             if (full || anim) {
                 double t0 = monotonic();
-                if (!(anim && display.animate())) display.draw(*snap, t0), anim = false;
+                if (!(anim && display->animate())) display->draw(*snap, t0), anim = false;
                 double t1 = monotonic(), c1 = thread_cpu();
                 out.present();
                 double t2 = monotonic(), c2 = thread_cpu();
@@ -427,7 +515,7 @@ int run(int argc, char** argv) {
                 std::printf("HMI_RENDER_MS=%.1f HMI_PRESENT_MS=%.1f HMI_PRESENT_CPU_MS=%.1f frames=%d full=%d "
                             "navball_only=%d layer_cache=%s size=%dx%d output=%s\n",
                             draw_ms / frames, present_ms / frames, present_cpu_ms / frames, frames, full_frames,
-                            anim_frames, display.layer_cache() ? "on" : "off", out.w(), out.h(), out.kind().c_str());
+                            anim_frames, display->layer_cache() ? "on" : "off", out.w(), out.h(), out.kind().c_str());
                 break;
             }
             if (!args.screenshot.empty() && tick >= deadline) {

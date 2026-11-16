@@ -94,6 +94,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Heredocs containing quotes break in the Bash tool: write scripts with the Write tool, run them with
   `build/venv/Scripts/python.exe` (system `python` is not installed). `Write` needs a prior Read on existing files.
 - `./ci upload_sketch` uploads the last compiled build: run `./ci build_sketch` first.
+- `ci` must also run on macOS `/bin/bash` 3.2: expand possibly empty arrays as `${a[@]+"${a[@]}"}` (set -u), and
+  guard Windows-only tools (`tasklist`, `netsh`, `cygpath`) in `ci` and `tools/verify.py`. POSIX test servers set
+  `SO_REUSEADDR` (Windows keeps `SO_EXCLUSIVEADDRUSE`) or restarting on the same port fails in TIME_WAIT.
 - Core 1.6.0 WDT metadata says `renesas` instead of `renesas_uno`: `compile_sketch` copies the installed
   library into `build/wdt-compat/` and fixes metadata only for normal/debug builds. Do not edit Arduino15
   or suppress compiler diagnostics; corrected upstream metadata bypasses the workaround.
@@ -122,6 +125,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). The Pi builds it:
   `./ci deploy_hmi` copies it to `~/ksphmi/cpp`, runs cmake/ctest there and restarts `ksphmi.service`. On this PC
   `./ci build_hmi`/`hmi`/`test_hmi` run inside WSL (no Windows C++ toolchain). Tests and tools stay Python.
+- The HMI is always full screen at the display's native pixel size on every platform (user, 2026-11-15): no size settings, `ALLOW_HIGHDPI` on macOS, and a window/display size change rebuilds Canvas and Display. `--size` is for off-screen frames only; `--windowed` only for the virtual-desktop test harnesses. Boot ready file: Linux only.
+- HMI keyboard = remote KSP keyboard with KSP's default bindings (user, 2026-11-15; docs/hmi.rst). T/R in the VAB go through KSPHMI.Press into EditorNavigation; Ctrl+1/2 pick the skin (1-0 are action groups), Esc quits (Q is roll). Held axes and throttle go through KSPHMIFlight into the plugin, never kRPC Control axes/throttle: those cannot yield to the board's joystick and kRPC's throttle stays latched. The frame loop only queues commands: kRPC calls stay on the telemetry thread.
 - HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
@@ -201,10 +206,13 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   and verify actual renderer captures. Windows environment variables such as KSPHMI_SHOTS must be set inside
   WSL when the ci wrapper does not forward them.
 
-+- Before removing worktrees, preserve useful ignored evidence (build/perf, renderer captures and simulator
-+  smoke records) under build/worktree-archive and verify the copies. Clean git status does not include these
-+  files. Check patch equivalence as well as ancestry before deleting a branch containing cherry-picked commits;
-+  retain a local bundle if redundant commit hashes would otherwise be discarded.
-+- verify checks that repository SKILL.md files match between .claude/skills and .agents/skills, including
-+  documentation-only CI. Resolve mirrored skill conflicts once in the canonical file and copy the result.
-+
+- Before removing worktrees, preserve useful ignored evidence (build/perf, renderer captures and simulator
+  smoke records) under build/worktree-archive and verify the copies. Clean git status does not include these
+  files. Check patch equivalence as well as ancestry before deleting a branch containing cherry-picked commits;
+  retain a local bundle if redundant commit hashes would otherwise be discarded.
+- verify checks that repository SKILL.md files match between .claude/skills and .agents/skills, including
+  documentation-only CI. Resolve mirrored skill conflicts once in the canonical file and copy the result.
+
+- When integrating platform HMI launcher changes, preserve native Windows/MSYS2 and WSLg monitor handling
+  while keeping macOS native full-screen and Retina rendering; do not resolve launcher conflicts by replacing
+  one platform's runtime path with another. Build the kRPC service on the Windows KSP host before deployment.

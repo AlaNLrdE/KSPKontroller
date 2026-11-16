@@ -50,6 +50,7 @@ add_library(ksphmi_core STATIC
   src/fmt.cpp
   src/editorpage.cpp
   src/gauges.cpp
+  src/keyboard.cpp
   src/krpc.cpp
   src/log.cpp
   src/navmath.cpp

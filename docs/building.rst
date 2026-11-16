@@ -17,7 +17,7 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
    * - ``./ci build_KSPSerialIO``
      - Compile the plugin with msbuild, xbuild or dotnet, then ``KSPSerialIO.Hmi.dll`` (see below).
    * - ``./ci build_all``
-     - Both of the above.
+     - Compile all three projects: the plugin, the firmware and the Pi HMI (``build_hmi``; in WSL on Windows).
    * - ``./ci deploy``
      - Build the plugin and install it into a local KSP. Lists the installs it finds and asks which one (see below).
    * - ``./ci save_log [LABEL]``

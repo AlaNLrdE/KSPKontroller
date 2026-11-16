@@ -6,7 +6,7 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 ## Change, build, check
 
 1. Edit (CRLF-safe Python script), bump `AssemblyInfo.cs` and the top `CHANGELOG.md` entry together.
-2. `./ci build_all` (plugin + sketch compile). `./ci verify` must show no new FAIL.
+2. `./ci build_all` (plugin + sketch + HMI compile). `./ci verify` must show no new FAIL.
 3. Commit locally. Push only when the user says so.
 
 ## Deploy and flash (KSP closed, other session informed)

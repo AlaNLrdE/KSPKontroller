@@ -50,6 +50,29 @@ def read_varint(data: bytes) -> int:
     raise ValueError("truncated varint")
 
 
+def read_string(data: bytes) -> str:
+    """A protobuf string argument: varint length, then UTF-8 bytes."""
+    n = shift = i = 0
+    while True:
+        if i >= len(data):
+            raise ValueError("truncated string")
+        b = data[i]
+        i += 1
+        n |= (b & 0x7F) << shift
+        if not b & 0x80:
+            break
+        shift += 7
+    return data[i:i + n].decode("utf-8")
+
+
+def read_float(data: bytes) -> float:
+    return struct.unpack("<f", data[:4])[0]
+
+
+# kRPC SpaceCenter.SASMode per kspsim sas_mode (autopilot mode + 1: hold, pro, ret, N+, N-, radial in, out, ...)
+SAS_MODE_KRPC = (0, 2, 3, 4, 5, 7, 6, 8, 9, 1)
+
+
 def enc_double(v: float) -> bytes:
     return struct.pack("<d", v)
 
@@ -129,6 +152,16 @@ def services_message(ksphmi: bool = True) -> K.Services:
             proc = hmi.procedures.add(name=name)
             proc.return_type.code = code
             proc.game_scenes.extend([K.Procedure.EDITOR_VAB, K.Procedure.EDITOR_SPH])
+        press = hmi.procedures.add(name="Press")  # void Press(string button): the HMI keyboard's T / R
+        press.parameters.add(name="button").type.code = K.Type.STRING
+        press.game_scenes.extend([K.Procedure.EDITOR_VAB, K.Procedure.EDITOR_SPH])
+        flight = services.services.add(name="KSPHMIFlight")  # the HMI keyboard in flight (KSPSerialIO.Hmi.dll)
+        for name, params in (("SetAxes", ("pitch", "yaw", "roll", "x", "y", "z")), ("SetThrottle", ("value",)),
+                             ("NudgeThrottle", ("delta",))):
+            proc = flight.procedures.add(name=name)
+            for param in params:
+                proc.parameters.add(name=param).type.code = K.Type.FLOAT
+            proc.game_scenes.append(K.Procedure.FLIGHT)
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
                 "Resources", "Stage", "Part", "Parts"):
@@ -187,6 +220,8 @@ class KrpcServer:
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: refuse to share the port with a real kRPC
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                else:  # POSIX: rebind right after stop() although closed connections are still in TIME_WAIT
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((self.address, port))
                 s.listen(8)
                 self._listeners.append(s)
@@ -349,11 +384,29 @@ class KrpcServer:
         if service == "SpaceCenter":
             with self.sim.lock:
                 return self._space_center(proc, args)
+        if service == "KSPHMIFlight" and self.sim.ship:
+            return self._ksphmi_flight(proc, args)
         if service == "KSPHMI" and self.sim.ship:
-            return self._ksphmi(proc)
+            return self._ksphmi(proc, args)
         raise RpcFailure("kspsim does not implement the %s service" % service)
 
-    def _ksphmi(self, proc: str) -> bytes:
+    def _ksphmi_flight(self, proc: str, args: dict) -> None:
+        """KSPSerialIO.Hmi's flight keyboard service: held axes are recorded, the throttle is the window's."""
+        sim = self.sim
+        if sim.scene != "flight":
+            raise RpcFailure("Procedure not available in game scene '%s'" % sim.scene, "KRPC", "InvalidOperationException")
+        values = [read_float(args.get(i, b"\x00" * 4)) for i in range(6)]
+        if proc == "SetAxes":
+            with sim.lock:
+                sim.keyboard_axes = tuple(max(-1.0, min(1.0, v)) for v in values)
+            return None
+        if proc in ("SetThrottle", "NudgeThrottle"):
+            base = 0.0 if proc == "SetThrottle" else sim.manual.throttle
+            sim.set_manual(throttle=max(0.0, min(1.0, base + values[0])))
+            return None
+        raise RpcFailure("kspsim does not implement KSPHMIFlight.%s" % proc)
+
+    def _ksphmi(self, proc: str, args: dict) -> bytes | None:
         """KSPSerialIO.Hmi's editor ship report. kRPC refuses an Editor-scene procedure in any other scene."""
         sim = self.sim
         if sim.scene not in KSPHMI_SCENES:
@@ -362,6 +415,12 @@ class KrpcServer:
             return varint(sim.ship_revision)
         if proc == "ShipReport":
             return enc_string(sim.ship_report())
+        if proc == "Press":
+            button = read_string(args.get(0, b""))
+            if button not in ("SAS", "RCS"):
+                raise RpcFailure("button must be SAS or RCS, not '%s'" % button, "KRPC", "ArgumentException")
+            sim.editor_press(button)
+            return None
         raise RpcFailure("kspsim does not implement KSPHMI.%s" % proc)
 
     def _krpc(self, client: ClientConn, proc: str, args: dict) -> bytes | None:
@@ -530,6 +589,19 @@ class KrpcServer:
                 return enc_enum(int(r['speed_mode']))
             if member == 'get_SASMode':
                 return enc_enum((0, 2, 3, 4, 5, 7, 6, 8, 9, 1)[sim.sas_mode - 1])
+            if member in ('set_SAS', 'set_RCS', 'set_Gear', 'set_Lights', 'set_Brakes', 'set_Abort'):  # HMI keys
+                sim.set_game(**{member[4:].lower(): bool(read_varint(args.get(1, b'\x00')))})
+                return None
+            if member in ('get_Gear', 'get_Lights', 'get_Brakes', 'get_Abort'):
+                return enc_bool(sim.game[member[4:].lower()])
+            if member == 'ToggleActionGroup':  # kRPC group 0-9, 0 = custom group 10
+                n = read_varint(args.get(1, b'\x00')) or 10
+                sim.set_game_group(n, not (sim.game_groups >> n & 1))
+                return None
+            if member == 'set_SASMode':
+                value = read_varint(args.get(1, b'\x00'))
+                sim.sas_mode = SAS_MODE_KRPC.index((value >> 1) ^ -(value & 1)) + 1  # zigzag sint32
+                return None
             if member in ('get_SAS', 'get_RCS'):
                 return enc_bool(bool(r['action_groups'] & (1 if member == 'get_SAS' else 2)))
             if member == 'get_Throttle':
