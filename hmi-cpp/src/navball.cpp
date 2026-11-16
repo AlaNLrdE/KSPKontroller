@@ -55,11 +55,11 @@ Navball::Navball() {
     for (int h = 0; h <= 360; h += 3) equator.points.push_back(globe(0, h));
     lines_.push_back(equator);
     // Stock-style broken parallels distinguish the +/-45 degree bands from the local five-degree ladder ticks.
-    // Gaps fall on meridians, leaving space for the bold compass bearings printed on these bands.
+    // Gaps fall halfway between meridians, leaving space for the bold compass bearings printed there.
     for (int pitch : {-45, 45})
         for (int heading = 0; heading < 360; heading += 45) {
             Line l{{}, 1};
-            for (int offset = 5; offset < 41; offset += 2) l.points.push_back(globe(pitch, heading + offset));
+            for (int offset = 28; offset < 63; offset += 2) l.points.push_back(globe(pitch, heading + offset));
             lines_.push_back(l);
         }
     // Local pitch ladders: long numbered ten-degree ticks and short five-degree ticks.
@@ -77,11 +77,12 @@ Navball::Navball() {
         for (int p = -90; p < 91; p += 2) l.points.push_back(globe(p, heading));
         lines_.push_back(l);
     }
-    // Separate heading and pitch labels: a meridian's number is a compass bearing, while the flanking numbers
-    // measure degrees above/below the horizon. Horizon bearings are lifted 5 degrees into the blue hemisphere so
-    // their backgrounds never straddle the brown ground, including when inverted.
+    // Separate heading and pitch labels: the bold compass bearings sit halfway between two meridian columns (user,
+    // 2026-11-16: on the column they crowded its line, ticks and pitch numbers), while the numbers flanking each
+    // column measure degrees above/below the horizon. Horizon bearings are lifted 5 degrees into the blue
+    // hemisphere so their backgrounds never straddle the brown ground, including when inverted.
     for (int p : {5, 45, -45})
-        for (int h = 0; h < 360; h += 45) labels_.push_back({std::to_string(h), double(p), double(h), true});
+        for (int h = 0; h < 360; h += 45) labels_.push_back({std::to_string(h), double(p), h + 22.5, true});
     for (int p = -80; p < 81; p += 10) {
         if (p == 0) continue;
         for (int h = 0; h < 360; h += 45)
