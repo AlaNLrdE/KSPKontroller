@@ -1,15 +1,18 @@
-// The "apollo" skin ([display] skin = "apollo"): the same screens drawn as a 1960s spacecraft instrument panel.
+// Shared instrument renderer: "steampunk" uses a scoped brass palette and engraved figures.
+// The "apollo" skin delegates flight to FlightDeck (proposal A materials / proposal B NavBall), and shares
+// the facility/editor composition below with steampunk.
 //
 // Grey panel with white painted labels and group lines, recessed wells, screws, seven-segment readouts
 // (segments.hpp) and caution/warning lamp tiles. All static art (panel texture, frames, labels, lamp housings,
 // segment windows with their unlit segments, meter scales, instrument bezels) is drawn once per screen size and
 // screen kind into one texture; per frame only the lit segments, lit lamps, pointers, a few changing labels, the
-// ORBIT plot and the NavBall are drawn. The zones and the information are those of the default skin.
+// ORBIT plot and the NavBall are drawn. Materials never contain fixed telemetry values.
 #pragma once
 
 #include <SDL.h>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -21,10 +24,12 @@
 namespace ksphmi {
 
 class Display;
+class FlightDeck;
+class OrbitArt;
 
 class ApolloSkin {
 public:
-    ApolloSkin(Display& display, const Config& cfg);
+    ApolloSkin(Display& display, const Config& cfg, bool steampunk = false);
     ~ApolloSkin();
     ApolloSkin(const ApolloSkin&) = delete;
     ApolloSkin& operator=(const ApolloSkin&) = delete;
@@ -54,6 +59,7 @@ private:
     void flight(Canvas& c, bool art, const Snapshot& s);
     /// VESSEL bezel with FUEL / HEAT lamps (art pass) and the schematic (live pass, Display::vessel_contents).
     void vessel(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
+    void history(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void resources(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void staging(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     /// NavBall zone: white group frame, the globe in a round metal bezel, segment readouts and SAS mode lamps.
@@ -65,6 +71,13 @@ private:
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
 
     Display& d_;
+    bool steampunk_;
+    double render_now_ = 0;
+    std::unique_ptr<FlightDeck> flight_deck_;
+    std::unique_ptr<OrbitArt> orbit_art_;
+    struct HistorySample { double ut, altitude, speed; };
+    std::vector<HistorySample> history_;
+    std::string history_vessel_;
     int day_hours_;
     std::string server_text_;
     NetInfo net_;

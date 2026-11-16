@@ -23,6 +23,7 @@
 #include "navball.hpp"
 #include "scenes.hpp"
 #include "segments.hpp"
+#include "steamdials.hpp"
 #include "shipreport.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
@@ -86,7 +87,7 @@ Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 }  // namespace
 
 TEST(out_of_range_clock_telemetry_renders_in_both_skins) {
-    for (const char* skin : {"classic", "apollo"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
         Screen s(1260, 840, skin);
         Snapshot snap = demo();
         snap.ut = 1e100;
@@ -169,12 +170,14 @@ TEST(resource_dials_and_their_text_stay_inside_the_panel) {
 }
 
 TEST(flight_layout_panels_tile_the_right_column) {
+    for (bool deck : {false, true})
     for (const auto& size : SIZES) {
         Screen s(size.first, size.second);
-        const FlightLayout l = flight_layout(*s.canvas);
+        const FlightLayout l = flight_layout(*s.canvas, deck);
         CHECK(!l.orbit.collides(l.vessel) && !l.orbit.collides(l.navball) && !l.vessel.collides(l.navball));
         CHECK_EQ(l.orbit.y, l.vessel.y);
-        CHECK(l.vessel.w < l.orbit.w && l.vessel.h > l.vessel.w);  // narrow and tall: a rocket's side view
+        CHECK(l.vessel.w < l.orbit.w);
+        if (!deck) CHECK(l.vessel.h > l.vessel.w);  // classic profile keeps a narrow, tall rocket panel
         CHECK(l.navball.right() <= s.canvas->w && l.navball.bottom() <= s.canvas->h);
         CHECK(l.navball.h > l.orbit.h);
     }
@@ -276,7 +279,7 @@ TEST(nearly_parabolic_apoapsis_is_omitted_when_its_position_is_unavailable) {
     CHECK(conic.has_value());
     CHECK(conic->apoapsis().has_value());
     CHECK(!conic->position(PI));
-    for (const char* skin : {"classic", "apollo"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
         Screen screen(1260, 840, skin);
         Rect panel = orbit_panel(screen);
         for (bool maneuver : {false, true}) {
@@ -534,17 +537,19 @@ TEST(segment_text_aligns_right_with_decimal_points_and_separators) {
     CHECK(l.w > 0 && l.h > 40);
 }
 
-TEST(apollo_skin_keeps_the_layout_zones_and_text_inside_its_tiles) {
+TEST(instrument_skins_keep_the_layout_zones_and_text_inside_their_tiles) {
+    for (const char* skin : {"apollo", "steampunk"})
     for (const auto& size : SIZES) {
         const int w = size.first, h = size.second;
-        Screen s(w, h, "apollo");
+        Screen s(w, h, skin);
         Display& d = *s.display;
-        CHECK_EQ(d.skin(), std::string("apollo"));
+        CHECK_EQ(d.skin(), std::string(skin));
         std::vector<Rect> tiles, active;
         d.on_tile_begin = [&](const Rect& r) { tiles.push_back(r), active.push_back(r); };
         d.on_tile_end = [&](const Rect&) { active.pop_back(); };
         double u = s.canvas->u;
-        Rect res = Rect::f(2.5 * u, 54 * u, w * .44 - 2.5 * u, 25 * u);
+        Rect res = std::string(skin) == "steampunk" ? Rect::f(2.5 * u, 46 * u, w * .44 - 2.5 * u, 18 * u) :
+                   Rect::f(1.4 * u, 34 * u, w * .5 - 2.9 * u, 22 * u);
         int meters = 0;
         d.on_gauge = [&](const std::string& label, const Rect& r) {
             ++meters;
@@ -622,10 +627,11 @@ TEST(skin_switches_at_runtime_from_the_context_and_keeps_its_cache) {
     CHECK_EQ(a.display->skin(), std::string("apollo"));
 }
 
-TEST(apollo_views_render_within_screen) {
+TEST(instrument_views_render_within_screen) {
+    for (const char* skin : {"apollo", "steampunk"})
     for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}}) {
         const int w = size.first, h = size.second;
-        Screen s(w, h, "apollo");
+        Screen s(w, h, skin);
         s.canvas->on_text = [&](const std::string& label, const Rect& r) {
             if (!Rect(0, 0, w, h).contains(r)) check::fail(__FILE__, __LINE__, "text off screen: " + label);
         };
@@ -662,19 +668,27 @@ TEST(apollo_full_frame_software_render_time) {
 }
 
 // KSPHMI_SHOTS=DIR saves the apollo screens that --demo --screenshot cannot reach (facility, no vessel, stale).
-TEST(apollo_review_screenshots_on_request) {
+TEST(instrument_review_screenshots_on_request) {
     const char* dir = std::getenv("KSPHMI_SHOTS");
     if (!dir) return;
-    Screen s(2520, 1680, "apollo");
-    Snapshot facility;
-    facility.state = State::NoVessel;
-    facility.scene = views().front().key;
-    s.display->draw(facility, monotonic());
-    CHECK(save_png(s.surface, std::string(dir) + "/apollo_facility.png"));
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
+    Screen s(2520, 1680, skin);
+    const std::string prefix = std::string(dir) + "/" + skin;
+    Snapshot connecting;
+    connecting.detail = "Waiting for the telemetry service";
+    s.display->draw(connecting, 100.2);
+    CHECK(save_png(s.surface, prefix + "_waiting.png"));
+    for (const auto& view : views()) {
+        Snapshot facility;
+        facility.state = State::NoVessel;
+        facility.scene = view.key;
+        s.display->draw(facility, 100.2);
+        CHECK(save_png(s.surface, prefix + "_" + view.key + ".png"));
+    }
     Snapshot no_vessel;
     no_vessel.state = State::NoVessel;
     s.display->draw(no_vessel, 100.2);
-    CHECK(save_png(s.surface, std::string(dir) + "/apollo_no_vessel.png"));
+    CHECK(save_png(s.surface, prefix + "_no_vessel.png"));
     Snapshot warn = demo(1200);
     warn.periapsis = 40000, warn.received = monotonic() - 10;
     for (auto& r : warn.systems->resources)
@@ -682,7 +696,8 @@ TEST(apollo_review_screenshots_on_request) {
         else if (r.name == "LiquidFuel") r.amount = *r.capacity * .18;
         else if (r.name == "Oxidizer") r.amount.reset();
     s.display->draw(warn, monotonic());
-    CHECK(save_png(s.surface, std::string(dir) + "/apollo_cautions.png"));
+    CHECK(save_png(s.surface, prefix + "_cautions.png"));
+    }
 }
 
 // ------------------------------------------------------------------------------------------- VAB ship report
@@ -718,7 +733,7 @@ Snapshot vab(std::shared_ptr<const ShipReport> ship) {
 }  // namespace
 
 TEST(vab_report_renders_inside_its_panels_in_both_skins) {
-    for (const char* skin : {"classic", "apollo"})
+    for (const char* skin : {"classic", "apollo", "steampunk"})
         for (const auto& size : SIZES) {
             const int w = size.first, h = size.second;
             Screen s(w, h, skin, repo_config());
@@ -752,7 +767,7 @@ TEST(vab_report_renders_inside_its_panels_in_both_skins) {
 }
 
 TEST(vab_without_a_report_keeps_the_static_cards) {
-    for (const char* skin : {"classic", "apollo"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
         Screen s(1260, 840, skin, repo_config());
         std::vector<std::string> texts;
         s.canvas->on_text = [&](const std::string& label, const Rect&) { texts.push_back(label); };
@@ -762,7 +777,7 @@ TEST(vab_without_a_report_keeps_the_static_cards) {
         CHECK_EQ(panels, 0);
         bool card = false;
         for (const auto& t : texts) card = card || t.find("Propulsion") != std::string::npos || t == "P";
-        CHECK(card || std::string(skin) == "apollo");  // apollo paints its cards into the cached art (no on_text)
+        CHECK(card || std::string(skin) != "classic");  // apollo paints its cards into the cached art (no on_text)
         // a report for another facility does not take over its screen
         Snapshot sph = vab(sample_ship());
         sph.scene = "sph";
@@ -797,7 +812,7 @@ TEST(apollo_vab_header_shows_only_link_and_twr_lamps) {
 }
 
 TEST(vab_report_software_render_time) {
-    for (const char* skin : {"classic", "apollo"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
         Screen s(2520, 1680, skin, repo_config());
         Snapshot snap = vab(sample_ship());
         s.display->draw(snap, monotonic());  // apollo: builds the panel art
@@ -813,7 +828,7 @@ TEST(vab_report_software_render_time) {
 TEST(vab_review_screenshots_on_request) {
     const char* dir = std::getenv("KSPHMI_SHOTS");
     if (!dir) return;
-    for (const char* skin : {"classic", "apollo"}) {
+    for (const char* skin : {"classic", "apollo", "steampunk"}) {
         Screen s(2520, 1680, skin, repo_config());
         for (const char* variant : {"", "pending", "heavy", "kerbalx", "duna", "empty"}) {
             s.display->draw(vab(sample_ship(variant)), monotonic());
@@ -825,7 +840,7 @@ TEST(vab_review_screenshots_on_request) {
 
 TEST(editor_modes_keep_real_skin_geometry_and_cache_stable) {
     const char* shots = std::getenv("KSPHMI_SHOTS");
-    for (const char* skin : {"classic", "apollo"})
+    for (const char* skin : {"classic", "apollo", "steampunk"})
         for (const auto& size : SIZES) {
             Screen screen(size.first, size.second, skin, repo_config());
             std::ifstream file(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/editor_report_v1.txt");
@@ -959,9 +974,199 @@ int differing(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
 }
 }  // namespace
 
+TEST(waiting_and_no_vessel_use_the_same_planet_material_as_their_flight_theme) {
+    for (const char* skin : {"apollo", "steampunk"}) {
+        Screen screen(1260, 840, skin);
+        for (const auto state : {State::Connecting, State::NoVessel}) {
+            Snapshot snap; snap.state = state;
+            screen.display->draw(snap, 100.2);
+            const double u = screen.canvas->u, cx = screen.surface->w / 2.0, cy = 34*u;
+            std::set<uint32_t> colors;
+            int blue = 0, nongreen = 0;
+            for (int y=int(cy-3*u); y<int(cy+3*u); ++y)
+                for (int x=int(cx-3*u); x<int(cx+3*u); ++x) {
+                    const auto pixel = screen.pixel(x,y);
+                    const int r=(pixel>>16)&255, g=(pixel>>8)&255, b=pixel&255;
+                    colors.insert(pixel);
+                    blue += b > r+20 && g > r+10;
+                    nongreen += std::max({r,g,b}) >= 32 && (g < r*1.5 || g < b*1.3);
+                }
+            CHECK(colors.size() > 100); // textured globe rather than the legacy flat blue disc
+            if (std::string(skin) == "apollo") CHECK_EQ(nongreen, 0);
+            else CHECK(blue > 100);
+            CHECK(!screen.display->orbit_crt && !screen.display->orbit_body);
+        }
+    }
+}
+
+TEST(steampunk_alert_legends_replace_caution_and_facility_cards_use_dark_materials) {
+    Screen screen(1260, 840, "steampunk");
+    const double u = screen.canvas->u;
+    std::string legend;
+    screen.canvas->on_text = [&](const std::string& text, const Rect& box) {
+        if (box.x >= screen.surface->w*.9 && box.bottom() < 7*u) legend += text;
+    };
+    Snapshot connecting;
+    screen.display->draw(connecting, 100.2);
+    CHECK_EQ(legend, "NOLINK"); // CAUTION must not remain beneath the changing warning
+    for (const auto& view : views()) {
+        Snapshot facility; facility.state=State::NoVessel; facility.scene=view.key; facility.received=100.2;
+        legend.clear();
+        screen.display->draw(facility, 100.2);
+        CHECK_EQ(legend, "CAUTION");
+        const auto panel=screen.pixel(int(25*u),int(39.5*u));
+        CHECK(((panel>>16)&255)+((panel>>8)&255)+(panel&255) < 100);
+    }
+}
+
+TEST(steampunk_destination_jewels_preserve_reachability_colours) {
+    Screen screen(1260, 840, "steampunk", repo_config());
+    auto snap=vab(sample_ship("heavy"));
+    screen.display->draw(snap, 100.2);
+    const double u=screen.canvas->u;
+    int green=0, red=0;
+    for (int y=int(13*u); y<int(42*u); ++y)
+        for (int x=int(screen.surface->w*.52); x<screen.surface->w; ++x) {
+            const auto pixel=screen.pixel(x,y);
+            const int r=(pixel>>16)&255,g=(pixel>>8)&255,b=pixel&255;
+            green += g>r*1.5 && g>b*1.5 && g>80;
+            red += r>g*1.5 && r>b*1.5 && r>80;
+        }
+    CHECK(green>20); CHECK(red>20);
+}
+
+TEST(steampunk_dials_calibrate_signed_values_and_never_invent_missing_measurements) {
+    SteamDial d{50,0,100,1,"u"};
+    CHECK_EQ(*steam_dial_fraction(d),.5);
+    d.minimum=-100; d.value=-50;
+    CHECK_EQ(*steam_dial_fraction(d),.25);
+    d.value=1e300; CHECK_EQ(*steam_dial_fraction(d),1.0); CHECK_EQ(d.value,1e300);
+    d.value=-1e300; CHECK_EQ(*steam_dial_fraction(d),0.0);
+    d.value=std::numeric_limits<double>::quiet_NaN(); CHECK(!steam_dial_fraction(d));
+    d.value=std::numeric_limits<double>::infinity(); CHECK(!steam_dial_fraction(d));
+    d.value=0;d.minimum=d.maximum;CHECK(!steam_dial_fraction(d));
+    auto snap=demo();snap.eccentricity=1.4;
+    const auto escape=steam_dials(snap);
+    CHECK(!steam_dial_fraction(escape[2]));  // no fictional apoapsis on an escape trajectory
+    CHECK(!steam_dial_fraction(escape[8]));  // no fictional orbital period either
+    for(const auto& size:SIZES) {
+        Screen screen(size.first,size.second,"steampunk");
+        const double u=screen.canvas->u,width=(size.first*.44-2.5*u-4*.8*u)/5;
+        const Rect tile=Rect::f(2.5*u,8*u,width,17.5*u);
+        const auto geometry=steam_dial_geometry(*screen.canvas,tile);
+        CHECK(tile.contains(Rect::f(geometry.cx-geometry.r,geometry.cy-geometry.r,2*geometry.r,2*geometry.r)));
+        CHECK(tile.contains(geometry.reading));
+    }
+}
+
+TEST(steampunk_needles_move_with_telemetry_inside_their_calibrated_faces) {
+    Screen screen(1920,1080,"steampunk");
+    auto snap=demo();snap.altitude=0;
+    screen.display->draw(snap,0);
+    const auto baseline=pixels(screen);
+    snap.altitude=500000;
+    screen.display->draw(snap,0);
+    const double u=screen.canvas->u,width=(1920*.44-2.5*u-4*.8*u)/5;
+    const auto g=steam_dial_geometry(*screen.canvas,Rect::f(2.5*u,8*u,width,17.5*u));
+    int changed=0;
+    for(int y=int(g.cy-g.r*.7);y<int(g.cy+g.r*.7);++y)
+        for(int x=int(g.cx-g.r*.7);x<int(g.cx+g.r*.7);++x)
+            changed+=baseline[y*1920+x]!=screen.pixel(x,y);
+    CHECK(changed>30);  // the face/scale are artwork, but the needle must actually move
+}
+
+TEST(steampunk_typefaces_do_not_leak_into_other_skins) {
+    for (const char* original : {"classic", "apollo"}) {
+        Screen s(1260, 840, original);
+        Snapshot snap = demo(600);
+        s.display->navball().hold = attitude(0, 0, 0);
+        s.display->draw(snap, 0);
+        const auto expected = pixels(s);
+        snap.skin = "steampunk";
+        s.display->draw(snap, 0);
+        CHECK(differing(pixels(s), expected) > 1000);
+        snap.skin = original;
+        s.display->draw(snap, 0);
+        CHECK_EQ(differing(pixels(s), expected), 0);
+    }
+}
+
+TEST(instrument_history_waits_for_samples_and_resets_for_a_new_vessel_or_time_rewind) {
+    for (const char* skin : {"steampunk", "apollo"}) {
+    Screen s(1260, 840, skin);
+    Snapshot snap = demo(600);
+    bool collecting = false;
+    s.canvas->on_text = [&](const std::string& text, const Rect&) {
+        if (text == "COLLECTING FLIGHT DATA") collecting = true;
+    };
+    auto draw = [&] { collecting = false; s.display->draw(snap, 0); return collecting; };
+    CHECK(draw());
+    CHECK(draw());  // repainting the same UT must not invent a second sample
+    snap.ut += 1;
+    CHECK(!draw());
+    snap.ut -= 5;
+    CHECK(draw());
+    snap.ut += 1;
+    CHECK(!draw());
+    snap.vessel = "Another vessel";
+    CHECK(draw());
+    }
+}
+
+TEST(steampunk_orbit_uses_the_detailed_color_planet_and_restores_shared_render_hooks) {
+    Screen s(1920, 1080, "steampunk");
+    Snapshot snap = demo(600);
+    snap.atmosphere_depth = 0;
+    const Rect plot = flight_layout(*s.canvas).orbit;
+    auto sea_colors = [&] {
+        std::set<uint32_t> colors;
+        for (int y=plot.y;y<plot.bottom();++y) for(int x=plot.x;x<plot.right();++x) {
+            const uint32_t pixel=s.pixel(x,y);
+            const int r=(pixel>>16)&255, g=(pixel>>8)&255, b=pixel&255;
+            if(b>r+20 && g>r+10) colors.insert(pixel);
+        }
+        return colors.size();
+    };
+    s.display->draw(snap, 0);
+    const size_t detailed = sea_colors();
+    CHECK(detailed > 100);  // terrain/cloud/ocean pixels, not a flat coloured circle
+    CHECK(!s.display->orbit_body && !s.display->orbit_label && s.display->panel_titles);
+    snap.body="Mun";
+    s.display->draw(snap, 0);
+    CHECK(sea_colors() * 5 < detailed);  // marker/font antialiasing may remain, but the ocean detail must disappear
+    CHECK(!s.display->orbit_crt);  // a previous Apollo frame cannot turn the steampunk view monochrome
+}
+
+TEST(apollo_orbit_is_entirely_green_crt_including_maneuvers_and_live_markers) {
+    for (const auto& size : {std::pair<int,int>{1260,840}, {1920,1080}}) {
+        Screen s(size.first,size.second,"apollo");
+        Snapshot snap=demo(600);
+        const double u=s.canvas->u;
+        const Rect orbit=flight_layout(*s.canvas,true).orbit;
+        const Rect screen=Rect::f(orbit.x+2.5*u,orbit.y+5.5*u,orbit.w-5*u,orbit.h-8*u);
+        for (const char* body : {"Kerbin","Mun"}) {
+            snap.body=body;
+            s.display->draw(snap,0);
+            std::set<uint32_t> phosphor;
+            int colored=0;
+            for(int y=screen.y;y<screen.bottom();++y) for(int x=screen.x;x<screen.right();++x) {
+                const uint32_t pixel=s.pixel(x,y);
+                const int r=(pixel>>16)&255,g=(pixel>>8)&255,b=pixel&255;
+                if(std::max({r,g,b})<32)continue;
+                if(g<r*1.5 || g<b*1.3)++colored;
+                else phosphor.insert(pixel);
+            }
+            CHECK_EQ(colored,0);
+            CHECK(phosphor.size()>20);
+            CHECK(!s.display->orbit_crt && !s.display->orbit_body && !s.display->orbit_label);
+        }
+        CHECK_EQ(s.display->apollo()->builds,1);
+    }
+}
+
 TEST(navball_only_frames_over_the_layer_cache_match_a_full_redraw) {
     const Quat before = attitude(5, 30, 0), after = attitude(25, 75, 20);
-    for (const char* skin : {"classic", "apollo"})
+    for (const char* skin : {"classic", "apollo", "steampunk"})
         for (const auto& size : {std::pair<int, int>{1260, 840}, {2520, 1680}}) {
             const int w = size.first, h = size.second;
             Snapshot snap = demo(600);

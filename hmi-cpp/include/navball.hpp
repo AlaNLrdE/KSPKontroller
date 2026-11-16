@@ -31,7 +31,7 @@ public:
     /// restores the pixels under the globe square first and clips to it (Display::animate). False without data.
     bool redraw(Canvas& c);
     /// The square the attitude layer can change (globe, lighting, markers), in pixels, not clipped to the screen.
-    static Rect globe_square(const Canvas& c, const Rect& rect, bool classic = false);
+    static Rect globe_square(const Canvas& c, const Rect& rect, bool classic = false, bool flight_deck = false);
     /// Called by draw() with globe_square() just before the globe is drawn: everything already drawn there is
     /// the background redraw() must start from (Display captures it from its cached layer).
     std::function<void(const Rect&)> before_globe;
@@ -43,13 +43,15 @@ public:
     };
     /// `classic`: the classic skin's own NavBall (chrome on): the speed box above the globe and the HDG caption below
     /// it must fit, the caption 1.4u above the SAS MODE row; a short panel moves the globe and then shrinks it.
-    static Globe globe_geometry(const Canvas& c, const Rect& rect, bool classic = false);
+    /// flight_deck selects the larger central sphere of the approved Apollo layout.
+    static Globe globe_geometry(const Canvas& c, const Rect& rect, bool classic = false, bool flight_deck = false);
     /// SAS modes in display order: kRPC name and the button caption.
     static const std::vector<std::pair<const char*, const char*>>& sas_modes();
     /// The classic panel, caption, readouts, bezel ring, THR/G arcs and SAS buttons around the globe. The apollo
     /// skin turns them off and draws its own (segment readouts, lamps, metal bezel); the globe, its markings, the
     /// markers and the boresight are always drawn here.
     bool chrome = true;
+    bool flight_deck = false;
 
     /// Marker glyphs (prograde, retrograde, normal, anti_normal, radial, anti_radial, target, anti_target, maneuver).
     static void symbol(Canvas& c, const std::string& kind, Color color, float x, float y, float size);
@@ -91,6 +93,7 @@ private:
     std::optional<Navigation> last_nav_;
     Rect last_rect_;
     bool last_chrome_ = true;
+    std::string last_font_;
 
     void build_labels(Canvas& c);
     void build_lighting(Canvas& c, int size, double radius);
@@ -107,6 +110,7 @@ private:
     SDL_Renderer* renderer_ = nullptr;
     SDL_Texture* label_atlas_ = nullptr;
     int label_px_ = 0, atlas_w_ = 0, atlas_h_ = 0;
+    std::string label_font_;
     std::map<std::string, Sprite> sprites_;  // text + style + background
     SDL_Texture* lighting_ = nullptr;
     int lighting_size_ = 0;

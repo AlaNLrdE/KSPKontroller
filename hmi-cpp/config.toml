@@ -24,7 +24,7 @@ fullscreen = true
 width = 0                # 0 = the monitor's own resolution
 height = 0
 monitor = "auto"         # auto = the last display when several are connected (the game keeps display 0); or "0", "1"...
-skin = "apollo"         # apollo = 1960s spacecraft panel (default); classic = the previous flat dark panels
+skin = "apollo"         # steampunk = brass and iron; apollo = spacecraft panel; classic = flat dark panels
 
 [format]
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time

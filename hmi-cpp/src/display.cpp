@@ -125,7 +125,7 @@ Display::Display(const Config& cfg, Canvas& canvas)
     log::info("ksphmi.display", "skin: " + skin_ + " (config)");
 }
 
-bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo"; }
+bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo" || name == "steampunk"; }
 
 void Display::set_skin(const std::string& name, const char* why) {
     if (!known_skin(name) || name == skin_) return;
@@ -133,7 +133,14 @@ void Display::set_skin(const std::string& name, const char* why) {
     skin_ = name;
 }
 
-FlightLayout flight_layout(const Canvas& c) {
+FlightLayout flight_layout(const Canvas& c, bool flight_deck) {
+    if (flight_deck) {
+        const double u = c.u, gap = .9 * u, x = c.w * .5, width = c.w - x - 1.4 * u;
+        const double vessel = width * .43;
+        return FlightLayout{Rect::f(x, 7*u, width-vessel-gap, 33*u),
+                            Rect::f(x+width-vessel, 7*u, vessel, 33*u),
+                            Rect::f(x, 41*u, width, c.h-42.4*u)};
+    }
     const double u = c.u;
     const double top = 13 * u, bottom = c.h - 2.5 * u, gap = 1.6 * u, left_w = c.w * 0.44;
     const double right_x = left_w + gap, right_w = c.w - left_w - gap - 2.5 * u;
@@ -250,6 +257,7 @@ void Display::choose_skin(const std::string& name) {
 }
 
 Rect Display::orbit_text(const std::string& s, float units, Color color, double x, double y, Anchor a) {
+    color = orbit_ink(color);
     if (orbit_label) return orbit_label(s, units, color, x, y, a);
     return c_.text(s, units, color, x, y, a);
 }
@@ -331,6 +339,12 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     if (!chosen_skin_.empty()) set_skin(chosen_skin_, "keyboard");
     else if (known_skin(snap.skin)) set_skin(snap.skin, "context");
     else set_skin(config_skin_, "config");
+    navball_.flight_deck = skin_ == "apollo";
+    if (skin_ == "steampunk") {
+        if (!steampunk_) steampunk_ = std::make_unique<ApolloSkin>(*this, cfg_, true);
+        steampunk_->draw(snap, now);
+        return;
+    }
     if (skin_ == "apollo") {
         if (!apollo_) apollo_ = std::make_unique<ApolloSkin>(*this, cfg_);
         apollo_->draw(snap, now);
@@ -915,6 +929,23 @@ int Display::apsis_label_width() {
     return std::max(c_.text_width(f, "Ap"), c_.text_width(f, "Pe"));
 }
 
+Color Display::orbit_ink(Color original) const {
+    if (!orbit_crt) return original;
+    if (original == BG) return Color{0,8,3};
+    if (original == ATMOSPHERE) return Color{3,32,12};
+    if (original == MANEUVER) return Color{48,178,84};
+    if (original == VALUE || original == WARN || original == BAD) return Color{156,255,181};
+    return Color{83,232,120};
+}
+
+void Display::orbit_line(const std::vector<Pt>& points, bool closed, float width, Color color) {
+    if (orbit_crt) {
+        c_.polyline(points,closed,width+float(.45*c_.u),Color{3,35,13});
+        c_.polyline(points,closed,width+float(.17*c_.u),Color{12,78,31});
+    }
+    c_.polyline(points,closed,width,orbit_ink(color));
+}
+
 void Display::orbit(const Rect& rect, const Snapshot& s) {
     const double u = c_.u;
     if (panel_titles) panel(c_, rect);
@@ -965,7 +996,7 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
         return Pt{static_cast<float>(fx + r * std::cos(nu) * scale), static_cast<float>(fy - r * std::sin(nu) * scale)};
     };
     if (s.atmosphere_depth > 0)
-        c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(3.0, atmo * scale)), ATMOSPHERE);
+        c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(3.0, atmo * scale)), orbit_ink(ATMOSPHERE));
     double p = a * (1 - e * e);
     std::vector<Pt> points;
     double limit = 3 * std::max(xmax - xmin, 2 * ymax);
@@ -976,26 +1007,27 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
         double r = p / denom;
         if (0 < r && r < limit) points.push_back(to_screen(r, nu));
     }
-    if (points.size() > 1) c_.polyline(points, elliptic, 1, ACCENT);
-    c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(2.0, radius * scale)), BODY);
+    if (points.size() > 1) orbit_line(points, elliptic, 1, orbit_body ? Color{155,242,139} : ACCENT);
+    if (orbit_body) orbit_body(fx, fy, std::max(2.0, radius * scale));
+    else c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(2.0, radius * scale)), orbit_ink(BODY));
     orbit_text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
 
     float marker = static_cast<float>(0.8 * u);
     if (elliptic) {
         Pt ap = to_screen(a * (1 + e), PI);
-        c_.circle(ap.x, ap.y, marker, GOOD);
+        c_.circle(ap.x, ap.y, marker, orbit_ink(GOOD));
         orbit_text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
     }
     Pt pe = to_screen(rp, 0.0);
-    c_.circle(pe.x, pe.y, marker, s.periapsis < s.atmosphere_depth ? WARN : ACCENT);
+    c_.circle(pe.x, pe.y, marker, orbit_ink(s.periapsis < s.atmosphere_depth ? WARN : ACCENT));
     orbit_text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
 
     double denom = 1 + e * std::cos(s.true_anomaly);
     double r_now = denom > 1e-3 ? p / denom : 0;
     if (r_now > 0) {
         Pt v = to_screen(r_now, s.true_anomaly);
-        c_.circle(v.x, v.y, static_cast<float>(1.3 * u), VALUE);
-        c_.circle(v.x, v.y, static_cast<float>(0.6 * u), BG);
+        c_.circle(v.x, v.y, static_cast<float>(1.3 * u), orbit_ink(VALUE));
+        c_.circle(v.x, v.y, static_cast<float>(0.6 * u), orbit_ink(BG));
         last_vessel_marker = v;
     }
 }
@@ -1062,7 +1094,7 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
         return Pt{static_cast<float>(cx + x * scale), static_cast<float>(cy - y * scale)};
     };
     if (s.atmosphere_depth > 0)
-        c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), ATMOSPHERE);
+        c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), orbit_ink(ATMOSPHERE));
     const float orbit_width = static_cast<float>(std::max(1.5, .14 * u));  // as the dashed orbit
     if (conic) {
         std::vector<Pt> segment;
@@ -1071,33 +1103,34 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
             if (vector && dot(*vector, *vector) <= (12 * reach) * (12 * reach)) {
                 segment.push_back(point(*vector));
             } else {
-                if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
+                if (segment.size() > 1) orbit_line(segment, false, orbit_width, orbit_body ? Color{155,242,139} : ACCENT);
                 segment.clear();
             }
         }
-        if (segment.size() > 1) c_.polyline(segment, false, orbit_width, ACCENT);
+        if (segment.size() > 1) orbit_line(segment, false, orbit_width, orbit_body ? Color{155,242,139} : ACCENT);
     }
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
-    c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(2.0, radius * scale)), BODY);
+    if (orbit_body) orbit_body(cx, cy, std::max(2.0, radius * scale));
+    else c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(2.0, radius * scale)), orbit_ink(BODY));
     orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
     if (conic && conic->eccentricity > 1e-5) {
         if (auto position = conic->position(PI)) {
             Pt ap = point(*position);
-            c_.circle(ap.x, ap.y, static_cast<float>(.8 * u), GOOD);
+            c_.circle(ap.x, ap.y, static_cast<float>(.8 * u), orbit_ink(GOOD));
             orbit_text("Ap", 2.8, GOOD, ap.x - 1.4 * u, ap.y, Anchor::MidRight);
         }
         Pt pe = point(*conic->position(0));
-        c_.circle(pe.x, pe.y, static_cast<float>(.8 * u), s.periapsis < s.atmosphere_depth ? WARN : ACCENT);
+        c_.circle(pe.x, pe.y, static_cast<float>(.8 * u), orbit_ink(s.periapsis < s.atmosphere_depth ? WARN : ACCENT));
         orbit_text("Pe", 2.8, VALUE, pe.x + 1.4 * u, pe.y, Anchor::MidLeft);
     }
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, true);
     // The white ring followed during docking: never from true anomaly, attitude, target velocity, or the changing
     // periapsis direction.
     Pt position = point(state.position);
-    c_.circle(position.x, position.y, static_cast<float>(1.3 * u), VALUE);
-    c_.circle(position.x, position.y, static_cast<float>(.6 * u), BG);
+    c_.circle(position.x, position.y, static_cast<float>(1.3 * u), orbit_ink(VALUE));
+    c_.circle(position.x, position.y, static_cast<float>(.6 * u), orbit_ink(BG));
     last_vessel_marker = position;
 }
 
@@ -1138,7 +1171,7 @@ void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSp
         for (const auto& d : k.dashes) {
             line.clear();
             for (const Point2& p : d) line.push_back(screen(p));
-            c_.polyline(line, false, width, MANEUVER);
+            orbit_line(line, false, width, MANEUVER);
         }
         return;
     }
@@ -1147,7 +1180,7 @@ void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSp
     const float marker = static_cast<float>(.6 * u);
     auto apsis = [&](const char* label, const Vec3& where) {
         Pt p = point(where);
-        c_.circle(p.x, p.y, marker, MANEUVER);
+        c_.circle(p.x, p.y, marker, orbit_ink(MANEUVER));
         if (p.x >= cx) orbit_text(label, 2.4, MANEUVER, p.x + 1.1 * u, p.y, Anchor::MidLeft);
         else orbit_text(label, 2.4, MANEUVER, p.x - 1.1 * u, p.y, Anchor::MidRight);
     };
@@ -1159,8 +1192,8 @@ void Display::maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSp
     }
     Pt node = point(m.position);
     const float d = static_cast<float>(1.0 * u), inner = static_cast<float>(.45 * u);
-    c_.polygon({{node.x, node.y - d}, {node.x + d, node.y}, {node.x, node.y + d}, {node.x - d, node.y}}, MANEUVER);
-    c_.polygon({{node.x, node.y - inner}, {node.x + inner, node.y}, {node.x, node.y + inner}, {node.x - inner, node.y}}, BG);
+    c_.polygon({{node.x, node.y - d}, {node.x + d, node.y}, {node.x, node.y + d}, {node.x - d, node.y}}, orbit_ink(MANEUVER));
+    c_.polygon({{node.x, node.y - inner}, {node.x + inner, node.y}, {node.x, node.y + inner}, {node.x - inner, node.y}}, orbit_ink(BG));
     last_node_marker = node;
 }
 

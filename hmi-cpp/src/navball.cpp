@@ -7,6 +7,7 @@
 #include "fmt.hpp"
 #include "navmath.hpp"
 #include "theme.hpp"
+#include "steampunk.hpp"
 
 namespace ksphmi {
 
@@ -97,13 +98,14 @@ Navball::~Navball() {
 void Navball::build_labels(Canvas& c) {
     // Knock out the grid under the numerals, like the stock texture: each label is white text on its
     // hemisphere's colour, composed once into one atlas.
-    int px = std::max(8, static_cast<int>(2.3 * c.u));
-    if (label_atlas_ && label_px_ == px && renderer_ == c.renderer()) return;
+    int px = std::max(8, static_cast<int>((flight_deck ? 3.0 : 2.3) * c.u));
+    if (label_atlas_ && label_px_ == px && renderer_ == c.renderer() && label_font_ == c.font_path()) return;
     if (label_atlas_) SDL_DestroyTexture(label_atlas_);
     label_atlas_ = nullptr;
     sprites_.clear();
     renderer_ = c.renderer();
     label_px_ = px;
+    label_font_ = c.font_path();
     Font& normal = c.font_px(px, false);
     Font& bold = c.font_px(px, true);
     struct Item {
@@ -233,8 +235,9 @@ Quat Navball::smooth(const Quat& shown, const Quat& target, double dt) {
     return slerp(shown, target, 1 - std::exp(-dt / SMOOTHING_S));
 }
 
-Navball::Globe Navball::globe_geometry(const Canvas& c, const Rect& rect, bool classic) {
+Navball::Globe Navball::globe_geometry(const Canvas& c, const Rect& rect, bool classic, bool flight_deck) {
     Globe g{rect.centerx() - 1.8 * c.u, rect.y + rect.h * .46, std::min(rect.h * .31, rect.w * .31)};
+    if (flight_deck) return Globe{double(rect.centerx()), rect.y + rect.h * .46, std::min(rect.h * .335, rect.w * .28)};
     if (!classic) return g;
     // Above the globe: the speed box (5.4u) and .3u; below it: the HDG caption (.9u + about 3.4u), a 1.4u gap and
     // the SAS MODE row 8.5u above the bottom. A short panel shrinks the globe until both fit.
@@ -270,7 +273,8 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
         c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
                rect.y + 1.8 * u, Anchor::TopRight);
     last_nav_ = n, last_rect_ = rect, last_chrome_ = chrome;
-    if (before_globe) before_globe(globe_square(c, rect, chrome));
+    last_font_ = c.font_path();
+    if (before_globe) before_globe(globe_square(c, rect, chrome, flight_deck));
     attitude_layer(c, rect, n);
 }
 
@@ -285,8 +289,8 @@ void Navball::advance(const Quat& target) {
     animating_ = angle_between(shown_, target) > 0.05;
 }
 
-Rect Navball::globe_square(const Canvas& c, const Rect& rect, bool classic) {
-    const Globe g = globe_geometry(c, rect, classic);
+Rect Navball::globe_square(const Canvas& c, const Rect& rect, bool classic, bool flight_deck) {
+    const Globe g = globe_geometry(c, rect, classic, flight_deck);
     const int size = static_cast<int>(std::ceil(2 * g.r + 4));
     const double origin = size / 2.0;
     return Rect(static_cast<int>(g.cx - origin), static_cast<int>(g.cy - origin), size, size);
@@ -294,6 +298,7 @@ Rect Navball::globe_square(const Canvas& c, const Rect& rect, bool classic) {
 
 bool Navball::redraw(Canvas& c) {
     if (!last_nav_) return false;
+    TypefaceScope face(c, last_font_);
     advance(last_nav_->rotation);
     const bool keep = chrome;
     chrome = last_chrome_;
@@ -304,7 +309,7 @@ bool Navball::redraw(Canvas& c) {
 
 void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     const double u = c.u;
-    const Globe g = globe_geometry(c, rect, chrome);
+    const Globe g = globe_geometry(c, rect, chrome, flight_deck);
     const double radius = g.r;
     const double cx = g.cx, cy = g.cy;
     Basis axes;
@@ -315,7 +320,7 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     }
     const double r = radius;
     // The ball is composed at an integer offset (whole-pixel blit of its surface).
-    const Rect square = globe_square(c, rect, chrome);
+    const Rect square = globe_square(c, rect, chrome, flight_deck);
     const int size = square.w, bx = square.x, by = square.y;
     const double origin = size / 2.0;
     auto point = [&](const Vec3& v) { return Pt{static_cast<float>(bx + origin + v.x * r), static_cast<float>(by + origin + v.y * r)}; };
@@ -338,6 +343,30 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         c.polyline(segment, false, stroke, INK);
     };
     std::vector<Pt> segment;
+    const double heading = degrees_of(std::atan2(axes.forward.z, axes.forward.y));
+    if (flight_deck) {
+        // Proposal B uses one continuous local pitch ladder, rather than repeated compass-number columns.
+        auto curve = [&](const std::vector<Vec3>& vectors, int width, Color color) {
+            std::vector<Pt> pts;
+            for (const auto& vector : vectors) {
+                Vec3 p = projected(vector, axes);
+                if (p.z > .02) pts.push_back(point(p));
+                else { if (pts.size() > 1) c.polyline(pts, false, std::max(1.0f, float(width*.13*u)), color); pts.clear(); }
+            }
+            if (pts.size() > 1) c.polyline(pts, false, std::max(1.0f, float(width*.13*u)), color);
+        };
+        for (int offset : {-60,-30,0,30,60}) {
+            std::vector<Vec3> meridian;
+            for (int pitch=-90; pitch<=90; pitch+=3) meridian.push_back(globe(pitch,heading+offset));
+            curve(meridian,1,Color{115,164,174});
+        }
+        for (int pitch=-80; pitch<=80; pitch+=5) {
+            const int span=pitch==0?90:pitch%10==0?17:10;
+            std::vector<Vec3> rung;
+            for (int offset=-span;offset<=span;offset+=1) rung.push_back(globe(pitch,heading+offset));
+            curve(rung,pitch%10==0?2:1,INK);
+        }
+    } else {
     for (const Line& line : lines_) {
         segment.clear();
         for (const Vec3& vector : line.points) {
@@ -351,11 +380,17 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         }
         stroke_line(segment, line.width);
     }
+    }
     build_labels(c);
     if (label_atlas_) {
         std::vector<SDL_Vertex> verts;
         std::vector<int> idx;
-        for (const Label& l : labels_) {
+        std::vector<Label> local_labels;
+        if (flight_deck) {
+            for (int pitch=-80;pitch<=80;pitch+=10) if (pitch)
+                for (int side : {-1,1}) local_labels.push_back({std::to_string(pitch),double(pitch),heading+side*22,false});
+        }
+        for (const Label& l : flight_deck ? local_labels : labels_) {
             auto projection = label_projection(l.pitch, l.heading, axes);
             if (!projection) continue;
             auto it = sprites_.find(sprite_key(l.text, l.is_heading, l.pitch >= 0));
@@ -401,14 +436,14 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     }
     c.ring(fx, fy, fr + .25f * fu, std::max(1.0f, rnd(.25 * u)), {181, 190, 194});
     // Roll scale and fixed top index: stationary while the globe turns.
-    for (int deg = -60; deg <= 60; deg += 10) {
+    if (!flight_deck) for (int deg = -60; deg <= 60; deg += 10) {
         double a = radians(deg - 90);
         double outer = r + 2.6 * u, inner = outer - (deg % 30 == 0 ? .9 : .5) * u;
         c.line({static_cast<float>(cx + inner * std::cos(a)), static_cast<float>(cy + inner * std::sin(a))},
                {static_cast<float>(cx + outer * std::cos(a)), static_cast<float>(cy + outer * std::sin(a))},
                std::max(1.0f, rnd(.15 * u)), INK);
     }
-    c.polygon({{fx, fy - fr - 1.5f * fu}, {fx - .8f * fu, fy - fr - 3 * fu}, {fx + .8f * fu, fy - fr - 3 * fu}}, GOLD);
+    c.polygon({{fx, fy - fr - 1.5f * fu}, {fx - .8f * fu, fy - fr - 3 * fu}, {fx + .8f * fu, fy - fr - 3 * fu}}, flight_deck ? WHITE : GOLD);
 
     const struct {
         const char* kind;

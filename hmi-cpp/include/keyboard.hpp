@@ -20,7 +20,7 @@ enum class Key {
     W, S, A, D, Q, E,                       // pitch down / up, yaw left / right, roll left / right
     H, N, I, K, J, L,                       // translate forward / back, down / up, left / right
     LeftShift, LeftCtrl,                    // throttle up / down (held)
-    Digit,                                  // 0-9: action groups; Ctrl+1/2 skins, Ctrl+0 VESSEL view; Alt+digit SAS modes
+    Digit,                                  // 0-9: action groups; Ctrl+1/2/3 skins, Ctrl+0 VESSEL view; Alt+digit SAS modes
     Escape, Quit,                           // Esc and q close the HMI
 };
 
@@ -28,7 +28,7 @@ enum class Key {
 struct KeyEvent {
     Key key = Key::Unknown;
     int digit = -1;     ///< 0-9 for Key::Digit
-    bool ctrl = false;  ///< either Ctrl (Ctrl+1 / Ctrl+2 choose the skin)
+    bool ctrl = false;  ///< either Ctrl (Ctrl+1 / Ctrl+2 / Ctrl+3 choose the skin)
     bool alt = false;   ///< either Alt / Option (Alt+digit chooses the SAS mode)
 };
 
@@ -71,7 +71,7 @@ struct KeyResult {
 
 class Keyboard {
 public:
-    /// Ctrl starts the throttle-down ramp only after this long, so Ctrl+1 / Ctrl+2 never move the throttle.
+    /// Ctrl starts the throttle-down ramp only after this long, so Ctrl+1 / Ctrl+2 / Ctrl+3 never move the throttle.
     static constexpr double CTRL_RAMP_DELAY = 0.25;
     /// F9 must be held this long before the quickload is sent (KSP also asks for a held F9).
     static constexpr double QUICKLOAD_HOLD = 1.0;

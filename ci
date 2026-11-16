@@ -848,7 +848,7 @@ deploy_hmi() {
 
   log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
   # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
-  (cd "$HMI_DIR" && tar -cf - CMakeLists.txt config.toml include src tests systemd) |
+  (cd "$HMI_DIR" && tar -cf - CMakeLists.txt config.toml include src tests systemd assets) |
     hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -xf -
       find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
       mv cpp.new/* cpp/; rmdir cpp.new'

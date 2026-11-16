@@ -790,6 +790,8 @@ TEST(keyboard_maps_ksp_default_flight_keys) {
     CHECK(only(kb.down(digit(6, false, true), 0), Command{Command::SasMode, 6}));  // R+ = kRPC Radial
     CHECK_EQ(kb.down(digit(1, true), 0).skin, "classic");
     CHECK_EQ(kb.down(digit(2, true), 0).skin, "apollo");
+    CHECK_EQ(kb.down(digit(3, true), 0).skin, "steampunk");
+    CHECK(kb.down(digit(3, true), 0).commands.empty());
     CHECK(kb.down(digit(2, true), 0).commands.empty());
     CHECK(kb.down(digit(0, true), 0).vessel_mode);  // Ctrl+0: VESSEL fuel / heat
     CHECK(kb.down(digit(0, true), 0).commands.empty());

@@ -6,6 +6,8 @@
 // renderer (fbdev, off-screen frames) skips it to save CPU.
 #pragma once
 
+#include <tuple>
+
 #include <SDL.h>
 #include <SDL_ttf.h>
 
@@ -140,6 +142,9 @@ public:
     void image(SDL_Texture* texture, float x, float y, float w, float h, Color mod = {255, 255, 255, 255});
 
     // Text, sized in layout units as display.py: px = max(8, int(size_units * u)).
+    /// Switch typeface without discarding other faces' glyph atlases. Returns the previous path.
+    std::string use_font(const std::string& path);
+    const std::string& font_path() const { return font_path_; }
     Font& font(float size_units, bool bold = false);
     Font& font_px(int px, bool bold = false);
     int text_width(Font& f, const std::string& s);
@@ -163,7 +168,7 @@ private:
     bool batch_opaque_ = true;
     std::vector<SDL_Vertex> vertices_;
     std::vector<int> indices_;
-    std::map<std::pair<int, bool>, std::unique_ptr<Font>> fonts_;
+    std::map<std::tuple<std::string, int, bool>, std::unique_ptr<Font>> fonts_;
 };
 
 }  // namespace ksphmi

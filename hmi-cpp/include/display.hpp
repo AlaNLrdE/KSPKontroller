@@ -20,12 +20,12 @@ namespace ksphmi {
 
 class ApolloSkin;
 
-/// The flight screen's right column, the same in both skins: ORBIT and VESSEL side by side on top, the NavBall
-/// below. VESSEL is narrow and tall (rockets are), the NavBall keeps the remaining 49 % of the height.
+/// Shared right-column layout profiles: ORBIT and VESSEL above the NavBall. The default keeps the classic
+/// 34u row; flight_deck selects the approved Apollo half-screen layout and its 33u row.
 struct FlightLayout {
     Rect orbit, vessel, navball;
 };
-FlightLayout flight_layout(const Canvas& c);
+FlightLayout flight_layout(const Canvas& c, bool flight_deck = false);
 
 /// Colours of the VESSEL schematic and legend, per skin.
 struct VesselStyle {
@@ -96,16 +96,21 @@ public:
     std::optional<Pt> last_node_marker;
     /// ORBIT draws its own title and INERTIAL caption (the apollo skin paints them on the bezel instead).
     bool panel_titles = true;
-    /// The skin drawn now: "classic" or "apollo". The context reply's skin (simulator) wins over [display] skin.
+    /// The skin drawn now: "classic", "apollo" or "steampunk". The context reply's skin (simulator) wins over [display] skin.
     const std::string& skin() const { return skin_; }
     static bool known_skin(const std::string& name);
     /// Switch at once (logged); unknown names are ignored. The next draw re-applies the context or config choice.
     void set_skin(const std::string& name, const char* why = "request");
-    /// Skin chosen on the keyboard (1 classic, 2 apollo): wins over the context reply and [display] skin.
+    /// Skin chosen on the keyboard (Ctrl+1 classic, Ctrl+2 apollo, Ctrl+3 steampunk): wins over the context reply and [display] skin.
     /// "" returns to those. Unknown names are ignored.
     void choose_skin(const std::string& name);
     /// ORBIT's body and apsis labels go through this when set (the apollo skin paints them in its lettering).
     std::function<Rect(const std::string&, float, Color, double, double, Anchor)> orbit_label;
+    /// Optional body material for Apollo; radius and centre remain the orbital projection's actual geometry.
+    std::function<void(double, double, double)> orbit_body;
+    /// Scoped green CRT palette for the entire ORBIT projection, including its maneuver and marker primitives.
+    bool orbit_crt = false;
+    Color orbit_ink(Color original) const;
     ApolloSkin* apollo() { return apollo_.get(); }
     int maneuver_builds = 0;
 
@@ -141,6 +146,7 @@ private:
     std::optional<GaugeLayout> gauge_layout_;
     std::map<std::tuple<int, int, std::string>, SDL_Texture*> gauge_faces_;
 
+    void orbit_line(const std::vector<Pt>& points, bool closed, float width, Color color);
     void draw_screen(const Snapshot& snap, double now);
     void capture_under_globe(const Rect& square);
     void free_layer();
@@ -159,6 +165,7 @@ private:
     std::string config_skin_, skin_, chosen_skin_;
     bool vessel_heat_ = false;
     std::unique_ptr<ApolloSkin> apollo_;
+    std::unique_ptr<ApolloSkin> steampunk_;
 };
 
 }  // namespace ksphmi

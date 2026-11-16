@@ -464,8 +464,14 @@ void Canvas::image(SDL_Texture* texture, float x, float y, float iw, float ih, C
     tri(a, d, e);
 }
 
+std::string Canvas::use_font(const std::string& path) {
+    const std::string previous = font_path_;
+    font_path_ = path;
+    return previous;
+}
+
 Font& Canvas::font_px(int px, bool bold) {
-    auto key = std::make_pair(px, bold);
+    auto key = std::make_tuple(font_path_, px, bold);
     auto it = fonts_.find(key);
     if (it == fonts_.end()) it = fonts_.emplace(key, std::make_unique<Font>(renderer_, font_path_, px, bold)).first;
     return *it->second;

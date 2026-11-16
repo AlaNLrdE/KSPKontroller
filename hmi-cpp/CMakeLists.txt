@@ -76,9 +76,13 @@ add_library(ksphmi_ui STATIC
   src/canvas.cpp
   src/display.cpp
   src/fbdev.cpp
+  src/flightdeck.cpp
   src/navball.cpp
+  src/orbitart.cpp
   src/png.cpp
   src/segments.cpp
+  src/steampunk.cpp
+  src/steamdials.cpp
   src/splash.cpp)
 target_link_libraries(ksphmi_ui PUBLIC ksphmi_core PkgConfig::SDL2 PkgConfig::SDL2TTF)
 if(WIN32)
@@ -104,4 +108,6 @@ target_compile_options(ksphmi_tests PRIVATE -Wno-missing-field-initializers)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(NAME kiosk COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_setup_kiosk.py)
+  add_test(NAME screenshots COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_screenshots.py $<TARGET_FILE:ksphmi>)
+  set_tests_properties(screenshots PROPERTIES TIMEOUT 90)
 endif()

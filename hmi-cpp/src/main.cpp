@@ -46,7 +46,7 @@ struct Args {
 void usage(FILE* out) {
     std::fprintf(out,
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed | --desktop] [--size WxH]\n"
-                 "              [--skin classic|apollo] [--monitor auto|N]\n"
+                 "              [--skin classic|apollo|steampunk] [--monitor auto|N]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N [--bench-anim]] [--offscreen]\n"
                  "              [--layer-cache auto|on|off]\n"
                  "       ksphmi --splash [--screenshot FILE --size WxH [--splash-state STAGE]]\n\n"
@@ -54,7 +54,7 @@ void usage(FILE* out) {
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
-                 "  --skin NAME        classic or apollo (overrides [display] skin)\n"
+                 "  --skin NAME        classic, apollo or steampunk (overrides [display] skin)\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
                  "  --desktop          on the PC that runs the game (./ci hmi): fills the chosen secondary monitor\n"
                  "                     (full-screen desktop), else a window; KSPHMI_WSLG=1: always a window\n"
@@ -185,11 +185,16 @@ public:
 
     void present() {
         if (window_) SDL_RenderPresent(renderer_);
-        else if (fb_) fb_->write(surface_);
+        else {
+            // The CPU surface must include every queued software-renderer command before scanout.
+            if (SDL_RenderFlush(renderer_) != 0)
+                throw std::runtime_error(std::string("software renderer flush: ") + SDL_GetError());
+            if (fb_) fb_->write(surface_);
+        }
     }
 
     bool screenshot(const std::string& path) {
-        if (surface_) return save_png(surface_, path);
+        if (surface_) return SDL_RenderFlush(renderer_) == 0 && save_png(surface_, path);
         SDL_Surface* s = SDL_CreateRGBSurfaceWithFormat(0, w_, h_, 32, SDL_PIXELFORMAT_ARGB8888);
         bool ok = s && SDL_RenderReadPixels(renderer_, nullptr, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0 &&
                   save_png(s, path);
@@ -411,7 +416,7 @@ int run(int argc, char** argv) {
         // Canvas and Display are sized for the screen: rebuilt when the window or display changes size.
         std::unique_ptr<Canvas> canvas;
         std::unique_ptr<Display> display;
-        std::string key_skin;  // Ctrl+1 / Ctrl+2 on the keyboard; survives a rebuild for a new screen size
+        std::string key_skin;  // Ctrl+1 / Ctrl+2 / Ctrl+3 on the keyboard; survives a rebuild for a new screen size
         Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
         bool vessel_heat = args.vessel_heat;  // Ctrl+0: the VESSEL panel shows heat instead of fuel
         auto build_view = [&] {
@@ -471,7 +476,7 @@ int run(int argc, char** argv) {
                 SDL_Event ev;
                 bool resized = false, reset = false;
                 while (SDL_PollEvent(&ev)) {
-                    // Keys (keyboard.hpp): KSP's default flight keys go to the game, Ctrl+1 / Ctrl+2 pick the
+                    // Keys (keyboard.hpp): KSP's default flight keys go to the game, Ctrl+1 / Ctrl+2 / Ctrl+3 pick the
                     // skin, Esc quits. Auto-repeat is not a new press.
                     if (ev.type == SDL_QUIT)
                         quit_signal = 1;
