@@ -134,6 +134,7 @@ private:
     struct GaugeLayout {
         Rect rect;
         std::vector<int> names;
+        std::vector<std::string> labels;
         double radius = 0;
         std::vector<std::array<double, 4>> cells;  // cx, cy, cell_x, cell_w
         float label_units = 0;
