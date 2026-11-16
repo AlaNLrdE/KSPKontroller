@@ -324,7 +324,7 @@ a touch screen's synthesized mouse events work the same way. BRAKES act while th
 changing scene or leaving flight releases them.
 
 **Lamps follow the game, never the click.** A pressed control shows a "sent" outline until the snapshot reports
-the change (switch flipped, mode selected, stage number changed, chute state changed). No change within 1.5 s
+the change (switch flipped, mode selected, stage number changed, chute state changed). No change within 2.5 s
 blinks the control amber for 1.2 s (for example a SAS mode KSP refused); the log says why (``key ... not
 applied``). Controls whose result the game does not report (throttle, warp, map, saves) only flash "sent".
 
@@ -332,11 +332,14 @@ applied``). Controls whose result the game does not report (throttle, warp, map,
 ARM lamp). ABORT, CUT and QUICK LOAD have a guard: the first click lifts it, the second within 5 s acts. The keys
 (``Space``, ``Backspace``, ``F9``) act exactly as in KSP.
 
-**Data only while shown.** ``Source::set_cockpit`` tells the telemetry thread whether the panel is on screen;
-``CockpitStreams`` (``src/telemetry.cpp``) exist only then. Switch states, groups, abort, stage lock and warp rate
-are streams; which systems are fitted, the parachutes (one State and SafeState stream each, at most 16) and the
-next stage are read again every 2 s, the next stage's parts only when the current stage or the part count changes.
-Every value is optional: a failing call blanks that control, never the session.
+**Data only while shown, never blocking.** ``Source::set_cockpit`` tells the telemetry thread whether the panel is
+on screen; ``CockpitStreams`` (``src/telemetry.cpp``) exist only then. Everything read per sample is a stream:
+switch states, groups, abort, stage lock, warp rate, the part lists (which systems are fitted, the parachutes, all
+parts) and the current stage, so a sample makes no synchronous call. The work that needs calls (adding those
+streams, one State and SafeState stream per parachute, at most 16, and reading ``Part.Stage`` / ``Part.Title``
+when the current stage or the part set changes) is queued and run within 40 ms per sample. From a laptop on Wi-Fi
+a kRPC call takes about 50 ms: the first version scanned 90 parts in one go and delayed the first sample and every
+queued click by seconds. Every value is optional: a failing call blanks that control, never the session.
 
 **Mouse on the Pi.** The Pi screen has no touch input; plug a USB mouse. Under SDL KMSDRM SDL reads it through
 evdev. The full-screen HMI hides the cursor; moving the mouse shows it until 3 s without motion. The fbdev

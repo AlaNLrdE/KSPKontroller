@@ -346,8 +346,10 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   layout per skin; add a painter override instead.
 - A lamp is lit only by the snapshot. `CockpitInput` keeps clicks as "sent" until the game reports the change and
   blinks amber after 1.5 s without it. Clicks produce the same `Command` as the key, into the same queue.
-- `CockpitStreams` exist only while the panel is shown (`Source::set_cockpit`); part lists, parachutes and the next
-  stage are polled every 2 s, not streamed per part.
+- `CockpitStreams` exist only while the panel is shown (`Source::set_cockpit`) and never block the telemetry loop:
+  part lists and the current stage are streams; adding streams and the Part.Stage/Title scan run as queued steps
+  within 40 ms per sample. A blocking 90-part scan over the Mac's Wi-Fi (~50 ms per call) delayed clicks and the
+  first sample by seconds (2026-11-16): never add a per-part synchronous loop to the telemetry thread.
 - kRPC 0.7 facts: `Parachute.SafeState` / `Cut` exist; `Control.Parachutes` cannot be set to false; there is no
   `Parts.InStage`, so the next stage is `Part.Stage == CurrentStage - 1` over `Parts.All`.
 - Apollo's non-flight panel is light grey with dark `INK`: text over dark wells (scene ribbon, grey veils) must use

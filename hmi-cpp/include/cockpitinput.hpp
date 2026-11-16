@@ -69,7 +69,7 @@ struct CockpitPress {
 class CockpitInput {
 public:
     static constexpr double ARM_WINDOW = 5.0, COVER_WINDOW = 5.0;
-    static constexpr double CONFIRM_TIMEOUT = 1.5, SENT_FLASH = 0.6, REJECT_FLASH = 1.2;
+    static constexpr double CONFIRM_TIMEOUT = 2.5, SENT_FLASH = 0.6, REJECT_FLASH = 1.2;
 
     enum class Feedback { None, Sent, Rejected };
 

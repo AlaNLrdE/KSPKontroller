@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
+#include <functional>
 #include <map>
 #include <set>
 #include <tuple>
@@ -309,31 +311,46 @@ private:
 
 // ------------------------------------------------------------------------------------------- cockpit panel
 /// The cockpit panel's switches, action groups, parachutes, next stage and time warp. Created only while that
-/// scene is shown (KrpcSource::set_cockpit), dropped when it is hidden. Switch states and groups are streams;
-/// what changes only with the vessel's parts (which switches are fitted, the parachutes, the next stage's parts) is
-/// read again every POLL seconds. Every value is optional: a failing call blanks that control only.
+/// scene is shown (KrpcSource::set_cockpit), dropped when it is hidden.
+///
+/// Everything the panel reads every sample is a stream, including the part lists (which switches are fitted,
+/// the parachutes, all parts) and the current stage, so a sample costs no synchronous call. The work that needs
+/// calls (adding the streams, re-creating the parachute streams, reading Part.Stage / Part.Title to find what
+/// the next stage fires) is queued and run a few calls at a time, within STEP_BUDGET seconds per sample: from a
+/// laptop on Wi-Fi a kRPC call takes about 50 ms, and a blocking scan of 90 parts delayed the first sample
+/// and every queued click by seconds (2026-11-16).
 class CockpitStreams {
 public:
-    static constexpr double POLL = 2.0;
+    static constexpr double POLL = 1.0, STEP_BUDGET = 0.04, LIST_RATE = 1.0;
     static constexpr size_t MAX_CHUTES = 16;
 
-    CockpitStreams(Client& c, uint64_t vessel, double rate) : c_(c), rate_(rate), controls_(c), chutes_(c) {
+    CockpitStreams(Client& c, uint64_t vessel, double rate) : c_(c), rate_(rate), controls_(c), lists_(c), chutes_(c) {
         control_ = object(c, sc("Vessel_get_Control", {obj(vessel)}));
         parts_ = object(c, sc("Vessel_get_Parts", {obj(vessel)}));
-        if (!control_) throw RpcError("no vessel control");
+        if (!control_ || !parts_) throw RpcError("no vessel control or parts");
         static const char* const props[] = {"ReactionWheels", "Gear",     "Lights",    "Brakes", "SolarPanels",
                                             "Antennas",       "Radiators", "CargoBays", "Intakes", "Abort", "StageLock"};
         for (const char* p : props)
-            optional_step([&] { controls_.add(p, sc(std::string("Control_get_") + p, {obj(control_)}), rate); }, [] {});
+            later([this, p] { controls_.add(p, sc(std::string("Control_get_") + p, {obj(control_)}), rate_); });
         for (int n = 1; n <= 10; ++n)  // kRPC group 0 is custom group 10
-            optional_step([&] {
+            later([this, n] {
                 controls_.add("group" + std::to_string(n),
-                              sc("Control_GetActionGroup", {obj(control_), pb::enc_uint32(uint32_t(n % 10))}), rate);
-            }, [] {});
-        optional_step([&] { controls_.add("warp", sc("get_WarpRate"), rate); }, [] {});
+                              sc("Control_GetActionGroup", {obj(control_), pb::enc_uint32(uint32_t(n % 10))}), rate_);
+            });
+        later([this] { controls_.add("warp", sc("get_WarpRate"), rate_); });
+        later([this] { lists_.add("current", sc("Control_get_CurrentStage", {obj(control_)}), LIST_RATE); });
+        for (const char* l : {"ReactionWheels", "Legs", "Wheels", "Lights", "SolarPanels", "Antennas", "Radiators",
+                              "CargoBays", "Intakes", "Parachutes", "All"})
+            later([this, l] { lists_.add(l, sc(std::string("Parts_get_") + l, {obj(parts_)}), LIST_RATE); });
     }
 
     Cockpit sample(double now) {
+        const double start = monotonic();
+        while (!work_.empty() && monotonic() - start < STEP_BUDGET) {
+            auto step = std::move(work_.front());
+            work_.pop_front();
+            optional_step(step, [] {});  // a failing step only leaves its value unknown
+        }
         if (now >= next_poll_) poll(), next_poll_ = now + POLL;
         Cockpit k = slow_;
         auto flag = [&](const std::string& name) -> std::optional<bool> {
@@ -357,14 +374,15 @@ public:
         int worst = -1;
         for (const uint64_t chute : chute_ids_) {
             const std::string key = std::to_string(chute);
+            if (!chutes_.has(key + ".state")) continue;  // its streams are still queued
             optional_step([&] {
                 const int state = pb::dec_sint32(c_.stream(chutes_.id(key + ".state")).data);
                 if (state >= 0 && state < CHUTE_STATES) states |= 1u << state;
-                if (state == CHUTE_STOWED || state == CHUTE_ARMED) {
+                if ((state == CHUTE_STOWED || state == CHUTE_ARMED) && chutes_.has(key + ".safe")) {
                     const int safe = pb::dec_sint32(c_.stream(chutes_.id(key + ".safe")).data);
                     if (safe >= 0 && safe <= 2) worst = std::max(worst, safe);  // 3 = none (not a stock chute)
                 }
-            }, [&] { chute_ids_.clear(), chutes_.clear(); });  // re-read with the next poll
+            }, [&] { chute_ids_.clear(), chutes_.clear(); });  // re-created by the next poll
         }
         k.chute_states = states;
         if (worst >= 0) k.chute_safety = worst;
@@ -372,21 +390,28 @@ public:
     }
 
 private:
-    int count(const char* list) {
-        int n = -1;
-        optional_step([&] { n = int(pb::dec_items(c_.invoke(sc(std::string("Parts_get_") + list, {obj(parts_)})).data).size()); },
-                      [] {});
-        return n;
+    void later(std::function<void()> step) { work_.push_back(std::move(step)); }
+
+    /// A part list stream's object ids; nothing while its stream is missing or failing.
+    std::optional<std::vector<uint64_t>> list(const std::string& name) {
+        if (!lists_.has(name)) return std::nullopt;
+        std::optional<std::vector<uint64_t>> ids;
+        optional_step([&] {
+            std::vector<uint64_t> out;
+            for (const auto& item : pb::dec_items(c_.stream(lists_.id(name)).data)) out.push_back(pb::dec_object(item));
+            ids = std::move(out);
+        }, [&] { lists_.remove(name); });
+        return ids;
     }
 
+    /// Read the part list streams (no calls) and queue what changed: parachute streams, a next-stage scan.
     void poll() {
-        // Which switches the vessel can use: 0 parts = not fitted (grey), a failing call = unknown.
         auto fitted = [&](CockpitSwitch s, std::initializer_list<const char*> lists) {
-            int total = 0;
+            size_t total = 0;
             for (const char* l : lists) {
-                const int n = count(l);
-                if (n < 0) return;
-                total += n;
+                const auto ids = list(l);
+                if (!ids) return;  // unknown: keep the last value
+                total += ids->size();
             }
             slow_.at(s).fitted = total > 0;
         };
@@ -398,52 +423,58 @@ private:
         fitted(CockpitSwitch::Radiators, {"Radiators"});
         fitted(CockpitSwitch::CargoBays, {"CargoBays"});
         fitted(CockpitSwitch::Intakes, {"Intakes"});
-        // Parachutes: one State and SafeState stream per chute, re-created when the set of chutes changes.
-        optional_step([&] {
-            std::vector<uint64_t> ids;
-            for (const auto& item : pb::dec_items(c_.invoke(sc("Parts_get_Parachutes", {obj(parts_)})).data))
-                if (ids.size() < MAX_CHUTES) ids.push_back(pb::dec_object(item));
-            slow_.chutes = int(ids.size());
-            if (ids != chute_ids_) {
+        if (auto chutes = list("Parachutes")) {
+            if (chutes->size() > MAX_CHUTES) chutes->resize(MAX_CHUTES);
+            slow_.chutes = int(chutes->size());
+            if (*chutes != chute_ids_) {
                 chutes_.clear();
-                chute_ids_.clear();
-                for (const uint64_t id : ids) {
-                    const std::string key = std::to_string(id);
-                    chutes_.add(key + ".state", sc("Parachute_get_State", {obj(id)}), rate_);
-                    chutes_.add(key + ".safe", sc("Parachute_get_SafeState", {obj(id)}), rate_);
-                }
-                chute_ids_ = ids;
+                chute_ids_ = *chutes;
+                for (const uint64_t id : chute_ids_)
+                    later([this, id] {
+                        if (std::find(chute_ids_.begin(), chute_ids_.end(), id) == chute_ids_.end()) return;  // gone
+                        const std::string key = std::to_string(id);
+                        chutes_.add(key + ".state", sc("Parachute_get_State", {obj(id)}), rate_);
+                        chutes_.add(key + ".safe", sc("Parachute_get_SafeState", {obj(id)}), rate_);
+                    });
             }
-        }, [&] { slow_.chutes.reset(), chutes_.clear(), chute_ids_.clear(); });
-        // The next stage: parts whose activation stage is the current stage - 1, read again only when the current
-        // stage or the part count changes (staging, docking, decoupling).
-        optional_step([&] {
-            const int current = pb::dec_sint32(c_.invoke(sc("Control_get_CurrentStage", {obj(control_)})).data);
-            const auto all = pb::dec_items(c_.invoke(sc("Parts_get_All", {obj(parts_)})).data);
-            const auto key = std::make_pair(current, all.size());
-            if (slow_.next_known && key == next_key_) return;
-            std::vector<std::pair<std::string, int>> next;
-            for (const auto& item : all) {
-                const uint64_t part = pb::dec_object(item);
-                if (pb::dec_sint32(c_.invoke(sc("Part_get_Stage", {obj(part)})).data) != current - 1) continue;
+        }
+        // The next stage: parts whose activation stage is the current stage - 1, scanned again in small steps when
+        // the current stage or the part set changes (staging, docking, decoupling). A newer scan drops the older.
+        const auto all = list("All");
+        std::optional<int> current;
+        if (lists_.has("current"))
+            optional_step([&] { current = pb::dec_sint32(c_.stream(lists_.id("current")).data); },
+                          [&] { lists_.remove("current"); });
+        if (!all || !current) return;
+        if (*current == scan_stage_ && *all == scan_parts_) return;
+        scan_stage_ = *current, scan_parts_ = *all;
+        slow_.next_known = false, slow_.next_stage.clear();  // "--" while the new scan runs
+        const int generation = ++scan_generation_;
+        auto found = std::make_shared<std::vector<std::pair<std::string, int>>>();
+        for (const uint64_t part : scan_parts_)
+            later([this, part, generation, found] {
+                if (generation != scan_generation_) return;
+                if (pb::dec_sint32(c_.invoke(sc("Part_get_Stage", {obj(part)})).data) != scan_stage_ - 1) return;
                 const std::string title = get_string(c_, sc("Part_get_Title", {obj(part)}));
-                auto it = std::find_if(next.begin(), next.end(), [&](const auto& p) { return p.first == title; });
-                if (it == next.end()) next.emplace_back(title, 1);
+                auto it = std::find_if(found->begin(), found->end(), [&](const auto& p) { return p.first == title; });
+                if (it == found->end()) found->emplace_back(title, 1);
                 else ++it->second;
-            }
-            slow_.next_stage = std::move(next);
+            });
+        later([this, generation, found] {
+            if (generation != scan_generation_) return;
+            slow_.next_stage = *found;
             slow_.next_known = true;
-            next_key_ = key;
-        }, [&] { slow_.next_known = false, slow_.next_stage.clear(); });
+        });
     }
 
     Client& c_;
     uint64_t control_ = 0, parts_ = 0;
     double rate_;
-    Group controls_, chutes_;
-    std::vector<uint64_t> chute_ids_;
+    Group controls_, lists_, chutes_;
+    std::deque<std::function<void()>> work_;
+    std::vector<uint64_t> chute_ids_, scan_parts_;
+    int scan_stage_ = -1000, scan_generation_ = 0;
     Cockpit slow_;
-    std::pair<int, size_t> next_key_{-1, 0};
     double next_poll_ = -1e9;
 };
 
