@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import socket
 from pathlib import Path
 import tempfile
 import threading
@@ -157,6 +158,51 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(len(history_messages(history)), 2)
         self.assertEqual(self.journal.messages, [])
         self.assertEqual(request(self.config, '/health')['last_seq'], 2)
+
+    def test_named_server_is_resolved_again_for_each_request(self):
+        from unittest.mock import patch
+        other_journal = Journal(self.root / 'other.jsonl')
+        other_journal.append(dict(sender='mac', to='pc', text='New endpoint', id='moved'))
+        other = make_server('127.0.0.1', 0, other_journal, 'test-only-secret')
+        worker = threading.Thread(target=other.serve_forever, daemon=True)
+        worker.start()
+        original = socket.getaddrinfo
+        destinations, selected = [], [self.server.server_port]
+        def resolve(host, port, *args, **kwargs):
+            if host == 'mailbox-test.local':
+                destinations.append(host)
+                return original('127.0.0.1', selected[0], *args, **kwargs)
+            return original(host, port, *args, **kwargs)
+        config = dict(self.config, url='http://mailbox-test.local:50380')
+        try:
+            with patch('socket.getaddrinfo', side_effect=resolve):
+                self.assertEqual(request(config, '/health')['messages'], 0)
+                selected[0] = other.server_port  # DNS now points at a different live endpoint.
+                self.assertEqual(request(config, '/health')['messages'], 1)
+            self.assertEqual(destinations, ['mailbox-test.local'] * 2)
+        finally:
+            other.shutdown()
+            other.server_close()
+            worker.join()
+
+    def test_watcher_reloads_endpoint_config_after_transport_failure(self):
+        from unittest.mock import patch
+        config_path = self.root / 'pc.json'
+        old = dict(self.config, url='http://old-name.local:50380')
+        config_path.write_text(json.dumps(old))
+        seen = []
+        event = dict(seq=1, id='reconnected', sender='mac', to='pc', text='Moved server', time='now')
+        def exchange(config, route):
+            seen.append(config['url'])
+            if len(seen) == 1:
+                config_path.write_text(json.dumps(self.config))
+                raise OSError('previous address unavailable')
+            return {'events': [event]}
+        with patch('agent_mailbox.request', side_effect=exchange), patch('agent_mailbox.time.sleep'), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            receive(old, self.root / 'pc.cursor.json', once=True, continuous=True, config_path=config_path)
+        self.assertEqual(seen, [old['url'], self.config['url']])
+        self.assertEqual(json.loads((self.root / 'pc.cursor.json').read_text())['after'], 1)
 
     def test_named_evidence_download_rejects_traversal_and_credentials(self):
         folder = self.root / 'evidence'

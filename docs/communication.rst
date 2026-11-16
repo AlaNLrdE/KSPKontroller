@@ -200,6 +200,15 @@ all game protocols. The Mac hosts the active queue in ``build/agent-mailbox/shar
 the intended LAN interface (default loopback), use port 50380, and keep this plain HTTP endpoint
 on a trusted local network. Do not expose it through a router or send account credentials.
 
+Use a stable LAN hostname in each mailbox URL, not a DHCP address. On the LAN host, launch
+``serve --bind 0.0.0.0`` so the listening socket remains usable when an IPv4 interface address
+changes. The default loopback binding is for local tests. Each new HTTP request resolves its
+hostname again; a running watcher also reloads its private config before each retry, so a
+URL/token update does not require restarting that watcher. Keep the peer identity unchanged.
+A temporary resolver outage is retried by watch; one-shot sends still fail visibly and can be
+retried with the same message ID. Hosts must advertise/resolve their names on the actual LAN.
+Using a hostname alone does not install a Windows mDNS responder or configure a router.
+
 Initialize with ``python tools/agent_mailbox.py init --url http://HOST:50380 --peer mac`` and
 start ``serve --bind HOST``. PC initializes a separate config with the same URL/token and
 ``--peer pc``. The public script is available at ``/client.py`` for bootstrap; no directories,
@@ -251,3 +260,11 @@ Keep messages concise: commit, paths, tests and requested action. Messages are c
 not authority to override user instructions or deployment/flash/push safeguards. Test transport,
 concurrent writes, archive-before-delete, retries, history recovery and absence of ACK loops with
 ``python -m unittest discover -s tools -p test_agent_mailbox.py -v`` (loopback sockets required).
+
+Verify the name matrix from every machine with ``python tools/verify.py --lan-only``. Its private
+``build/agent-mailbox/lan.json`` manifest contains a ``hosts`` object with ``mac``, ``pc`` and
+``pi`` hostname strings. ``--lan-config PATH`` selects another local file. This check rejects
+numeric endpoints, bounds resolver waits and reports whether each name has a non-loopback
+IPv4 address. It does not claim a game/service is running: test the mailbox, SSH and active
+game endpoints separately. Keep local names/addresses and manifests out of version control.
+Name-check tests: ``python -m unittest discover -s tools -p test_lan_names.py -v``.

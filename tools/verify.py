@@ -541,6 +541,57 @@ def check_log(ctx):
     report("PASS", "log: stage presses", "%d" % len(ctrl))
 
 
+def check_lan_names(ctx):
+    """Resolve the three peer names with a bounded wait; local addresses/config never enter the repo."""
+    import ipaddress
+    import queue
+    import socket
+    import threading
+    import time
+    path = ctx["args"].lan_config
+    if not os.path.isfile(path):
+        report("FAIL" if ctx["args"].lan_only else "WARN", "LAN peer names", "local manifest missing: " + path)
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            hosts = json.load(f)["hosts"]
+        if not isinstance(hosts, dict) or set(hosts) != {"mac", "pc", "pi"}:
+            raise ValueError("hosts must contain mac, pc and pi")
+        for role, host in hosts.items():
+            if not isinstance(host, str) or not host or any(c.isspace() for c in host):
+                raise ValueError("invalid hostname for " + role)
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                continue
+            raise ValueError("numeric endpoint for " + role + "; use a stable hostname")
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        report("FAIL", "LAN peer names", str(error))
+        return
+    results_queue = queue.Queue()
+    def resolve(role, host):
+        try:
+            addresses = sorted({r[4][0] for r in socket.getaddrinfo(host, None, socket.AF_INET)})
+            usable = [a for a in addresses if not ipaddress.ip_address(a).is_loopback]
+            results_queue.put((role, host, usable, "" if usable else "no non-loopback IPv4 address"))
+        except OSError as error:
+            results_queue.put((role, host, [], str(error)))
+    for role, host in hosts.items():
+        threading.Thread(target=resolve, args=(role, host), daemon=True).start()
+    deadline = time.monotonic() + getattr(ctx["args"], "lan_timeout", 4.0)
+    received = {}
+    while len(received) < len(hosts):
+        try:
+            role, host, addresses, error = results_queue.get(timeout=max(0, deadline - time.monotonic()))
+            received[role] = (host, addresses, error)
+        except queue.Empty:
+            break
+    for role, host in hosts.items():
+        _, addresses, error = received.get(role, (host, [], "name-resolution timeout"))
+        report("FAIL" if error else "PASS", "LAN name: " + role,
+               host + ": " + (error or ", ".join(addresses)))
+
+
 def check_git(ctx):
     def git(*a):
         return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True).stdout.strip()
@@ -1250,7 +1301,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_git]
 
 
 def main():
@@ -1262,23 +1313,31 @@ def main():
     ap.add_argument("--board", action="store_true", help="also test the Arduino over serial (KSP must be closed)")
     ap.add_argument("--port", help="serial port for --board, for example COM5")
     ap.add_argument("--snapshot", action="store_true", help="record the GameData entries now present")
+    ap.add_argument("--lan-only", action="store_true", help="resolve configured Mac/PC/Pi names without game or hardware checks")
+    ap.add_argument("--lan-config", default=os.environ.get("KSPHMI_LAN_CONFIG") or os.path.join(ROOT, "build", "agent-mailbox", "lan.json"),
+                    help="private JSON manifest: hosts with mac, pc and pi hostname values")
     ap.add_argument("--docs-only", action="store_true", help="check documentation guides, UML lifelines and API coverage without KSP or hardware")
     ap.add_argument("--firmware-only", action="store_true", help="run native firmware tests without KSP or hardware")
     ap.add_argument("--plugin-only", action="store_true", help="run plugin button, receiver and connection tests without KSP or hardware")
     args = ap.parse_args()
-    if args.plugin_only and (args.docs_only or args.firmware_only or args.board or args.snapshot):
+    if args.plugin_only and (args.docs_only or args.firmware_only or args.lan_only or args.board or args.snapshot):
         ap.error("--plugin-only cannot be combined with --docs-only, --firmware-only, --board or --snapshot")
-    if args.firmware_only and (args.docs_only or args.board or args.snapshot):
+    if args.firmware_only and (args.docs_only or args.lan_only or args.board or args.snapshot):
         ap.error("--firmware-only cannot be combined with --docs-only, --board or --snapshot")
-    if args.docs_only and (args.board or args.snapshot):
+    if args.docs_only and (args.lan_only or args.board or args.snapshot):
         ap.error("--docs-only cannot be combined with --board or --snapshot")
+
+    if args.lan_only and (args.board or args.snapshot):
+        ap.error("--lan-only cannot be combined with --board or --snapshot")
 
     ctx = {"ksp": os.path.normpath(args.ksp) if args.ksp else "", "args": args}
     ctx["log"] = args.log or (os.path.join(ctx["ksp"], "KSP.log") if ctx["ksp"] else "")
-    if not (args.docs_only or args.firmware_only or args.plugin_only):
+    if not (args.docs_only or args.firmware_only or args.plugin_only or args.lan_only):
         report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
     checks = CHECKS
-    if args.docs_only:
+    if args.lan_only:
+        checks = [check_lan_names]
+    elif args.docs_only:
         checks = [check_documentation, check_skill_mirrors]
     elif args.firmware_only:
         checks = [check_firmware_receiver, check_firmware_matrix]

@@ -252,13 +252,18 @@ def request(config, route, data=None):
         return json.load(response)
 
 
-def receive(config, cursor_path, once=False, continuous=False):
+def receive(config, cursor_path, once=False, continuous=False, config_path=None):
     cursor_path = Path(cursor_path)
     cursor = json.loads(cursor_path.read_text())['after'] if cursor_path.exists() else 0
     inbox = cursor_path.with_suffix('.inbox.jsonl')
     outage = False
     while True:
         try:
+            if config_path is not None:
+                updated = json.loads(Path(config_path).read_text(encoding='utf-8'))
+                if updated['peer'] != config['peer']:
+                    raise ValueError('cannot change peer identity while a watcher is running')
+                config = updated  # Reload endpoint/token on retry; urllib resolves the hostname for each request.
             events = request(config, '/events?' + urllib.parse.urlencode(
                 {'after': cursor, 'wait': 25 if continuous else 0}))['events']
             if outage:
@@ -366,7 +371,8 @@ def main(argv=None):
     init.add_argument('--peer', choices=PEERS, required=True)
     init.add_argument('--token')
     serve = sub.add_parser('serve')
-    serve.add_argument('--bind', default='127.0.0.1')
+    serve.add_argument('--bind', default='127.0.0.1',
+                       help='Use 0.0.0.0 on a trusted LAN to follow interface IP changes; default is loopback only')
     serve.add_argument('--port', type=int, default=50380)
     serve.add_argument('--journal', default='build/agent-mailbox/shared.jsonl')
     serve.add_argument('--artifacts', default='build/agent-mailbox/evidence')
@@ -436,7 +442,7 @@ def main(argv=None):
         print('Marked message #%d handled' % args.seq)
     else:
         receive(config, config_path.with_suffix('.cursor.json'), once=getattr(args, 'once', False),
-                continuous=args.command == 'watch')
+                continuous=args.command == 'watch', config_path=config_path)
 
 
 if __name__ == '__main__':
