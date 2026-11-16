@@ -777,28 +777,39 @@ void GameSkin::construction(Canvas& c, bool art, const Snapshot& s) {
             p.text(report.empty_craft() ? "EMPTY CRAFT" : "DELTA-V COMPUTING", 2.5f, AMBER, stages.centerx(),
                    stages.y + 10 * u, Anchor::Center, stages.w - 3 * u);
         else {
-            const auto slice = page_slice(report.stages.size(), 4, s.received);
+            // Rows share the panel's height: as many stages as fit at 5u or more each (a 13.5u row showed 4 of an
+            // 11-stage ship per page with most of the panel empty; user, 2026-11-16). Pages only when even that
+            // is too few. Text shrinks with the row so number and part lines never overlap.
+            const double top = 8.5 * u, bottom = stages.h - 4 * u, room = bottom - top;
+            const size_t fit = std::max<size_t>(1, static_cast<size_t>(room / (5.0 * u)));
+            const size_t count = report.stages.size();
+            const auto slice = page_slice(count, std::min(count ? count : 1, fit), s.received);
+            const size_t shown = std::max<size_t>(1, std::min(count, fit));  // same row height on every page
+            const double pitch = std::min(13.5 * u, room / static_cast<double>(shown));
+            const float big = static_cast<float>(std::min(2.7, .48 * pitch / u));
+            const float small = static_cast<float>(std::min(1.8, .32 * pitch / u));
             const char* cols[] = {"STAGE", "DELTA-V", "TWR", "BURN"};
             for (int i = 0; i < 4; ++i)
                 p.text(cols[i], 1.6f, p.muted, stages.x + stages.w * (.11 + i * .25), stages.y + 5 * u, Anchor::Center,
                        stages.w * .22);
             for (size_t i = slice.begin; i < slice.end; ++i) {
                 const auto& st = report.stages[i];
-                const double y = stages.y + (8.5 + (i - slice.begin) * 13.5) * u;
+                const double y = stages.y + top + (i - slice.begin) * pitch + big * u * .5;
                 const Color twr = twr_level(report, i, d_.config().vab.twr) == TwrLevel::Bad    ? RED
                                   : twr_level(report, i, d_.config().vab.twr) == TwrLevel::Warn ? AMBER
                                                                                                 : p.green;
                 const std::string cells[] = {std::to_string(st.stage), number(st.delta_v), number(st.twr, 2),
                                              number(st.burn) + " s"};
                 for (int j = 0; j < 4; ++j)
-                    p.text(cells[j], 2.7f, j == 2 ? twr : p.green, stages.x + stages.w * (.11 + j * .25), y,
+                    p.text(cells[j], big, j == 2 ? twr : p.green, stages.x + stages.w * (.11 + j * .25), y,
                            Anchor::Center, stages.w * .22);
                 const auto lines = stage_detail_lines(st);
                 if (!lines.empty())
-                    p.text(lines.front(), 1.8f, p.muted, stages.x + u, y + 3.0 * u, Anchor::TopLeft, stages.w - 2 * u);
+                    p.text(lines.front(), small, p.muted, stages.x + u, y + big * u * .62, Anchor::TopLeft, stages.w - 2 * u);
             }
-            p.text(fmt::str("STAGES PAGE %zu / %zu", slice.page + 1, slice.pages), 1.5f, p.muted, stages.x + u,
-                   stages.bottom() - 2.5 * u, Anchor::TopLeft, stages.w - 2 * u);
+            if (slice.pages > 1)
+                p.text(fmt::str("STAGES PAGE %zu / %zu", slice.page + 1, slice.pages), 1.5f, p.muted, stages.x + u,
+                       stages.bottom() - 2.5 * u, Anchor::TopLeft, stages.w - 2 * u);
         }
         const auto& ds = d_.config().vab.destinations;
         const double cellw = (destinations.w - 2 * u) / 3;

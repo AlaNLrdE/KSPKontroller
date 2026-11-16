@@ -986,7 +986,7 @@ TEST(vab_review_screenshots_on_request) {
     if (!dir) return;
     for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
         Screen s(2520, 1680, skin, repo_config());
-        for (const char* variant : {"", "pending", "heavy", "kerbalx", "duna", "empty"}) {
+        for (const char* variant : {"", "pending", "many", "heavy", "kerbalx", "duna", "empty"}) {
             s.display->draw(vab(sample_ship(variant)), monotonic());
             std::string name = std::string(dir) + "/" + skin + "_vab" + (*variant ? std::string("_") + variant : "") + ".png";
             CHECK(save_png(s.surface, name));

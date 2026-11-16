@@ -894,6 +894,14 @@ std::shared_ptr<const ShipReport> ShipReportPoller::poll(Client& c, double now) 
                             parsed->delta_v_pending ? " (delta-v pending)" : ""));
     log::info(LOG, "editor report: mode " + parsed->editor_mode);
     problem_.clear();
+    // KSP recomputes delta-v after every edit: the report says dv=pending for about a second, and the stage list
+    // blanked each time (user, 2026-11-16). Keep the previous stages of the same ship until the new ones arrive.
+    if (parsed->delta_v_pending && !parsed->empty_craft() && report_ && !report_->delta_v_pending &&
+        !report_->stages.empty() && report_->name == parsed->name) {
+        parsed->stages = report_->stages;
+        parsed->has_kerbin_asl = report_->has_kerbin_asl;
+        parsed->delta_v_pending = false;
+    }
     report_ = std::make_shared<const ShipReport>(std::move(*parsed));
     return report_;
 }
