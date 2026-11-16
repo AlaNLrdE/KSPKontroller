@@ -71,8 +71,11 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   late the job timed out and the unit never ran (two boots); wait in the script for
   `/sys/class/drm/card*-HDMI-A-*/status` = connected (20 s). Use `--vo=gpu --gpu-context=drm`: `--vo=drm` scales
   on the CPU (1276x720 to 4096x2160). Without mpv/the video the script execs the old `ksphmi --splash`.
-  mpv's log (`--no-terminal`) is `~/ksphmi/intro-mpv.log`; overrides go in `~/ksphmi/intro.env`. Not yet tested
-  on a real boot when this was written.
+  mpv's log (`--no-terminal`) is `~/ksphmi/intro-mpv.log`; overrides go in `~/ksphmi/intro.env`. Real boots
+  2026-11-16: default gpu scaling + software decode put the picture ~3 s behind the sound ("Audio/Video
+  desynchronisation" in the log); `--profile=fast --hwdec=v4l2m2m-copy` ends 0.2 s apart. Judge sync from
+  `audio EOF reached` vs `[vf] filter input EOF` in that log. To test renders without a reboot, stop
+  `ksphmi.service` (user) first: it holds DRM master. Rebooting the Pi needs the user's sudo.
 - Pi that boots to black and no ping: bisect `cmdline.txt` on the SD from Windows (FAT `bootfs` drive); keep the
   known-good line as a backup file next to it. Change one variable per boot; `systemd.mask=UNIT` in cmdline.txt
   disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means
