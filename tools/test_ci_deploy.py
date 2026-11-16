@@ -58,6 +58,46 @@ fake_cli() {
                     self.assertIn('architectures=renesas,renesas_uno', (override / 'library.properties').read_text())
                     self.assertEqual((override / 'src/WDT.cpp').read_bytes(), (library / 'src/WDT.cpp').read_bytes())
 
+    def test_pi_krpc_endpoint_prefers_override_then_kept_name_then_deployer_name(self):
+        """deploy_hmi's endpoint for ~/ksphmi/env: names survive IP changes and deploys from the Mac (user)."""
+        ci = (ROOT / 'ci').read_text(encoding='utf-8')
+        helper = re.search(r'^hmi_pc_address\(\) \{\n.*?^\}', ci, re.M | re.S)
+        self.assertIsNotNone(helper)
+        script = '''set -euo pipefail
+die() { printf 'DIE %s\\n' "$*"; exit 3; }
+hostname() { printf '%s\\n' "$DEPLOYER"; }
+hmi_ssh_client() { echo fake_ssh; }
+fake_ssh() { printf '%s\\n' "$SSH_FROM"; }
+hmi_ssh() {
+  case "$1" in
+    *KSPHMI_KRPC_ADDRESS*) printf '%s' "$CURRENT" ;;
+    *getent*) [ "$RESOLVES" = 1 ] ;;
+  esac
+}
+''' + helper.group() + '\nhmi_pc_address\n'
+        cases = [  # override, current env, deployer, ssh source (-4), Pi resolves deployer.local -> expected
+            ('192.168.9.9', 'Alan-TR.local', 'Mac', '192.168.0.138', '1', '192.168.9.9'),
+            ('', 'Alan-TR.local', 'Alans-MacBook-Air.local', '192.168.0.138', '1', 'Alan-TR.local'),
+            ('', 'Alan-TR.local', 'Alan-TR', '192.168.0.152', '0', 'Alan-TR.local'),
+            ('', '192.168.0.152', 'Alan-TR', '192.168.0.152', '1', 'Alan-TR.local'),
+            ('', '', 'Alan-TR', '192.168.0.152', '1', 'Alan-TR.local'),
+            ('', 'fe80::1%eth0', 'Alan-TR', '192.168.0.152', '0', '192.168.0.152'),
+            ('', '', 'Alan-TR', '192.168.0.152', '0', '192.168.0.152'),
+        ]
+        for override, current, deployer, source, resolves, expected in cases:
+            with self.subTest(current=current, deployer=deployer, resolves=resolves):
+                env = dict(os.environ, HMI_KRPC_ADDRESS=override, CURRENT=current, DEPLOYER=deployer,
+                           SSH_FROM=source, RESOLVES=resolves, HMI_HOST='ksphmi')
+                result = subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        env = dict(os.environ, HMI_KRPC_ADDRESS='', CURRENT='', DEPLOYER='Alan-TR', SSH_FROM='fe80::2%eth0',
+                   RESOLVES='0', HMI_HOST='ksphmi')
+        result = subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script],
+                                env=env, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 3, result.stdout)  # never an IPv6 endpoint for the IPv4-only HMI
+
     def test_reference_assembly_path_is_clean_with_empty_and_warm_cache(self):
         ci = (ROOT / 'ci').read_text(encoding='utf-8')
         helper = re.search(r'^ensure_refassemblies\(\) \{\n.*?^\}', ci, re.M | re.S)

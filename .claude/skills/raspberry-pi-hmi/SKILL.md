@@ -327,3 +327,8 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   entry UT (`time_to_soi_change` is relative to now) read from their orbits around the current body.
   The ORBIT view fit has hysteresis (grows at once, shrinks after 2 s under 60 %): a test that draws a big
   orbit then a small one on the same Display must advance `Snapshot::received` by more than 2 s.
+- Names, not IPs (2026-11-16): Pi kspKontrollerPi.local (ssh alias ksphmi), PC <hostname>.local (Windows' own
+  mDNS), Mac Alans-MacBook-Air.local. `deploy_hmi` writes the PC name into ~/ksphmi/env when the Pi resolves it
+  to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
+  unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
+  Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
