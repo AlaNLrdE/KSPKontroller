@@ -1,5 +1,5 @@
 #!/bin/sh
-# Kiosk boot for the KSP HMI: from power-on the screen shows only the HMI's loading screen, then the HMI.
+# Kiosk boot for the KSP HMI: from power-on the screen shows only the intro video (its last frame held), then the HMI.
 # Run once as root after ./ci deploy_hmi:   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh
 # Undo everything (restores the boot file backups):   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh --undo
 # Idempotent: run it again after any change to this script. SSH, Wi-Fi/LAN and the serial console stay as they are.
@@ -11,8 +11,12 @@
 #  - config.txt: no firmware rainbow splash, no under-voltage/warning overlays (backup: config.txt.ksphmi-backup);
 #  - /etc/tmpfiles.d/ksphmi-cursor.conf: fbcon cursor blinking off at every boot;
 #  - getty@tty1 masked: no login prompt on the screen (SSH logins are unaffected);
-#  - /etc/udev/rules.d/99-ksphmi-fb.rules + /etc/systemd/system/ksphmi-splash.service: `ksphmi --splash` animates
-#    the loading screen as soon as the DRM framebuffer (vc4drmfb) is /dev/fb0, until the HMI's first frame;
+#  - mpv (apt, only when missing; /etc/ksphmi-mpv.installed records that this script installed it, so --undo
+#    removes it again): plays the boot intro video;
+#  - /etc/systemd/system/ksphmi-splash.service runs ksphmi-intro.sh: mpv plays assets/intro/KSPKontroller_pi_Intro.mp4
+#    on DRM with HDMI audio and holds its last frame until ksphmi takes the display over mpv's IPC socket
+#    /run/ksphmi-intro/mpv.sock; without mpv or the video it falls back to `ksphmi --splash` on /dev/fb0. The udev
+#    rule /etc/udev/rules.d/99-ksphmi-fb.rules still tags the DRM framebuffer (vc4drmfb) fb0 for that fallback;
 #  - /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf: the journal survives reboots (Raspberry Pi OS keeps it
 #    in RAM), so a failed boot can be read with journalctl -b -1;
 #  - lingering for the HMI user, so the user unit ksphmi.service starts at boot without a login;
@@ -45,6 +49,7 @@ cmdline=/boot/firmware/cmdline.txt
 [ -f "$cmdline" ] || { echo "No Raspberry Pi boot command line found" >&2; exit 1; }
 config="$(dirname "$cmdline")/config.txt"
 unit=/etc/systemd/system/ksphmi-splash.service
+mpvmark=/etc/ksphmi-mpv.installed
 rule=/etc/udev/rules.d/99-ksphmi-fb.rules
 cursor=/etc/tmpfiles.d/ksphmi-cursor.conf
 journal=/etc/systemd/journald.conf.d/50-ksphmi-persistent.conf
@@ -59,6 +64,10 @@ if [ "$undo" = yes ]; then
     done
     systemctl disable --now ksphmi-splash.service 2>/dev/null || true
     rm -f "$unit" "$rule" "$cursor" "$journal" "$stamp"
+    if [ -f "$mpvmark" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get remove -y mpv || echo "WARNING: could not remove mpv" >&2
+        rm -f "$mpvmark"
+    fi
     systemctl daemon-reload
     systemctl restart systemd-journald 2>/dev/null || true
     udevadm control --reload 2>/dev/null || true
@@ -109,8 +118,27 @@ systemd-tmpfiles --create "$cursor" || true
 # Masking persists across reboots and suppresses the local login prompt.
 systemctl mask --now getty@tty1.service
 
-# The splash runs as the HMI user (group video can write /dev/fb0); systemd only sees fb0 when udev tags it.
-id -nG "$user" | grep -qw video || usermod -aG video "$user"
+# The boot intro video: mpv, installed once. No network must not break the kiosk: the unit then shows the loading
+# screen (ksphmi --splash) and the next run of this script installs mpv.
+if ! command -v mpv >/dev/null 2>&1; then
+    echo "Installing mpv for the boot intro video"
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mpv ||
+        { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends mpv; }; then
+        date > "$mpvmark"
+    else
+        echo "WARNING: could not install mpv (no network?): the boot shows the loading screen instead of the intro"              "video; run this script again later" >&2
+    fi
+fi
+[ -r "$home/ksphmi/cpp/assets/intro/KSPKontroller_pi_Intro.mp4" ] ||
+    echo "WARNING: no intro video in $home/ksphmi/cpp/assets/intro: run ./ci deploy_hmi" >&2
+
+# The unit runs as the HMI user: group video opens /dev/dri/card1 and /dev/fb0, render the GPU, audio the HDMI
+# sound card (the unit adds them as supplementary groups too); systemd only sees fb0 when udev tags it.
+for group in video render audio; do
+    if getent group "$group" >/dev/null && ! id -nG "$user" | grep -qw "$group"; then
+        usermod -aG "$group" "$user"
+    fi
+done
 # Only the DRM framebuffer: the firmware's simplefb is fb0 for ~2 s first and is then replaced by vc4drmfb;
 # tagging it started the splash on a device about to disappear.
 printf '%s\n' 'SUBSYSTEM=="graphics", KERNEL=="fb0", ATTR{name}=="vc4drmfb", TAG+="systemd"' > "$rule"
@@ -130,6 +158,6 @@ if [ ! -e "$home/.config/systemd/user/default.target.wants/ksphmi.service" ]; th
     echo "WARNING: ksphmi.service is not enabled for $user: run ./ci deploy_hmi from the PC" >&2
 fi
 if [ ! -x "$home/ksphmi/cpp/build/ksphmi" ]; then
-    echo "WARNING: $home/ksphmi/cpp/build/ksphmi missing: run ./ci deploy_hmi, the splash is skipped until then" >&2
+    echo "WARNING: $home/ksphmi/cpp/build/ksphmi missing: run ./ci deploy_hmi (the HMI and its fallback loading screen)" >&2
 fi
 echo "Kiosk configured for $user. Takes effect at the next reboot (sudo reboot); SSH stays enabled."

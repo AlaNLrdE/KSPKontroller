@@ -1,27 +1,34 @@
-# systemd *system* unit: the animated boot loading screen. Installed (and @USER@/@HOME@ filled in) by
-# setup-kiosk.sh into /etc/systemd/system/ksphmi-splash.service; ./ci deploy_hmi never touches it.
-# Runs `ksphmi --splash` as soon as the DRM framebuffer /dev/fb0 exists (the udev rule from setup-kiosk.sh tags
-# only fb0 named vc4drmfb, not the firmware's simplefb it replaces ~2 s later). It animates the boot progress
-# until ksphmi.service (user unit, lingering) writes /run/user/<uid>/ksphmi.ready after its first frame, then
-# exits; it also stops on SIGTERM and after 10 minutes. The framebuffer keeps its last picture.
-# Type=simple and no Before=: it never holds up the boot or logins (SSH included).
+# systemd *system* unit: the boot intro video, then its last frame until the HMI's first frame. Installed (and
+# @USER@/@HOME@ filled in) by setup-kiosk.sh into /etc/systemd/system/ksphmi-splash.service; ./ci deploy_hmi never
+# touches it (it rewrites only the script it runs).
+# Runs ksphmi-intro.sh early in boot: it waits (20 s at most) for a connected HDMI monitor, plays
+# assets/intro/KSPKontroller_pi_Intro.mp4 once through mpv on DRM with HDMI audio and holds the last frame.
+# mpv is DRM master while it holds that frame: ksphmi.service (user unit, lingering) waits for the end of the
+# video on mpv's IPC socket /run/ksphmi-intro/mpv.sock (RuntimeDirectory below), sends quit and then opens the
+# display. Without mpv or the video the script runs the old loading screen (`ksphmi --splash` on /dev/fb0) until
+# /run/user/<uid>/ksphmi.ready appears. Both stop on SIGTERM and after 10 minutes.
+# Type=simple and no Before=: it never holds up the boot or logins (SSH included). No device dependency either:
+# the monitor and fb0 can appear late (dev-fb0.device timed out and the unit never ran), the script waits itself.
 [Unit]
-Description=KSP HMI boot splash
+Description=KSP HMI boot intro video
 DefaultDependencies=no
-Wants=dev-fb0.device
-After=dev-fb0.device local-fs.target
-# Without a DRM framebuffer the job is dropped instead of waiting for the device's default timeout.
-JobTimeoutSec=30
+After=local-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target
-ConditionPathExists=@HOME@/ksphmi/cpp/build/ksphmi
+ConditionPathExists=@HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh
 
 [Service]
 Type=simple
 User=@USER@
 Group=video
-SupplementaryGroups=video
-ExecStart=@HOME@/ksphmi/cpp/build/ksphmi --splash
+# video: /dev/dri/card1 and /dev/fb0; render: V3D (GPU scaling); audio: the HDMI ALSA device.
+SupplementaryGroups=video render audio
+Environment=KSPHMI_APP_DIR=@HOME@/ksphmi/cpp
+EnvironmentFile=-@HOME@/ksphmi/intro.env
+# /run/ksphmi-intro (mpv.sock, starting): owned by the HMI user, removed when the unit stops.
+RuntimeDirectory=ksphmi-intro
+RuntimeDirectoryMode=0750
+ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh
 Restart=no
 RuntimeMaxSec=660
 TimeoutStopSec=3
