@@ -224,6 +224,10 @@ cache refreshes on a background worker every 15 seconds. Drawing reads only the 
 showing a lookup message, so slow DNS cannot stall waiting-screen animation or SDL events. Destruction
 signals the worker without waiting for a system DNS lookup; its shared state survives until the lookup ends.
 
+``kill -USR1 <pid>`` makes a running HMI save its next frame, read back from the screen's own renderer
+(GPU included), to ``$XDG_RUNTIME_DIR/ksphmi-shot.png`` (``/tmp`` without it) and log ``live screenshot:``.
+``--screenshot`` renders off-screen in software, which can differ from what the Pi's GPU shows.
+
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
 
@@ -617,7 +621,8 @@ Apollo Flight Deck (approved 2026-11-16) implements proposal A's light painted a
 mounting plates, steel fasteners, charcoal inset modules, smoked instrument windows,
 Barlow Condensed headings and green seven-segment readings, combined with proposal B's
 black/stainless NavBall bezel. The NavBall uses a single local five/ten-degree pitch
-ladder, sparse meridians, quaternion-driven attitude, volume lighting and live markers.
+ladder along the meridian that looks vertical through the boresight (the nose heading blended with the
+vessel's up axis, so it stays defined with the nose straight up), meridians every 30 degrees all round, quaternion-driven attitude, volume lighting and live markers.
 Its side instruments are speed, heading, pitch, roll, throttle and G-force. SAS mode lamps
 run along the bottom. Flight warnings use the header's priority caution window:
 stale data, surface/atmosphere periapsis, low power, escape, then fuel.

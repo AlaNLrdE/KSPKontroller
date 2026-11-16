@@ -698,6 +698,13 @@ TEST(instrument_review_screenshots_on_request) {
         else if (r.name == "Oxidizer") r.amount.reset();
     s.display->draw(warn, monotonic());
     CHECK(save_png(s.surface, prefix + "_cautions.png"));
+    // On the launch pad, nose straight up (user photos 2026-11-16): the NavBall shows its zenith pole.
+    Snapshot pad = demo(0);
+    pad.nav->pitch = 90, pad.nav->heading = 270, pad.nav->roll = -90, pad.nav->rotation = attitude(90, 270, -90);
+    s.display->navball().hold = pad.nav->rotation;
+    s.display->draw(pad, monotonic());
+    CHECK(save_png(s.surface, prefix + "_zenith.png"));
+    s.display->navball().hold.reset();
     }
 }
 

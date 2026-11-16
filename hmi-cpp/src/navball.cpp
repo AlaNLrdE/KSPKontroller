@@ -344,8 +344,15 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     };
     std::vector<Pt> segment;
     const double heading = degrees_of(std::atan2(axes.forward.z, axes.forward.y));
+    double ladder = heading;
     if (flight_deck) {
-        // Proposal B uses one continuous local pitch ladder, rather than repeated compass-number columns.
+        // Proposal B uses one continuous local pitch ladder, rather than repeated compass-number columns. It runs
+        // along the meridian that looks vertical through the boresight: the nose's heading, blended with the
+        // vessel's up axis so it stays defined and screen-vertical near the poles (nose straight up on the pad:
+        // the nose alone has no heading there and the ladder pointed anywhere; user photos 2026-11-16).
+        const double sign = axes.forward.x < 0 ? -1.0 : 1.0;
+        const double ladder_y = axes.forward.y - sign * axes.up.y, ladder_z = axes.forward.z - sign * axes.up.z;
+        if (std::hypot(ladder_y, ladder_z) > 1e-6) ladder = degrees_of(std::atan2(ladder_z, ladder_y));
         auto curve = [&](const std::vector<Vec3>& vectors, int width, Color color) {
             std::vector<Pt> pts;
             for (const auto& vector : vectors) {
@@ -355,15 +362,16 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
             }
             if (pts.size() > 1) c.polyline(pts, false, std::max(1.0f, float(width*.13*u)), color);
         };
-        for (int offset : {-60,-30,0,30,60}) {
+        // Sparse meridians every 30 degrees all the way round: near a pole the whole circle faces the viewer.
+        for (int offset = -150; offset <= 180; offset += 30) {
             std::vector<Vec3> meridian;
-            for (int pitch=-90; pitch<=90; pitch+=3) meridian.push_back(globe(pitch,heading+offset));
+            for (int pitch=-90; pitch<=90; pitch+=3) meridian.push_back(globe(pitch,ladder+offset));
             curve(meridian,1,Color{115,164,174});
         }
         for (int pitch=-80; pitch<=80; pitch+=5) {
             const int span=pitch==0?90:pitch%10==0?17:10;
             std::vector<Vec3> rung;
-            for (int offset=-span;offset<=span;offset+=1) rung.push_back(globe(pitch,heading+offset));
+            for (int offset=-span;offset<=span;offset+=1) rung.push_back(globe(pitch,ladder+offset));
             curve(rung,pitch%10==0?2:1,INK);
         }
     } else {
@@ -388,7 +396,7 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         std::vector<Label> local_labels;
         if (flight_deck) {
             for (int pitch=-80;pitch<=80;pitch+=10) if (pitch)
-                for (int side : {-1,1}) local_labels.push_back({std::to_string(pitch),double(pitch),heading+side*22,false});
+                for (int side : {-1,1}) local_labels.push_back({std::to_string(pitch),double(pitch),ladder+side*22,false});
         }
         for (const Label& l : flight_deck ? local_labels : labels_) {
             auto projection = label_projection(l.pitch, l.heading, axes);
