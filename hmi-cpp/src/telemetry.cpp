@@ -627,6 +627,50 @@ void send_held(Client& c, const Held& h, double throttle_dt, bool axes) {
         c.invoke(Call{"KSPHMIFlight", "NudgeThrottle", {pb::enc_float(float(h.throttle * KEY_THROTTLE_RATE * throttle_dt))}});
 }
 
+// ================================================================================================ VesselViewPoller
+void VesselViewPoller::reset() {
+    shape_.reset();
+    view_.reset();
+    next_ = -1e9;
+}
+
+void VesselViewPoller::fail(const std::string& why, double now) {
+    if (why != problem_) log::warning(LOG, "vessel view unavailable: " + why);
+    problem_ = why;
+    shape_.reset();
+    view_.reset();
+    next_ = now + retry_seconds_;
+}
+
+std::shared_ptr<const VesselView> VesselViewPoller::poll(Client& c, double now) {
+    if (now < next_) return view_;
+    next_ = now + period_;
+    try {
+        const std::string state = get_string(c, Call{"KSPHMIFlight", "VesselState", {}});
+        VesselView view = shape_ ? *shape_ : VesselView{};
+        if (!shape_ || !apply_vessel_state(view, state)) {
+            ++shape_fetches;
+            auto shape = parse_vessel_shape(get_string(c, Call{"KSPHMIFlight", "VesselShape", {}}));
+            if (!shape) {
+                fail("the vessel shape does not parse (KSPHMIFlight.VesselShape, format v1)", now);
+                return view_;
+            }
+            if (!shape_ || shape_->revision != shape->revision)
+                log::info(LOG, fmt::str("vessel view: %zu parts (shape revision %u)", shape->parts.size(), shape->revision));
+            shape_ = *shape;
+            view = *shape;
+            // A state for another revision: the vessel changed between the two calls; ask again next tick.
+            if (!apply_vessel_state(view, state)) next_ = now;
+        }
+        if (!problem_.empty()) log::info(LOG, "vessel view available again");
+        problem_.clear();
+        view_ = std::make_shared<const VesselView>(std::move(view));
+    } catch (const RpcError& e) {  // no KSPHMIFlight service (older KSPSerialIO.Hmi.dll), scene changing
+        fail(short_error(e), now);
+    }
+    return view_;
+}
+
 // ================================================================================================ ShipReportPoller
 void ShipReportPoller::reset() {
     report_.reset();
@@ -940,6 +984,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         log::warning(LOG, "resources/staging unavailable: " + short_error(e));
     }
     log::info(LOG, "following " + name + " around " + body_name);
+    vessel_view_.reset();
     auto d = [&](const std::string& key) { return pb::dec_double(c.stream(streams.id(key)).data); };
     while (!stopping()) {
         // Also a liveness probe: throws when the socket is gone (0 = left flight).
@@ -977,6 +1022,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         s.orbit_state = OrbitState{position, velocity, mu, *axes};
         // Optional dashed post-burn orbit: a failure only hides it (retried after 1 s).
         if (maneuver) optional_step([&] { s.maneuver_orbit = maneuver->sample(mu); }, [&] { maneuver->invalidate(); });
+        s.vessel_view = vessel_view_.poll(c, monotonic());  // its own errors only clear the VESSEL panel
         s.received = monotonic();
         publish(std::move(s));
         wait(period_);
@@ -1090,6 +1136,7 @@ Snapshot DemoSource::sample(double ut) const {
     s.orbit_state = OrbitState{position, velocity, mu, Axes{{1, 0, 0}, {0, 0, 1}}};
     s.maneuver_orbit = demo_maneuver(a, e, mu);
     s.received = monotonic();
+    s.vessel_view = std::make_shared<const VesselView>(demo_vessel_view(ut));
     return s;
 }
 

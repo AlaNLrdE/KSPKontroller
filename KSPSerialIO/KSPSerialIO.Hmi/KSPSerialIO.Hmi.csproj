@@ -78,6 +78,8 @@
     <Compile Include="EditorDetails.cs" />
     <Compile Include="HmiService.cs" />
     <Compile Include="HmiFlightService.cs" />
+    <Compile Include="VesselViewFormat.cs" />
+    <Compile Include="VesselViewReport.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Target Name="CheckKspReferences" BeforeTargets="ResolveAssemblyReferences">

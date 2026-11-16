@@ -1,5 +1,12 @@
 # Changelog
 
+* **0.19.7.0**: 20261116
+  VESSEL panel on the HMI: `KSPSerialIO.Hmi.dll` adds `KSPHMIFlight.VesselShape` (one convex side-view outline per
+  part from its model meshes, rebuilt on vessel change, part count change or `onVesselWasModified`) and
+  `VesselState` (fuel and heat percent per part, twice a second), text format v1 shared with the Pi parser and
+  kspsim (`hmi-cpp/tests/data/vessel_*_v1.txt`). `KSPSerialIO.dll` only changes version. No serial packet or
+  firmware change.
+
 * **0.19.6.0**: 20261116
   HMI keyboard as a remote KSP keyboard. New kRPC service `KSPHMIFlight` (flight scene) in `KSPSerialIO.Hmi.dll`:
   `SetAxes` stores the held W/S A/D Q/E J/L I/K H/N keys in `HmiKeyboard` (0.5 s expiry), which `AxisInput`

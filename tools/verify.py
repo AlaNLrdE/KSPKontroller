@@ -882,6 +882,39 @@ def check_sim(ctx):
     report("PASS" if p.returncode == 0 else "FAIL", "sim: tests", " ".join(tail) if p.returncode == 0 else p.stderr.strip()[-300:])
 
 
+def check_vessel_view_contract(ctx):
+    """The VESSEL panel and HMI keyboard in flight (kRPC service KSPHMIFlight, docs/hmi.rst): plugin, Pi HMI and kspsim
+    agree on the service, its Flight scene and procedures, and all three use the shared format-v1 fixtures
+    (hmi-cpp/tests/data/vessel_shape_v1.txt and vessel_state_v1.txt); only KSPSerialIO.Hmi.dll touches kRPC."""
+    service = read(os.path.join(HMI_PLUGIN_DIR, "HmiFlightService.cs"))
+    fmt = read(os.path.join(HMI_PLUGIN_DIR, "VesselViewFormat.cs"))
+    addon = read(os.path.join(HMI_PLUGIN_DIR, "VesselViewReport.cs"))
+    project = read(os.path.join(HMI_PLUGIN_DIR, "KSPSerialIO.Hmi.csproj"))
+    telemetry = read(os.path.join(HMI_DIR, "src", "telemetry.cpp"))
+    hmi_tests = read(os.path.join(HMI_DIR, "tests", "test_core.cpp"))
+    server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
+    data = os.path.join(HMI_DIR, "tests", "data")
+    procedures = ("SetAxes", "SetThrottle", "NudgeThrottle", "VesselShape", "VesselState")
+    problems = []
+    for what, ok in (
+            ("service KSPHMIFlight in the Flight scene",
+             re.search(r'KRPCService\(Name = "KSPHMIFlight", GameScene = GameScene\.Flight\)', service)),
+            ("plugin procedures " + "/".join(procedures), all("public static %s %s(" % ("string" if n.startswith("Vessel") else "void", n) in service for n in procedures)),
+            ("HMI calls every KSPHMIFlight procedure", '"KSPHMIFlight"' in telemetry and all('"%s"' % n in telemetry for n in procedures)),
+            ("kspsim serves every KSPHMIFlight procedure", 'name="KSPHMIFlight"' in server and all('"%s"' % n in server for n in procedures)),
+            ("shared fixtures exist", all(os.path.isfile(os.path.join(data, f)) for f in ("vessel_shape_v1.txt", "vessel_state_v1.txt"))),
+            ("HMI tests and kspsim read the fixtures", "vessel_shape_v1.txt" in hmi_tests and "vessel_shape_v1.txt" in server),
+            ("only HmiFlightService.cs references kRPC", "KRPC" not in addon and "KRPC" not in fmt),
+            ("project builds every VESSEL source",
+             all('Compile Include="%s"' % f in project for f in ("HmiFlightService.cs", "VesselViewFormat.cs", "VesselViewReport.cs")))):
+        if not ok:
+            problems.append(what)
+    if problems:
+        report("FAIL", "vessel view: contract", "; ".join(problems))
+    else:
+        report("PASS", "vessel view: contract", "KSPHMIFlight (Flight) keys and VesselShape/VesselState, format v1 in plugin, HMI and kspsim")
+
+
 def check_ship_report_contract(ctx):
     """The VAB ship report (kRPC service KSPHMI, docs/hmi.rst): plugin, Pi HMI and kspsim agree on the service, its
     procedures, the Editor scene and text format version 1; KSPSerialIO.dll itself never depends on kRPC; and the
@@ -1156,7 +1189,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_git]
 
 
 def main():

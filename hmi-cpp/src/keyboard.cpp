@@ -49,10 +49,11 @@ KeyResult Keyboard::down(const KeyEvent& e, double now) {
         case Key::Quit: r.quit = true; break;
         case Key::Digit:
             if (e.digit < 0 || e.digit > 9) break;
-            if (e.ctrl) {  // Ctrl+1 / Ctrl+2: skins; this Ctrl press must not ramp the throttle
+            if (e.ctrl) {  // Ctrl+1 / Ctrl+2: skins, Ctrl+0: VESSEL fuel / heat; never a throttle ramp
                 ctrl_used_ = true;
                 if (e.digit == 1) r.skin = "classic";
                 else if (e.digit == 2) r.skin = "apollo";
+                else if (e.digit == 0) r.vessel_mode = true;
             } else if (e.alt) {
                 r.commands.push_back({Command::SasMode, SAS_MODE_BY_DIGIT[e.digit]});
             } else {

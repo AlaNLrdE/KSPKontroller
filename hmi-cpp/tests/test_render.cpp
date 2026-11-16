@@ -79,10 +79,7 @@ const std::pair<int, int> SIZES[] = {{1260, 840}, {1920, 1080}, {2520, 1680}};
 constexpr Color FILL{1, 2, 3};
 constexpr uint32_t FILL_PIXEL = 0x010203;
 
-Rect orbit_panel(const Screen& s) {
-    double u = s.canvas->u;
-    return Rect::f(s.canvas->w * .44 + 1.6 * u, 13 * u, s.canvas->w * .56 - 4.1 * u, 27 * u);
-}
+Rect orbit_panel(const Screen& s) { return flight_layout(*s.canvas).orbit; }
 
 Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 
@@ -167,6 +164,44 @@ TEST(resource_dials_and_their_text_stay_inside_the_panel) {
                     if (&ta != &tb && (ta == "ELECTRICITY" || ta == "MONOPROPELLANT" || ta == "XENON GAS") &&
                         (tb == "ELECTRICITY" || tb == "MONOPROPELLANT" || tb == "XENON GAS") && ra.collides(rb))
                         check::fail(__FILE__, __LINE__, "dial labels overlap: " + ta + " / " + tb);
+        }
+    }
+}
+
+TEST(flight_layout_panels_tile_the_right_column) {
+    for (const auto& size : SIZES) {
+        Screen s(size.first, size.second);
+        const FlightLayout l = flight_layout(*s.canvas);
+        CHECK(!l.orbit.collides(l.vessel) && !l.orbit.collides(l.navball) && !l.vessel.collides(l.navball));
+        CHECK_EQ(l.orbit.y, l.vessel.y);
+        CHECK(l.vessel.w < l.orbit.w && l.vessel.h > l.vessel.w);  // narrow and tall: a rocket's side view
+        CHECK(l.navball.right() <= s.canvas->w && l.navball.bottom() <= s.canvas->h);
+        CHECK(l.navball.h > l.orbit.h);
+    }
+}
+
+TEST(vessel_panel_draws_both_views_inside_its_panel) {
+    for (const auto& size : SIZES) {
+        Screen s(size.first, size.second);
+        const Rect panel = flight_layout(*s.canvas).vessel;
+        Snapshot snap = demo();
+        for (bool heat : {false, true}) {
+            s.display->set_vessel_heat(heat);
+            for (int variant = 0; variant < 3; ++variant) {
+                if (variant == 1) snap.vessel_view.reset();  // no KSPHMIFlight: "NO VESSEL DATA"
+                if (variant == 2) {                          // one huge part far from the origin still fits
+                    VesselView v;
+                    v.parts.push_back(VesselPart{{{1e5, 1e5}, {1e5 + 300, 1e5}, {1e5 + 150, 1e5 + 900}}, 0, 50, 99});
+                    snap.vessel_view = std::make_shared<const VesselView>(v);
+                }
+                s.fill(FILL);
+                const Rect before = s.canvas->clip();
+                s.display->vessel(panel, snap);
+                s.canvas->flush();
+                CHECK(s.canvas->clip() == before);
+                CHECK(s.untouched_outside(panel, FILL_PIXEL));
+            }
+            snap = demo();
         }
     }
 }
@@ -268,7 +303,8 @@ TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
         const int w = size.first, h = size.second;
         Screen s(w, h);
         double u = s.canvas->u;
-        Rect panel = Rect::f(w * .44 + 1.6 * u, 36.6 * u, w * .56 - 4.1 * u, 60.9 * u);
+        Rect panel = flight_layout(*s.canvas).navball;
+        (void)u;
         std::map<std::string, Rect> labels;
         s.canvas->on_text = [&](const std::string& label, const Rect& r) {
             if (!panel.contains(r)) check::fail(__FILE__, __LINE__, "navball text outside its panel: " + label);
@@ -419,11 +455,11 @@ TEST(orbit_fills_the_panel_and_navball_stays_dominant) {
             }
         // The conics span most of the drawable height (panel minus title and label margins).
         CHECK(bottom - top >= .85 * (panel.h - 9.3 * u));
-        // The NavBall panel keeps at least 90 % of the globe it had with the former 22u ORBIT panel.
-        double nav_h = (h - 2.5 * u) - 13 * u - panel.h - 1.6 * u, nav_w = panel.w;
-        double before = std::min((h - 2.5 * u) - 13 * u - 22 * u - 1.6 * u, nav_w);
-        CHECK(std::min(nav_h, nav_w) >= .9 * before);
-        CHECK(std::min(nav_h, nav_w) * .31 * 2 > panel.h);  // the globe stays taller than the whole ORBIT panel
+        // The NavBall gave height to the ORBIT / VESSEL row (user, 2026-11-16); its globe, in both skins, still
+        // spans at least 80 % of that row's height.
+        const Rect nav = flight_layout(*s.canvas).navball;
+        for (bool classic : {false, true})
+            CHECK(2 * Navball::globe_geometry(*s.canvas, nav, classic).r >= .8 * panel.h);
     }
 }
 

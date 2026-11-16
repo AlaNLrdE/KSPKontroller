@@ -61,7 +61,8 @@ add_library(ksphmi_core STATIC
   src/scenes.cpp
   src/shipreport.cpp
   src/telemetry.cpp
-  src/vec.cpp)
+  src/vec.cpp
+  src/vesselview.cpp)
 target_include_directories(ksphmi_core PUBLIC include)
 target_compile_definitions(ksphmi_core PUBLIC KSPHMI_VERSION="${PROJECT_VERSION}")
 target_link_libraries(ksphmi_core PUBLIC Threads::Threads)

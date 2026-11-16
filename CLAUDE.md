@@ -152,6 +152,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - HMI numeric casts must validate before conversion: all integer configuration fields require finite, integral
   values within int range; clock UT must be below 2^63. `double(LLONG_MAX)` rounds to 2^63, so use an
   exclusive power-of-two bound and test the adjacent representable double with float-cast-overflow enabled.
+- The flight right column comes only from `flight_layout()` (both skins and render tests): ORBIT | VESSEL in a
+  34u row, NavBall below (user, 2026-11-16). A shorter NavBall must close up the apollo readout rows and move or
+  shrink the classic globe (speed box above, HDG caption 1.4u above SAS MODE); never hard-code panel rects.
 - Keep the ten flight metric tiles in the upper-left block below 40% of screen height. Resources are vessel
   totals in KSP units (0 capacity = absent, 0 amount = empty, missing data = unknown); staging is read-only.
   Rebuild resource/stage collections after stage or parts changes, including docking and decoupling.

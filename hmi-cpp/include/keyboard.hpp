@@ -20,7 +20,7 @@ enum class Key {
     W, S, A, D, Q, E,                       // pitch down / up, yaw left / right, roll left / right
     H, N, I, K, J, L,                       // translate forward / back, down / up, left / right
     LeftShift, LeftCtrl,                    // throttle up / down (held)
-    Digit,                                  // 0-9: action groups; Ctrl+1/2 skins; Alt+digit SAS modes
+    Digit,                                  // 0-9: action groups; Ctrl+1/2 skins, Ctrl+0 VESSEL view; Alt+digit SAS modes
     Escape, Quit,                           // Esc and q close the HMI
 };
 
@@ -60,10 +60,12 @@ struct Held {
     bool operator!=(const Held& o) const { return !(*this == o); }
 };
 
-/// What a key event asks for: game commands, a skin ("classic" / "apollo") and/or quitting.
+/// What a key event asks for: game commands, a skin ("classic" / "apollo"), the VESSEL view switch (Ctrl+0)
+/// and/or quitting.
 struct KeyResult {
     std::vector<Command> commands;
     std::string skin;
+    bool vessel_mode = false;
     bool quit = false;
 };
 

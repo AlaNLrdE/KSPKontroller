@@ -233,8 +233,15 @@ Quat Navball::smooth(const Quat& shown, const Quat& target, double dt) {
     return slerp(shown, target, 1 - std::exp(-dt / SMOOTHING_S));
 }
 
-Navball::Globe Navball::globe_geometry(const Canvas& c, const Rect& rect) {
-    return {rect.centerx() - 1.8 * c.u, rect.y + rect.h * .46, std::min(rect.h * .31, rect.w * .31)};
+Navball::Globe Navball::globe_geometry(const Canvas& c, const Rect& rect, bool classic) {
+    Globe g{rect.centerx() - 1.8 * c.u, rect.y + rect.h * .46, std::min(rect.h * .31, rect.w * .31)};
+    if (!classic) return g;
+    // Above the globe: the speed box (5.4u) and .3u; below it: the HDG caption (.9u + about 3.4u), a 1.4u gap and
+    // the SAS MODE row 8.5u above the bottom. A short panel shrinks the globe until both fit.
+    const double above = 5.7 * c.u, below = (.9 + 3.4 + 1.4 + 8.5) * c.u;
+    g.r = std::max(std::min(g.r, (rect.h - above - below) / 2), 4 * c.u);
+    g.cy = std::clamp(g.cy, rect.y + g.r + above, rect.bottom() - g.r - below);
+    return g;
 }
 
 const std::vector<std::pair<const char*, const char*>>& Navball::sas_modes() {
@@ -263,7 +270,7 @@ void Navball::draw(Canvas& c, const Rect& rect, const std::optional<Navigation>&
         c.text(fmt::str("P %+.1f\xC2\xB0   R %+.1f\xC2\xB0", n.pitch, n.roll), 2, INK, rect.right() - 1.8 * u,
                rect.y + 1.8 * u, Anchor::TopRight);
     last_nav_ = n, last_rect_ = rect, last_chrome_ = chrome;
-    if (before_globe) before_globe(globe_square(c, rect));
+    if (before_globe) before_globe(globe_square(c, rect, chrome));
     attitude_layer(c, rect, n);
 }
 
@@ -278,8 +285,8 @@ void Navball::advance(const Quat& target) {
     animating_ = angle_between(shown_, target) > 0.05;
 }
 
-Rect Navball::globe_square(const Canvas& c, const Rect& rect) {
-    const Globe g = globe_geometry(c, rect);
+Rect Navball::globe_square(const Canvas& c, const Rect& rect, bool classic) {
+    const Globe g = globe_geometry(c, rect, classic);
     const int size = static_cast<int>(std::ceil(2 * g.r + 4));
     const double origin = size / 2.0;
     return Rect(static_cast<int>(g.cx - origin), static_cast<int>(g.cy - origin), size, size);
@@ -297,7 +304,7 @@ bool Navball::redraw(Canvas& c) {
 
 void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     const double u = c.u;
-    const Globe g = globe_geometry(c, rect);
+    const Globe g = globe_geometry(c, rect, chrome);
     const double radius = g.r;
     const double cx = g.cx, cy = g.cy;
     Basis axes;
@@ -308,7 +315,7 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
     }
     const double r = radius;
     // The ball is composed at an integer offset (whole-pixel blit of its surface).
-    const Rect square = globe_square(c, rect);
+    const Rect square = globe_square(c, rect, chrome);
     const int size = square.w, bx = square.x, by = square.y;
     const double origin = size / 2.0;
     auto point = [&](const Vec3& v) { return Pt{static_cast<float>(bx + origin + v.x * r), static_cast<float>(by + origin + v.y * r)}; };

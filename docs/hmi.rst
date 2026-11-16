@@ -90,6 +90,8 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
      - quicksave / quickload
    * - Ctrl+1 / Ctrl+2
      - classic / apollo skin until the HMI exits, over the context reply and ``[display] skin``
+   * - Ctrl+0
+     - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
    * - Esc
      - quit the HMI (``q`` is roll left; on macOS Cmd+Q also quits)
 
@@ -223,6 +225,42 @@ signals the worker without waiting for a system DNS lookup; its shared state sur
 
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
+
+VESSEL panel
+------------
+
+The flight screen's right column (``flight_layout`` in ``display.cpp``, shared by both skins and the render tests)
+puts ORBIT and VESSEL side by side in a 34u row and the NavBall below it (about 49u; user, 2026-11-16).
+VESSEL is 30u wide: a side view of the active vessel, one convex outline per part, in one of two views that
+Ctrl+0 switches. **FUEL** fills each tank from the bottom to its propellant level (every resource except
+ElectricCharge, Ablator, IntakeAir and Ore); parts without tanks are outlines only. **HEAT** colours each
+part blue, green, yellow, orange and red by the hotter of its internal and skin temperature, as a percentage
+of its maximum. Parts are drawn farthest first; the panel clips to its well and restores the caller's clip.
+Without data it says ``NO VESSEL DATA``. On the shorter NavBall panel the apollo readout rows close up
+above the SAS MODE lamps, and the classic globe moves and then shrinks so the speed box and the HDG caption
+fit (``Navball::globe_geometry``).
+
+``KSPSerialIO.Hmi.dll`` (0.19.7.0) measures parts the way Vessel Viewer does (MIT): each part's enabled model
+meshes (at most 256 vertices per mesh, the bounding box of an unreadable mesh) projected on the root part's
+right/up plane, then a convex hull of at most 32 points. ``VesselViewReport`` rebuilds that shape only when
+the active vessel, its part count or ``onVesselWasModified`` change, and refreshes fuel and heat twice a
+second; ``KSPHMIFlight.VesselShape`` / ``VesselState`` only read its cache. The telemetry thread
+(``VesselViewPoller``) calls ``VesselState`` every 0.5 s and ``VesselShape`` only when the state's revision
+differs from the shape it holds. A missing service (older DLL) or text that does not parse empties the panel,
+is logged once per reason and retried after 5 s; the session continues. Text format version 1, two decimals,
+invariant culture::
+
+   v=1 rev=12 parts=3
+   p=0.00,-1.30:18.60,1.30:18.60,0.00:20.00          depth, then x:y points (metres)
+   p=0.25,-1.80:9.50,1.80:9.50,1.80:13.30,-1.80:13.30
+   ...
+   v=1 rev=12
+   s=-1:30,48:20,-1:93                                fuel:heat per part, shape order (fuel -1 = no tanks)
+
+``hmi-cpp/tests/data/vessel_shape_v1.txt`` and ``vessel_state_v1.txt`` are the shared fixture: the plugin's
+formatter must write them exactly (``tools/plugin-shipreport-tests``), the HMI parses them and kspsim serves
+them. ``./ci verify`` (*vessel view: contract*) checks that the three agree. ``--demo`` flies a three-stage
+rocket with two boosters.
 
 VAB ship report
 ---------------

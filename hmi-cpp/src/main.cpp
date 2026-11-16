@@ -38,6 +38,7 @@ void on_signal(int) { quit_signal = 1; }
 struct Args {
     std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor;
     bool demo = false, windowed = false, desktop = false, offscreen = false, splash = false, bench_anim = false;
+    bool vessel_heat = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
 };
@@ -67,6 +68,7 @@ void usage(FILE* out) {
                  "  --bench-anim       with --bench: one sample, only the NavBall attitude changes (NavBall-only\n"
                  "                     frames over the cached layer; full frames when the layer cache is off)\n"
                  "  --layer-cache M    auto (GPU renderer only), on or off (overrides [display] layer_cache)\n"
+                 "  --vessel-heat      start the VESSEL panel on heat instead of fuel (Ctrl+0 switches)\n"
                  "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
                  "  --splash           animate the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) until\n"
                  "                     the HMI writes $XDG_RUNTIME_DIR/ksphmi.ready; reads no settings\n"
@@ -98,6 +100,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--desktop") a.desktop = a.windowed = true;  // never the kiosk outputs or the boot hand-over
         else if (k == "--monitor") value(a.monitor);
         else if (k == "--offscreen") a.offscreen = true;
+        else if (k == "--vessel-heat") a.vessel_heat = true;
         else if (k == "--bench-anim") a.bench_anim = true;
         else if (k == "--layer-cache") value(a.layer_cache);
         else if (k == "--splash") a.splash = true;
@@ -410,12 +413,14 @@ int run(int argc, char** argv) {
         std::unique_ptr<Display> display;
         std::string key_skin;  // Ctrl+1 / Ctrl+2 on the keyboard; survives a rebuild for a new screen size
         Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
+        bool vessel_heat = args.vessel_heat;  // Ctrl+0: the VESSEL panel shows heat instead of fuel
         auto build_view = [&] {
             display.reset();
             canvas.reset();
             canvas = std::make_unique<Canvas>(out.renderer(), out.w(), out.h(), out.accelerated());
             display = std::make_unique<Display>(cfg, *canvas);
             display->choose_skin(key_skin);
+            display->set_vessel_heat(vessel_heat);
             log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
             const std::string mode = args.layer_cache.empty() ? cfg.display.layer_cache : args.layer_cache;
             const bool want = mode == "on" || (mode != "off" && out.accelerated());
@@ -448,6 +453,12 @@ int run(int argc, char** argv) {
             if (r.quit) quit_signal = 1;
             if (source)
                 for (const Command& c : r.commands) source->command(c);
+            if (r.vessel_mode) {
+                vessel_heat = !vessel_heat;
+                display->set_vessel_heat(vessel_heat);
+                log::info(LOG, std::string("VESSEL panel: ") + (vessel_heat ? "heat" : "fuel"));
+                last = nullptr;  // redraw now
+            }
             if (!r.skin.empty()) {
                 key_skin = r.skin;
                 display->choose_skin(key_skin);

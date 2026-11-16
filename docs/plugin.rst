@@ -261,7 +261,12 @@ part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has n
   expiry) and ``SetThrottle`` / ``NudgeThrottle`` change ``FlightInputHandler.state.mainThrottle`` once, like
   KSP's Z / X / Shift / Ctrl. ``AxisInput`` first applies the board's axes by their ``*Enable`` modes, then a
   held key on each axis the board leaves neutral (link down, mode 0 or a centred joystick), so the board's
-  joystick always wins. ``tools/button-events-tests`` tests ``HmiKeyboard``. No service ``Id`` is set,
+  joystick always wins. ``tools/button-events-tests`` tests ``HmiKeyboard``.
+* ``VesselViewReport`` (``KSPAddon`` for flight, 0.19.7.0) builds the HMI's VESSEL panel on Unity's main thread:
+  per-part convex outlines from the model meshes, rebuilt on a vessel or part-count change and on
+  ``onVesselWasModified``, and fuel / heat percentages twice a second, into ``VesselViewCache``.
+  ``KSPHMIFlight.VesselShape`` / ``VesselState`` only read it. ``VesselViewFormat`` (plain C#) holds the hull,
+  the fuel and heat rules and text format v1 (:doc:`hmi`, *VESSEL panel*). No service ``Id`` is set,
   so kRPC assigns one and cannot clash with another mod's.
 * ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
   ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.

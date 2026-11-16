@@ -69,6 +69,16 @@ def read_float(data: bytes) -> float:
     return struct.unpack("<f", data[:4])[0]
 
 
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hmi-cpp", "tests", "data")
+
+
+def vessel_view_fixture(shape: bool) -> str:
+    """The VESSEL panel text KSPSerialIO.Hmi writes (hmi-cpp/tests/data/vessel_*_v1.txt, the shared fixture)."""
+    name = "vessel_shape_v1.txt" if shape else "vessel_state_v1.txt"
+    with open(os.path.join(FIXTURES, name), encoding="utf-8") as f:
+        return f.read().replace("\r\n", "\n")
+
+
 # kRPC SpaceCenter.SASMode per kspsim sas_mode (autopilot mode + 1: hold, pro, ret, N+, N-, radial in, out, ...)
 SAS_MODE_KRPC = (0, 2, 3, 4, 5, 7, 6, 8, 9, 1)
 
@@ -161,6 +171,10 @@ def services_message(ksphmi: bool = True) -> K.Services:
             proc = flight.procedures.add(name=name)
             for param in params:
                 proc.parameters.add(name=param).type.code = K.Type.FLOAT
+            proc.game_scenes.append(K.Procedure.FLIGHT)
+        for name in ("VesselShape", "VesselState"):  # the VESSEL panel (format v1, shared fixture)
+            proc = flight.procedures.add(name=name)
+            proc.return_type.code = K.Type.STRING
             proc.game_scenes.append(K.Procedure.FLIGHT)
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
@@ -390,11 +404,13 @@ class KrpcServer:
             return self._ksphmi(proc, args)
         raise RpcFailure("kspsim does not implement the %s service" % service)
 
-    def _ksphmi_flight(self, proc: str, args: dict) -> None:
+    def _ksphmi_flight(self, proc: str, args: dict) -> bytes | None:
         """KSPSerialIO.Hmi's flight keyboard service: held axes are recorded, the throttle is the window's."""
         sim = self.sim
         if sim.scene != "flight":
             raise RpcFailure("Procedure not available in game scene '%s'" % sim.scene, "KRPC", "InvalidOperationException")
+        if proc in ("VesselShape", "VesselState"):
+            return enc_string(vessel_view_fixture(proc == "VesselShape"))
         values = [read_float(args.get(i, b"\x00" * 4)) for i in range(6)]
         if proc == "SetAxes":
             with sim.lock:

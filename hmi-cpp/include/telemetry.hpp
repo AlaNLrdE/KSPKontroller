@@ -99,6 +99,28 @@ private:
     std::string problem_;
 };
 
+/// The VESSEL panel over kRPC: KSPHMIFlight.VesselState() every `period` seconds, VesselShape() only when the
+/// state's revision is not the shape held (new vessel, staging, docking). A server error (no KSPHMIFlight service:
+/// KSPSerialIO.Hmi.dll older than 0.19.7.0 or kRPC missing) or text that does not parse clears the view and is
+/// retried after `retry_seconds`, logged once per reason. Link errors (krpc::ConnectionError) propagate.
+class VesselViewPoller {
+public:
+    explicit VesselViewPoller(double period = 0.5, double retry_seconds = 5.0)
+        : period_(period), retry_seconds_(retry_seconds) {}
+    std::shared_ptr<const VesselView> poll(krpc::Client& c, double now);
+    /// Forget the view (new vessel session, new connection).
+    void reset();
+    int shape_fetches = 0;  ///< VesselShape calls made (tests)
+
+private:
+    void fail(const std::string& why, double now);
+    double period_, retry_seconds_;
+    std::optional<VesselView> shape_;
+    std::shared_ptr<const VesselView> view_;
+    double next_ = -1e9;
+    std::string problem_;
+};
+
 class KrpcSource : public Source {
 public:
     struct Options {
@@ -141,6 +163,7 @@ private:
     std::string context_skin_;
     double context_at_ = -1e9;
     ShipReportPoller ship_;
+    VesselViewPoller vessel_view_;
     std::mutex input_mutex_;
     std::vector<Command> commands_;  ///< keyboard commands waiting for the telemetry thread (input_mutex_)
     Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)

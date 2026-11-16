@@ -31,6 +31,7 @@
 #include "scenes.hpp"
 #include "shipreport.hpp"
 #include "telemetry.hpp"
+#include "vesselview.hpp"
 
 using namespace ksphmi;
 
@@ -654,6 +655,109 @@ TEST(krpc_client_calls_errors_nulls_and_streams) {
     c.remove_stream(ut);
 }
 
+TEST(vessel_view_text_round_trips_and_rejects_bad_input) {
+    VesselView demo = demo_vessel_view(0);
+    demo.revision = 7;
+    auto shape = parse_vessel_shape(format_vessel_shape(demo));
+    CHECK(shape.has_value());
+    CHECK_EQ(shape->revision, 7u);
+    CHECK_EQ(shape->parts.size(), demo.parts.size());
+    CHECK_EQ(shape->parts[0].fuel, -1);  // a shape carries no state
+    CHECK(apply_vessel_state(*shape, format_vessel_state(demo)));
+    for (size_t i = 0; i < demo.parts.size(); ++i) {
+        CHECK_EQ(shape->parts[i].fuel, demo.parts[i].fuel);
+        CHECK_EQ(shape->parts[i].heat, demo.parts[i].heat);
+    }
+    CHECK(!apply_vessel_state(*shape, "v=1 rev=8\ns=" + std::string("0:0")));  // another revision
+    CHECK(!apply_vessel_state(*shape, "v=1 rev=7\ns=0:0"));                       // wrong part count
+    VesselView one;
+    one.revision = 3;
+    one.parts.push_back(VesselPart{{{0, 0}, {1, 0}, {0, 1}}, 0, -1, 0});
+    CHECK(apply_vessel_state(one, "v=1 rev=3\ns=250:-5"));  // clamped
+    CHECK_EQ(one.parts[0].fuel, 100);
+    CHECK_EQ(one.parts[0].heat, 0);
+    CHECK(parse_vessel_shape("v=1 rev=0 parts=0\n").has_value());  // no vessel
+    for (const char* bad : {"", "v=2 rev=1 parts=0", "v=1 rev=1 parts=1", "v=1 rev=1 parts=1\np=0,0:0,1:0",
+                            "v=1 rev=1 parts=1\np=0,0:0,1:0,x:1", "v=1 rev=-1 parts=0", "v=1 rev=1 parts=1\nq=0,0:0,1:0,1:1"})
+        CHECK(!parse_vessel_shape(bad).has_value());
+    // The fixture the plugin's formatter and kspsim share
+    std::ifstream shape_in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/vessel_shape_v1.txt");
+    std::ifstream state_in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/vessel_state_v1.txt");
+    std::stringstream shape_text, state_text;
+    shape_text << shape_in.rdbuf();
+    state_text << state_in.rdbuf();
+    auto fixture = parse_vessel_shape(shape_text.str());
+    CHECK(fixture.has_value());
+    if (fixture) {
+        CHECK(apply_vessel_state(*fixture, state_text.str()));
+        CHECK_EQ(fixture->parts.size(), size_t(3));
+        CHECK_EQ(fixture->parts[1].fuel, 48);
+        CHECK_EQ(fixture->parts[2].heat, 93);
+    }
+}
+
+TEST(vessel_view_draw_order_and_fuel_clip) {
+    VesselView v;
+    v.parts.push_back(VesselPart{{{0, 0}, {1, 0}, {0, 1}}, 0.5, -1, 0});
+    v.parts.push_back(VesselPart{{{0, 0}, {1, 0}, {0, 1}}, 2.0, -1, 0});
+    v.parts.push_back(VesselPart{{{0, 0}, {1, 0}, {0, 1}}, 0.5, -1, 0});
+    const auto order = vessel_draw_order(v);
+    CHECK(order == (std::vector<size_t>{1, 0, 2}));  // farthest first, ties in shape order
+    const std::vector<Point2> square{{0, 0}, {10, 0}, {10, 10}, {0, 10}};  // screen y down
+    auto lower = clip_below(square, 4);
+    CHECK_EQ(lower.size(), size_t(4));
+    for (const Point2& p : lower) CHECK(p.second >= 4);
+    CHECK(clip_below(square, 11).empty());
+    CHECK_EQ(clip_below(square, -1).size(), size_t(4));
+}
+
+TEST(vessel_view_poller_fetches_the_shape_only_on_a_new_revision) {
+    std::mutex m;
+    int shape_calls = 0, state_calls = 0;
+    uint32_t revision = 1;
+    bool missing = false;
+    VesselView base = demo_vessel_view(0);
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>&) -> FakeResult {
+        std::lock_guard<std::mutex> lock(m);
+        if (missing) return {"", false, "Procedure \"VesselState\" not found, in service \"KSPHMIFlight\""};
+        VesselView v = base;
+        v.revision = revision;
+        if (proc == "VesselState") return ++state_calls, FakeResult{pb::enc_string(format_vessel_state(v))};
+        if (proc == "VesselShape") return ++shape_calls, FakeResult{pb::enc_string(format_vessel_shape(v))};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    VesselViewPoller poller(0.5, 5.0);
+    auto view = poller.poll(c, 0);
+    CHECK(view && view->parts.size() == base.parts.size());
+    CHECK_EQ(view->parts[3].fuel, base.parts[3].fuel);
+    CHECK(poller.poll(c, 0.2) == view);  // within the period: no call
+    poller.poll(c, 1.0);
+    poller.poll(c, 2.0);
+    CHECK_EQ(poller.shape_fetches, 1);  // same revision: state only
+    {
+        std::lock_guard<std::mutex> lock(m);
+        revision = 2;  // staging: new shape
+    }
+    poller.poll(c, 3.0);
+    CHECK_EQ(poller.shape_fetches, 2);
+    {
+        std::lock_guard<std::mutex> lock(m);
+        missing = true;  // KSPSerialIO.Hmi.dll older than 0.19.7.0
+    }
+    CHECK(!poller.poll(c, 4.0));
+    CHECK(!poller.poll(c, 5.0));  // retried only after 5 s
+    {
+        std::lock_guard<std::mutex> lock(m);
+        missing = false;
+    }
+    CHECK(poller.poll(c, 9.1) != nullptr);
+}
+
 TEST(keyboard_maps_ksp_default_flight_keys) {
     Keyboard kb;
     auto key = [](Key k) { return KeyEvent{k}; };
@@ -687,6 +791,8 @@ TEST(keyboard_maps_ksp_default_flight_keys) {
     CHECK_EQ(kb.down(digit(1, true), 0).skin, "classic");
     CHECK_EQ(kb.down(digit(2, true), 0).skin, "apollo");
     CHECK(kb.down(digit(2, true), 0).commands.empty());
+    CHECK(kb.down(digit(0, true), 0).vessel_mode);  // Ctrl+0: VESSEL fuel / heat
+    CHECK(kb.down(digit(0, true), 0).commands.empty());
     CHECK(kb.down(key(Key::Escape), 0).quit);
     CHECK(kb.down(key(Key::Q), 0).commands.empty() && !kb.down(key(Key::Q), 0).quit);  // Q is roll left, not quit
     kb.release_all();

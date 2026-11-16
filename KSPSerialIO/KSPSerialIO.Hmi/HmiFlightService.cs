@@ -29,6 +29,21 @@ namespace KSPSerialIO.Hmi
             FlightInputHandler.state.mainThrottle = Mathf.Clamp01(value);
         }
 
+        /// <summary>The VESSEL panel's side view (format v1): one convex outline per part. Fetch it when
+        /// VesselState's revision differs from the shape held. Reads VesselViewCache only.</summary>
+        [KRPCProcedure]
+        public static string VesselShape()
+        {
+            return VesselViewCache.Shape;
+        }
+
+        /// <summary>Fuel and heat per part (format v1, shape order), refreshed twice a second.</summary>
+        [KRPCProcedure]
+        public static string VesselState()
+        {
+            return VesselViewCache.State;
+        }
+
         /// <summary>Move the main throttle by `delta` (clamped to 0..1), like a frame of held Shift / Ctrl.</summary>
         [KRPCProcedure]
         public static void NudgeThrottle(float delta)

@@ -760,6 +760,8 @@ class ShipReportTest(unittest.TestCase):
                 self.assertEqual(sim.manual.throttle, 1.0)
                 flight.nudge_throttle(-0.25)
                 self.assertAlmostEqual(sim.manual.throttle, 0.75, places=5)
+                self.assertTrue(flight.vessel_shape().startswith("v=1 rev=12 parts=3\n"))  # the shared fixture
+                self.assertEqual(flight.vessel_state(), "v=1 rev=12\ns=-1:30,48:20,-1:93\n")
                 sim.set_scene("sph")
                 self.assertEqual(conn.ksphmi.revision(), rev + 4)
                 conn.ksphmi.press("SAS")  # the SPH ignores presses, like KSPSerialIO.Hmi

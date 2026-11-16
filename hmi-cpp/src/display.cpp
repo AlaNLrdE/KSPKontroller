@@ -133,6 +133,118 @@ void Display::set_skin(const std::string& name, const char* why) {
     skin_ = name;
 }
 
+FlightLayout flight_layout(const Canvas& c) {
+    const double u = c.u;
+    const double top = 13 * u, bottom = c.h - 2.5 * u, gap = 1.6 * u, left_w = c.w * 0.44;
+    const double right_x = left_w + gap, right_w = c.w - left_w - gap - 2.5 * u;
+    // 34u keeps all five NavBall readout rows above the SAS MODE lamps; VESSEL 30u wide suits a rocket's side view
+    const double row_h = 34 * u, vessel_w = 30 * u;
+    FlightLayout l;
+    l.orbit = Rect::f(right_x, top, right_w - vessel_w - gap, row_h);
+    l.vessel = Rect::f(right_x + right_w - vessel_w, top, vessel_w, row_h);
+    l.navball = Rect::f(right_x, top + row_h + gap, right_w, bottom - top - row_h - gap);
+    return l;
+}
+
+namespace {
+
+/// Blue (cold) to green, yellow, orange and red at the part's maximum temperature.
+Color heat_color(int percent) {
+    static const std::pair<double, Color> stops[] = {
+        {0, {40, 90, 220}}, {.4, {60, 200, 120}}, {.65, {240, 220, 60}}, {.85, {250, 140, 40}}, {1, {235, 40, 40}}};
+    const double t = std::clamp(percent, 0, 100) / 100.0;
+    for (size_t i = 1; i < std::size(stops); ++i) {
+        if (t <= stops[i].first) {
+            const double f = (t - stops[i - 1].first) / (stops[i].first - stops[i - 1].first);
+            const Color a = stops[i - 1].second, b = stops[i].second;
+            auto mix = [f](uint8_t x, uint8_t y) { return uint8_t(std::lround(x + (y - x) * f)); };
+            return Color{mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b)};
+        }
+    }
+    return stops[std::size(stops) - 1].second;
+}
+
+}  // namespace
+
+void Display::vessel(const Rect& rect, const Snapshot& s) {
+    const double u = c_.u;
+    panel(c_, rect);
+    c_.text("VESSEL", 2.6, LABEL, rect.x + 1.8 * u, rect.y + 1.8 * u);
+    const double bw = 5.6 * u, bh = 2.3 * u, gap = .5 * u;
+    const double bx = rect.right() - 1.8 * u - 2 * bw - gap, by = rect.y + 1.7 * u;
+    for (int i = 0; i < 2; ++i) {
+        const bool on = (i == 1) == vessel_heat_;
+        const Rect r = Rect::f(bx + i * (bw + gap), by, bw, bh);
+        c_.rounded_rect(r, float(.3 * u), on ? Color{34, 60, 44} : Color{36, 44, 58});
+        c_.text(i ? "HEAT" : "FUEL", 1.2, on ? GOOD : LABEL, r.centerx(), r.centery(), Anchor::Center);
+    }
+    vessel_contents(Rect::f(rect.x + 1.2 * u, rect.y + 5 * u, rect.w - 2.4 * u, rect.h - 6.2 * u), s,
+                    VesselStyle{PANEL, MUTED, GRID, GOOD, BG, LABEL});
+}
+
+void Display::vessel_contents(const Rect& area, const Snapshot& s, const VesselStyle& style) {
+    const double u = c_.u;
+    const Rect previous_clip = c_.clip();
+    c_.set_clip(previous_clip.clip(area));
+    const double legend_h = 3.4 * u;
+    const Rect plot = Rect::f(area.x + .6 * u, area.y + .6 * u, area.w - 1.2 * u, area.h - legend_h - 1.2 * u);
+    const VesselView* view = s.vessel_view.get();
+    if (!view || view->parts.empty()) {
+        c_.text("NO VESSEL DATA", 1.5, style.text, plot.centerx(), plot.centery(), Anchor::Center);
+    } else {
+        double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+        for (const VesselPart& p : view->parts)
+            for (const Point2& q : p.hull)
+                x0 = std::min(x0, q.first), x1 = std::max(x1, q.first), y0 = std::min(y0, q.second), y1 = std::max(y1, q.second);
+        const double scale = std::min(plot.w / std::max(x1 - x0, .01), plot.h / std::max(y1 - y0, .01));
+        const double cx = plot.x + plot.w / 2.0, cy = plot.y + plot.h / 2.0, mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+        const float lw = std::max(1.0f, float(.15 * u));
+        for (size_t index : vessel_draw_order(*view)) {
+            const VesselPart& part = view->parts[index];
+            std::vector<Point2> screen;
+            std::vector<Pt> pts;
+            for (const Point2& q : part.hull) {
+                screen.push_back({cx + (q.first - mx) * scale, cy - (q.second - my) * scale});
+                pts.push_back(Pt{float(screen.back().first), float(screen.back().second)});
+            }
+            if (vessel_heat_) {
+                c_.polygon(pts, heat_color(part.heat));
+                c_.polyline(pts, true, lw, style.heat_outline);
+                continue;
+            }
+            c_.polygon(pts, part.fuel >= 0 ? style.empty : style.background);
+            if (part.fuel > 0) {
+                double top = 1e18, bottom = -1e18;
+                for (const Point2& q : screen) top = std::min(top, q.second), bottom = std::max(bottom, q.second);
+                std::vector<Pt> fill;
+                for (const Point2& q : clip_below(screen, bottom - (bottom - top) * part.fuel / 100.0))
+                    fill.push_back(Pt{float(q.first), float(q.second)});
+                if (fill.size() >= 3) c_.polygon(fill, style.fuel);
+            }
+            c_.polyline(pts, true, lw, style.outline);
+        }
+    }
+    // legend
+    const double lx = area.x + 1.5 * u, lr = area.right() - 1.5 * u, ly = area.bottom() - legend_h;
+    const double bar_h = 1.0 * u;
+    if (vessel_heat_) {
+        const int steps = 40;
+        const double step = (lr - lx) / steps;
+        for (int i = 0; i < steps; ++i)
+            c_.fill_rect(float(lx + i * step), float(ly), float(step + 1), float(bar_h), heat_color(i * 100 / (steps - 1)));
+        c_.text("0", 1.1, style.text, lx, ly + bar_h + .3 * u);
+        c_.text("% OF MAX TEMP", 1.1, style.text, (lx + lr) / 2, ly + bar_h + .3 * u, Anchor::MidTop);
+        c_.text("100", 1.1, style.text, lr, ly + bar_h + .3 * u, Anchor::TopRight);
+    } else {
+        const double mid = (lx + lr) / 2;
+        c_.fill_rect(float(lx), float(ly), float(mid - lx - u), float(bar_h), style.fuel);
+        c_.fill_rect(float(mid + u), float(ly), float(lr - mid - u), float(bar_h), style.empty);
+        c_.text("FUEL", 1.1, style.text, (lx + mid - u) / 2, ly + bar_h + .3 * u, Anchor::MidTop);
+        c_.text("EMPTY", 1.1, style.text, (mid + u + lr) / 2, ly + bar_h + .3 * u, Anchor::MidTop);
+    }
+    c_.set_clip(previous_clip);
+}
+
 void Display::choose_skin(const std::string& name) {
     if (name.empty() || known_skin(name)) chosen_skin_ = name;
 }
@@ -541,7 +653,7 @@ void Display::facility(const Snapshot& snap) {
 
 void Display::flight(const Snapshot& s) {
     const double u = c_.u;
-    const double top = 13 * u, bottom = c_.h - 2.5 * u, gap = 1.6 * u;
+    const double top = 13 * u, bottom = c_.h - 2.5 * u;
     const double left_w = c_.w * 0.44;
     const double x0 = 2.5 * u;
     const double metric_gap = .8 * u;
@@ -589,11 +701,10 @@ void Display::flight(const Snapshot& s) {
     resources(Rect::f(x0, 54 * u, left_w - x0, 25 * u), s);
     staging(Rect::f(x0, 80.6 * u, left_w - x0, bottom - 80.6 * u), s);
 
-    const double right_x = left_w + gap, right_w = c_.w - left_w - gap - 2.5 * u;
-    // ORBIT is short and wide; 27u keeps the NavBall globe within 10 % of its size with a 22u ORBIT panel.
-    const double orbit_h = 27 * u;
-    orbit(Rect::f(right_x, top, right_w, orbit_h), s);
-    navball_.draw(c_, Rect::f(right_x, top + orbit_h + gap, right_w, bottom - top - orbit_h - gap), s.nav);
+    const FlightLayout layout = flight_layout(c_);
+    orbit(layout.orbit, s);
+    vessel(layout.vessel, s);
+    navball_.draw(c_, layout.navball, s.nav);
 }
 
 void Display::tile(const Rect& rect, const std::string& label, const std::string& value, Color color,

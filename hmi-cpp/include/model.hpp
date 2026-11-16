@@ -13,6 +13,7 @@
 
 #include "shipreport.hpp"
 #include "vec.hpp"
+#include "vesselview.hpp"
 
 namespace ksphmi {
 
@@ -151,6 +152,8 @@ struct Snapshot {
     std::optional<ManeuverOrbit> maneuver_orbit;  ///< only with a node in the current sphere of influence
     /// VAB scene only: the editor ship report (KSPHMI kRPC service); null = unavailable, the static cards are shown.
     std::shared_ptr<const ShipReport> ship;
+    /// Flight only: the VESSEL panel's side view with fuel and heat (KSPHMIFlight); null = unavailable.
+    std::shared_ptr<const VesselView> vessel_view;
     double received = 0;  ///< monotonic seconds when the sample was taken
 };
 

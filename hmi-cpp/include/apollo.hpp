@@ -52,6 +52,8 @@ private:
     // Each section draws its static art (`art`, into the cached panel) or its live parts, from the same geometry.
     void header(Canvas& c, bool art, const Snapshot& s, double now, int screen);
     void flight(Canvas& c, bool art, const Snapshot& s);
+    /// VESSEL bezel with FUEL / HEAT lamps (art pass) and the schematic (live pass, Display::vessel_contents).
+    void vessel(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void resources(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     void staging(Canvas& c, bool art, const Rect& rect, const Snapshot& s);
     /// NavBall zone: white group frame, the globe in a round metal bezel, segment readouts and SAS mode lamps.

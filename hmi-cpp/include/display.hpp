@@ -20,6 +20,18 @@ namespace ksphmi {
 
 class ApolloSkin;
 
+/// The flight screen's right column, the same in both skins: ORBIT and VESSEL side by side on top, the NavBall
+/// below. VESSEL is narrow and tall (rockets are), the NavBall keeps the remaining 49 % of the height.
+struct FlightLayout {
+    Rect orbit, vessel, navball;
+};
+FlightLayout flight_layout(const Canvas& c);
+
+/// Colours of the VESSEL schematic and legend, per skin.
+struct VesselStyle {
+    Color background, outline, empty, fuel, heat_outline, text;
+};
+
 class Display {
 public:
     Display(const Config& cfg, Canvas& canvas);
@@ -57,6 +69,14 @@ public:
     void staging(const Rect& rect, const Snapshot& s);
     /// ORBIT panel; its contents are clipped to the plot area and the caller's clip is restored.
     void orbit(const Rect& rect, const Snapshot& s);
+    /// VESSEL panel (classic skin): frame, title, FUEL / HEAT lamps and the schematic.
+    void vessel(const Rect& rect, const Snapshot& s);
+    /// The side view inside `area` (fuel levels or heat colours) and its legend, clipped to `area`; the caller's
+    /// clip is restored. Parts are drawn farthest first.
+    void vessel_contents(const Rect& area, const Snapshot& s, const VesselStyle& style);
+    /// What the VESSEL panel shows; Ctrl+0 switches.
+    bool vessel_heat() const { return vessel_heat_; }
+    void set_vessel_heat(bool heat) { vessel_heat_ = heat; }
 
     Canvas& canvas() { return c_; }
     Navball& navball() { return navball_; }
@@ -137,6 +157,7 @@ private:
     Navball navball_;
     Config cfg_;
     std::string config_skin_, skin_, chosen_skin_;
+    bool vessel_heat_ = false;
     std::unique_ptr<ApolloSkin> apollo_;
 };
 

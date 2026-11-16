@@ -31,7 +31,7 @@ public:
     /// restores the pixels under the globe square first and clips to it (Display::animate). False without data.
     bool redraw(Canvas& c);
     /// The square the attitude layer can change (globe, lighting, markers), in pixels, not clipped to the screen.
-    static Rect globe_square(const Canvas& c, const Rect& rect);
+    static Rect globe_square(const Canvas& c, const Rect& rect, bool classic = false);
     /// Called by draw() with globe_square() just before the globe is drawn: everything already drawn there is
     /// the background redraw() must start from (Display captures it from its cached layer).
     std::function<void(const Rect&)> before_globe;
@@ -41,7 +41,9 @@ public:
     struct Globe {
         double cx, cy, r;
     };
-    static Globe globe_geometry(const Canvas& c, const Rect& rect);
+    /// `classic`: the classic skin's own NavBall (chrome on): the speed box above the globe and the HDG caption below
+    /// it must fit, the caption 1.4u above the SAS MODE row; a short panel moves the globe and then shrinks it.
+    static Globe globe_geometry(const Canvas& c, const Rect& rect, bool classic = false);
     /// SAS modes in display order: kRPC name and the button caption.
     static const std::vector<std::pair<const char*, const char*>>& sas_modes();
     /// The classic panel, caption, readouts, bezel ring, THR/G arcs and SAS buttons around the globe. The apollo

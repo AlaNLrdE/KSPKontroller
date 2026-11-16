@@ -142,10 +142,49 @@ internal static class Program
         ShipReportCache.Clear();
     }
 
+    /// <summary>The VESSEL panel format against the fixtures the Pi parser and kspsim share.</summary>
+    private static void VesselView(string root)
+    {
+        string data = Path.Combine(root, "hmi-cpp", "tests", "data");
+        // Point clouds with interior points and duplicates, in any order: their hulls are the fixture's outlines.
+        var nose = new List<double[]> { new[] { 0.0, 20.0 }, new[] { 0.0, 19.0 }, new[] { 1.3, 18.6 }, new[] { -1.3, 18.6 },
+                                        new[] { 1.3, 18.6 }, new[] { 0.2, 18.9 } };
+        var tank = new List<double[]> { new[] { 1.8, 13.3 }, new[] { -1.8, 9.5 }, new[] { 0.0, 11.0 }, new[] { 1.8, 9.5 },
+                                        new[] { -1.8, 13.3 }, new[] { 1.8, 11.0 } };  // (1.8, 11) is collinear: dropped
+        var bell = new List<double[]> { new[] { -0.84, 1.8 }, new[] { 0.84, 1.8 }, new[] { 1.6, 0.2 }, new[] { -1.6, 0.2 },
+                                        new[] { 0.0, 1.0 } };
+        var parts = new List<VesselPartShape> {
+            new VesselPartShape { Depth = 0.001, Hull = VesselViewFormat.ConvexHull(nose) },  // rounds to 0.00, not -0
+            new VesselPartShape { Depth = 0.25, Hull = VesselViewFormat.ConvexHull(tank) },
+            new VesselPartShape { Depth = -0.4, Hull = VesselViewFormat.ConvexHull(bell) } };
+        string shape = File.ReadAllText(Path.Combine(data, "vessel_shape_v1.txt")).Replace("\r\n", "\n");
+        string state = File.ReadAllText(Path.Combine(data, "vessel_state_v1.txt")).Replace("\r\n", "\n");
+        string text = VesselViewFormat.Shape(12, parts);
+        Check(text == shape, "vessel shape differs from vessel_shape_v1.txt:\n" + text);
+        text = VesselViewFormat.State(12, new List<int[]> { new[] { -1, 30 }, new[] { 48, 20 }, new[] { -1, 93 } });
+        Check(text == state, "vessel state differs from vessel_state_v1.txt:\n" + text);
+        Check(VesselViewFormat.Shape(3, new List<VesselPartShape>()) == "v=1 rev=3 parts=0\n", "empty vessel shape");
+        Check(VesselViewFormat.State(3, new List<int[]>()) == "v=1 rev=3\ns=\n", "empty vessel state");
+        // Fuel and heat rules
+        Check(VesselViewFormat.IsFuel("LiquidFuel") && VesselViewFormat.IsFuel("XenonGas") &&
+              !VesselViewFormat.IsFuel("ElectricCharge") && !VesselViewFormat.IsFuel("Ablator"), "propellants only");
+        Check(VesselViewFormat.FuelPercent(0, 0) == -1 && VesselViewFormat.FuelPercent(45, 90) == 50 &&
+              VesselViewFormat.FuelPercent(91, 90) == 100, "fuel percent: no tanks, half, clamped");
+        Check(VesselViewFormat.HeatPercent(600, 1200, 1800, 2000) == 90 && VesselViewFormat.HeatPercent(5000, 1200, 0, 0) == 100 &&
+              VesselViewFormat.HeatPercent(300, 0, 0, 0) == 0, "heat: hotter of internal and skin, clamped, no max");
+        // A dense circle keeps at most MaxHullPoints vertices; fewer than three distinct points stay as they are.
+        var circle = new List<double[]>();
+        for (int i = 0; i < 360; ++i) circle.Add(new[] { Math.Cos(i * Math.PI / 180), Math.Sin(i * Math.PI / 180) });
+        Check(VesselViewFormat.ConvexHull(circle).Count == VesselViewFormat.MaxHullPoints, "long hulls are thinned");
+        Check(VesselViewFormat.ConvexHull(new List<double[]> { new[] { 1.0, 1.0 }, new[] { 1.0, 1.0 } }).Count == 1,
+              "degenerate input");
+    }
+
     private static int Main(string[] args)
     {
         string root = args.Length > 0 ? args[0] : Path.Combine("..", "..");
         EditorContract(root);
+        VesselView(root);
         // A comma decimal separator must not leak into the report.
         Thread.CurrentThread.CurrentCulture = new CultureInfo("es-MX");
         string golden = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "ship_report_v1.txt")).Replace("\r\n", "\n");
@@ -182,7 +221,7 @@ internal static class Program
         Crew();
 
         Console.WriteLine(failures == 0
-            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew"
+            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew, vessel view"
             : failures + " failures");
         return failures == 0 ? 0 : 1;
     }

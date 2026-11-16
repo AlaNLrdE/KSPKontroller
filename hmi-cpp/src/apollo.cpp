@@ -495,7 +495,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
 
 void ApolloSkin::flight(Canvas& c, bool art, const Snapshot& s) {
     const double u = c.u;
-    const double top = 13 * u, bottom = c.h - 2.5 * u, gap = 1.6 * u;
+    const double top = 13 * u, bottom = c.h - 2.5 * u;
     const double left_w = c.w * 0.44;
     const double x0 = 2.5 * u;
     const double metric_gap = .8 * u;
@@ -545,12 +545,11 @@ void ApolloSkin::flight(Canvas& c, bool art, const Snapshot& s) {
     resources(c, art, Rect::f(x0, 54 * u, left_w - x0, 25 * u), s);
     staging(c, art, Rect::f(x0, 80.6 * u, left_w - x0, bottom - 80.6 * u), s);
 
-    const double right_x = left_w + gap, right_w = c.w - left_w - gap - 2.5 * u;
-    const double orbit_h = 27 * u;
-    Rect orbit = Rect::f(right_x, top, right_w, orbit_h);
-    Rect nav = Rect::f(right_x, top + orbit_h + gap, right_w, bottom - top - orbit_h - gap);
+    const FlightLayout layout = flight_layout(c);
+    const Rect& orbit = layout.orbit;
     Rect orbit_well = bezel(c, orbit, "ORBIT", art);
-    navball(c, art, nav, s);
+    vessel(c, art, layout.vessel, s);
+    navball(c, art, layout.navball, s);
     if (art) {
         label(c, "INERTIAL", 1.3f, orbit.right() - 2.6 * u, orbit.y + 1.3 * u, Anchor::MidRight, DIM_INK, true, .08f);
         return;
@@ -567,6 +566,23 @@ void ApolloSkin::flight(Canvas& c, bool art, const Snapshot& s) {
         throw;
     }
     d_.panel_titles = true, d_.orbit_label = nullptr;
+}
+
+void ApolloSkin::vessel(Canvas& c, bool art, const Rect& rect, const Snapshot& s) {
+    const double u = c.u;
+    const Rect well = bezel(c, rect, "VESSEL", art);
+    const double bw = 5.6 * u, bh = 2.3 * u, gap = .5 * u;
+    const double bx = well.x + 1.0 * u, by = well.y + 1.0 * u;
+    const float units = fit(c, {"FUEL", "HEAT"}, 1.2f, bw - 1.2 * u);
+    for (int i = 0; i < 2; ++i) {
+        const Rect r = Rect::f(bx + i * (bw + gap), by, bw, bh);
+        const bool on = (i == 1) == d_.vessel_heat();
+        lamp(c, r, i ? "HEAT" : "FUEL", units, art, art || !on ? nullptr : &L_WHITE);
+    }
+    if (art) return;
+    const double top = by + bh + .8 * u;
+    d_.vessel_contents(Rect::f(well.x, top, well.w, well.bottom() - top), s,
+                       VesselStyle{WELL, Color{120, 126, 122}, Color{34, 38, 36}, L_GREEN, Color{20, 20, 20}, DIM_INK});
 }
 
 namespace {
@@ -609,7 +625,12 @@ void ApolloSkin::navball(Canvas& c, bool art, const Rect& rect, const Snapshot& 
     // readout columns either side of the bezel
     const double lx = rect.x + 1.6 * u, lw = g.cx - ring - 1.2 * u - lx;
     const double rx = g.cx + ring + 1.2 * u, rw = rect.right() - 1.6 * u - rx;
-    const double rows[5] = {rect.y + 3.3 * u, rect.y + 13.6 * u, rect.y + 21.2 * u, rect.y + 28.8 * u, rect.y + 36.0 * u};
+    // Five rows down to the BURN readout; they close up on a shorter panel so the last one (about 6.2u tall)
+    // stays above the SAS MODE caption and lamps at the bottom.
+    const double last = std::min(36.0 * u, rect.h - 5.9 * u - 1.8 * u - .6 * u - 6.2 * u);
+    const double k = (last - 3.3 * u) / (32.7 * u);
+    const double rows[5] = {rect.y + 3.3 * u, rect.y + (3.3 + 10.3 * k) * u, rect.y + (3.3 + 17.9 * k) * u,
+                            rect.y + (3.3 + 25.5 * k) * u, rect.y + last};
     const Readout speed = readout(c, art, lx, rows[0] + 3.4 * u, lw, "SPEED  M/S", "8888888", 2.4 * u);
     const Readout pitch = readout(c, art, lx, rows[1], lw, "PITCH  DEG", "88888", 2.6 * u);
     const Readout thr = readout(c, art, lx, rows[2], lw, "THROTTLE  %", "888", 2.6 * u);
