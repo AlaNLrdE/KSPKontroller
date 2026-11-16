@@ -25,6 +25,7 @@
 #include "redux_source.hpp"
 #include "log.hpp"
 #include "png.hpp"
+#include "intro.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
 
@@ -407,6 +408,9 @@ int run(int argc, char** argv) {
     const bool announce = false;
 #endif
     if (announce) remove_ready_file();
+    // The boot intro video (ksphmi-splash.service, mpv on DRM) holds DRM master on its last frame: wait for its end
+    // and make mpv quit before SDL video opens the display. Bounded; any failure is logged and the HMI goes on.
+    if (announce && !args.desktop) finish_boot_intro();
     std::unique_ptr<Source> source;
     if (!args.bench) source = make_source(cfg, args);
     log::info(LOG, fmt::str("ksphmi %s (C++), source %s, settings %s", KSPHMI_VERSION,
