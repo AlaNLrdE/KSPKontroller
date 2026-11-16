@@ -126,6 +126,57 @@ double anomaly_of(const Conic& conic, const Vec3& position);
 /// point equals the first.
 std::vector<Point2> conic_track(const Conic& conic, const ConicSpan& span, const Axes& axes, int samples);
 
+/// True when `anomaly` (any turn) lies inside the span.
+bool span_contains(const ConicSpan& span, double anomaly);
+
+/// `span` ended at the first point `end` (a sphere of influence entry) after `start` in the direction of motion. A
+/// closed span becomes the open arc from `start` to `end`; an open one keeps its start and stops at `end` when that
+/// comes first.
+ConicSpan span_until(const Conic& conic, const ConicSpan& span, double start, const Vec3& end);
+
+/// The target (SpaceCenter.TargetVessel or TargetBody) when it orbits the active vessel's body: its state now in the
+/// same body non-rotating frame as OrbitState, so its conic shares the view axes. Read about once a second.
+struct TargetOrbit {
+    std::string name;
+    bool body = false;    ///< a celestial body (drawn as a disc), else a vessel
+    Vec3 position, velocity;
+    double radius = 0;    ///< body equatorial radius; 0 for a vessel
+    std::optional<Conic> conic(const OrbitState& frame) const {
+        return OrbitState{position, velocity, frame.mu, frame.axes}.conic();
+    }
+};
+
+/// KSP's two closest approach markers: where the vessel (on the post-maneuver orbit when a node exists) and the
+/// target are at the time of closest approach (kRPC Orbit.NextClosestApproach), in the OrbitState frame.
+struct ClosestApproach {
+    double ut = 0;
+    bool planned = false;  ///< on the post-maneuver orbit
+    Vec3 vessel, target;
+    double distance() const {
+        Vec3 d = target - vessel;
+        return std::sqrt(dot(d, d));
+    }
+};
+
+/// A sphere of influence entry into a moon of the current body (Orbit.NextOrbit), on the current orbit or on the
+/// post-maneuver orbit. As in KSP's map view, the patch is drawn around the moon's position at the entry time.
+struct Encounter {
+    std::string body;
+    double radius = 0, mu = 0, soi = 0;
+    double ut = 0;            ///< sphere of influence entry
+    bool planned = false;     ///< on the post-maneuver orbit
+    Vec3 center;              ///< the moon at `ut`, in the OrbitState frame
+    Vec3 position, velocity;  ///< the vessel relative to the moon at `ut` (same axes)
+    Vec3 entry() const { return center + position; }
+    std::optional<Conic> conic() const;
+    /// The arc inside the moon's sphere of influence: from the entry to the exit, or the whole ellipse once captured.
+    std::optional<ConicSpan> span() const;
+    /// Where the patch leaves the sphere of influence, relative to the moon; nothing when it stays inside.
+    std::optional<Vec3> exit() const;
+    /// Periapsis altitude above the moon's surface (negative: impact).
+    std::optional<double> periapsis_altitude() const;
+};
+
 /// Cut a polyline into dashes of `dash` length separated by `gap`, measured along the line so the pattern keeps a
 /// constant length on screen. Each dash is a short polyline. `phase` offsets the pattern start.
 std::vector<std::vector<Point2>> dash_polyline(const std::vector<Point2>& points, double dash, double gap,
@@ -153,6 +204,9 @@ struct Snapshot {
     std::optional<Systems> systems;
     std::optional<OrbitState> orbit_state;
     std::optional<ManeuverOrbit> maneuver_orbit;  ///< only with a node in the current sphere of influence
+    std::optional<TargetOrbit> target_orbit;      ///< only when the target orbits the same body (KSP 1 kRPC)
+    std::optional<ClosestApproach> approach;      ///< closest approach to that target
+    std::vector<Encounter> encounters;            ///< moon SOI entries: current orbit and/or planned orbit
     /// VAB scene only: the editor ship report (KSPHMI kRPC service); null = unavailable, the static cards are shown.
     std::shared_ptr<const ShipReport> ship;
     /// Flight only: the VESSEL panel's side view with fuel and heat (KSPHMIFlight); null = unavailable.
