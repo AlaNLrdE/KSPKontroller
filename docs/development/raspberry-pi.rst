@@ -52,7 +52,7 @@ Source map
    * - ``canvas.*`` / ``fmt.*``
      - Primitives, fonts, texture/clip helpers and value formatting.
      - Restore rendering state; centralize units and negative-zero handling.
-   * - ``display.*`` / ``apollo.*`` / ``segments.*``
+   * - ``display.*`` / ``apollo.*`` / ``flightdeck.*`` / ``steampunk.*`` / ``steamdials.*`` / ``orbitart.*`` / ``segments.*``
      - Screen composition, skins, cached instrument art and digital readouts.
      - Consume snapshots without network calls.
    * - ``navball.*`` / ``gauges.*``
@@ -132,6 +132,34 @@ Each frame processes SDL input, reads the newest snapshot, chooses its skin/scre
 needles, live values, orbit markers and the navigation globe update dynamically. ``Canvas::polygon``
 accepts convex polygons: split concave icons and ring sectors into convex pieces.
 
+Apollo's ``FlightDeck`` renderer composes the approved A/B design using source/runtime assets
+under ``assets/apollo`` and the licensed Barlow Condensed face. Nine-sliced mounting plates,
+black modules, glass windows and the annular NavBall bezel are baked into static art.
+``flight_layout(canvas, true)`` is the single Apollo right-column geometry source. A scoped
+``Display::orbit_body`` callback replaces only the body material, preserving world geometry,
+inertial axes, conics and clipping. It is restored along with the label callback on all exits.
+``OrbitArt`` shares planet materials: Steampunk owns the original colour view; Apollo uses
+cached green-phosphor luminance and a size-cached scanline/vignette mask. ``orbit_crt`` scopes
+the entire shared renderer's palette (including markers and maneuver dashes), and is restored
+with the material/label callbacks. All colour filtering and mask pixel generation happen only
+when creating a cached texture, never via per-frame image readback. Kerbin is illustrated
+surface artwork; other bodies use shaded spheres.
+The waiting/no-vessel illustration uses a separate ``OrbitArt`` cache owned by the skin
+on the live renderer (never the temporary static-art renderer). It shares the flight
+material choice but is labelled as link search, with no fabricated vessel/orbit state.
+Facility cards also consume ``SteampunkArt`` instead of drawing their former local grey
+plates. Dynamic caution legends live outside the static cache so alert changes cannot
+leave a second legend underneath.
+The NavBall's label atlas key includes the active font path, and redraw restores the last
+frame's font so full and cached animation frames remain pixel-identical across skin switches.
+
+Steampunk's ``SteamDial`` models keep value/range/unit calibration separate from drawing.
+Static dial textures, ticks and scales are baked into ``ApolloSkin``'s panel cache; live
+needles and exact readouts use the current snapshot. ``steam_dial_fraction`` rejects
+non-finite values and invalid spans before geometry. The generated tube housing is
+three-sliced around a separately computed live resource-fill rectangle. Artwork and
+production generation prompts are retained under ``assets/steampunk``.
+
 The optional layer cache stores a full frame and the background under the globe; ``animate()`` can
 then redraw only the NavBall between telemetry samples. Any changed data/skin/screen requires a full
 draw. ``Canvas`` wrappers restore target/clip state because SDL state is target-dependent. The default
@@ -147,7 +175,10 @@ Outputs and service lifecycle
   supported format. It unblanks the display at startup and periodically; console cursor behavior is
   a separate OS configuration concern.
 * Off-screen mode uses software surfaces for tests, benchmarks and PNG screenshots, without a monitor.
-  It cannot prove mode setting, scanout or physical visibility.
+  It cannot prove mode setting, scanout or physical visibility. ``Output`` explicitly flushes SDL's
+  software command queue before copying a surface to fbdev or saving it as PNG. The ``screenshots``
+  CTest runs the real CLI after warm-up with SDL batching enabled/disabled for all three skins,
+  checking that the final PNG contains the NavBall rather than only the earlier drawing commands.
 * macOS supports SDL and off-screen rendering, system font fallback and native executable lookup.
   Selecting Linux fbdev there raises an explicit error.
 

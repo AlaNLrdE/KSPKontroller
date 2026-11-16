@@ -132,7 +132,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
   `target_speed_reference_frame`: `orbital_reference_frame` co-moves with the vessel and reads zero speed.
   Attitude uses the surface-frame quaternion; vessel axes are right, forward, down, surface axes up, north, east.
-- NavBall markings use bold compass bearings only on the 0 and +/-45 degree pitch bands, and regular pitch
+- Classic/Steampunk NavBall markings use bold compass bearings only on the 0 and +/-45 degree pitch bands, and regular pitch
   labels every 10 degrees. Lift horizon bearings 5 degrees into the blue hemisphere so their backgrounds
   do not cover the brown ground. The fixed yellow boresight includes a center dot. Marker
   edge margins must account for the complete glyph size, so larger symbols cannot spill outside the globe.
@@ -144,7 +144,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - NavBall degree labels must not be hidden by screen-space rectangle collision tests: rolling changes rounded
   rectangles and causes flicker. Use continuous foreshortening and limb fading; pitch ladders have 10-degree
   major ticks and 5-degree minor ticks, with stroke widths scaled to display height.
-- The +/-45 degree NavBall parallels use thin, long horizontal segments interrupted at the compass-bearing
+- Classic/Steampunk +/-45 degree NavBall parallels use thin, long horizontal segments interrupted at the compass-bearing
   columns; keep these bands in addition to the local five-degree pitch ladder ticks.
 - HMI geometry uses the plain `Point2` coordinate type in `vec.hpp` instead of returning
   `std::pair<double, double>`: GCC on ARM emits historical C++14/C++17 ABI notes for the latter.
@@ -152,8 +152,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - HMI numeric casts must validate before conversion: all integer configuration fields require finite, integral
   values within int range; clock UT must be below 2^63. `double(LLONG_MAX)` rounds to 2^63, so use an
   exclusive power-of-two bound and test the adjacent representable double with float-cast-overflow enabled.
-- The flight right column comes only from `flight_layout()` (both skins and render tests): ORBIT | VESSEL in a
-  34u row, NavBall below (user, 2026-11-16). A shorter NavBall must close up the apollo readout rows and move or
+- The flight right column comes only from `flight_layout()` (all skins and render tests): Classic/Steampunk use
+  a 34u ORBIT | VESSEL row; Apollo Flight Deck uses the approved half-screen profile with a 33u row (user,
+  2026-11-16), NavBall below. A shorter NavBall must close up the apollo readout rows and move or
   shrink the classic globe (speed box above, HDG caption 1.4u above SAS MODE); never hard-code panel rects.
 - Keep the ten flight metric tiles in the upper-left block below 40% of screen height. Resources are vessel
   totals in KSP units (0 capacity = absent, 0 amount = empty, missing data = unknown); staging is read-only.
@@ -219,3 +220,31 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - When integrating platform HMI launcher changes, preserve native Windows/MSYS2 and WSLg monitor handling
   while keeping macOS native full-screen and Retina rendering; do not resolve launcher conflicts by replacing
   one platform's runtime path with another. Build the kRPC service on the Windows KSP host before deployment.
+
+- Steampunk is the third HMI instrument skin (Ctrl+3 / --skin steampunk), sharing Apollo geometry with
+  independent cached art. Palette changes are scoped per draw so switching skins cannot recolour Apollo.
+  Use actual renderer screenshots to review it; the approved image is a visual reference, not runtime evidence.
+
+- A rendered skin proposal includes materials, assets, typography and composition: a palette-only variant
+  does not implement an approved render. Steampunk bundles its generated source/runtime artwork and licensed
+  typefaces under hmi-cpp/assets; keep them in deployment packages and review actual renderer captures.
+
+- Apollo Flight Deck uses proposal A materials/layout plus proposal B's local NavBall pitch ladder. Preserve
+  that profile and the quaternion/inertial physics separately from its generated material assets. NavBall
+  glyph caches must include font face, and cached redraw must restore the last frame's face; otherwise a
+  Classic-to-Apollo switch changes cached animation pixels even when fresh full frames look correct.
+
+- Review theme changes across waiting/no-vessel, every facility, all editor modes and flight/stale states.
+  Shared frame artwork does not automatically restyle local illustrations/cards. Changing lamp legends must
+  not be baked into static art; material changes must preserve red/green warning and reachability semantics.
+
+- Software SDL surfaces are CPU-read for fbdev and PNG output: flush the renderer before those reads,
+  rather than relying on incidental texture uploads to execute queued commands. Review warmed-up CLI
+  screenshots as well as direct renderer tests; keep generated concepts separate from runtime evidence.
+- Steampunk's reference revision uses cached convex-glass dial art with live calibrated needles, exact
+  digital readouts and glass resource tubes. Fixed scales must indicate saturation without clamping data;
+  missing or escaping-orbit measurements must never acquire a fabricated needle.
+
+- The detailed colour planet view belongs to Steampunk (theme 3). Apollo ORBIT is a green CRT throughout:
+  body, atmosphere, curves, maneuver dashes, markers and annotations. Restore orbit_crt with the material
+  hooks and clip; cache luminance conversion / scanline masks instead of filtering image pixels each frame.

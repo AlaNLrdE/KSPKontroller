@@ -88,8 +88,8 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
        flight camera)
    * - F5 / F9 (held 1 s)
      - quicksave / quickload
-   * - Ctrl+1 / Ctrl+2
-     - classic / apollo skin until the HMI exits, over the context reply and ``[display] skin``
+   * - Ctrl+1 / Ctrl+2 / Ctrl+3
+     - classic / apollo / steampunk skin until the HMI exits, over the context reply and ``[display] skin``
    * - Ctrl+0
      - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
    * - Esc
@@ -190,6 +190,7 @@ bounds) to the plot area's full width and height; the axes never move. ORBIT is 
 shrinks the NavBall globe by about 8 % (634 to 582 px at 2520x1680) and keeps it the largest element.
 
 With a maneuver node, ORBIT also draws the orbit that results from it, as KSP's map view does: an orange
+(Apollo CRT: dimmer green)
 dashed line (dash and gap 1.2% of the panel height, constant on screen) with its own small orange Ap/Pe
 markers and a diamond at the burn point; the current orbit stays solid. The source reads the first node's
 ``Node.orbit`` with ``Orbit.position_at`` / ``Orbit.velocity_at`` at the node's UT in the same
@@ -229,9 +230,11 @@ Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
 VESSEL panel
 ------------
 
-The flight screen's right column (``flight_layout`` in ``display.cpp``, shared by both skins and the render tests)
-puts ORBIT and VESSEL side by side in a 34u row and the NavBall below it (about 49u; user, 2026-11-16).
-VESSEL is 30u wide: a side view of the active vessel, one convex outline per part, in one of two views that
+The flight screen's right column comes from ``flight_layout`` in ``display.cpp`` for every skin and test.
+The Classic/Steampunk profile uses a 34u ORBIT / VESSEL row, a 30u-wide VESSEL panel and the NavBall below.
+The approved Apollo Flight Deck profile uses a 33u top row in the screen's right half, with 43 percent of
+that row's width assigned to VESSEL and the remaining height assigned to the NavBall.
+VESSEL shows a side view of the active vessel, one convex outline per part, in one of two views that
 Ctrl+0 switches. **FUEL** fills each tank from the bottom to its propellant level (every resource except
 ElectricCharge, Ablator, IntakeAir and Ore); parts without tanks are outlines only. **HEAT** colours each
 part blue, green, yellow, orange and red by the hotter of its internal and skin temperature, as a percentage
@@ -538,13 +541,78 @@ interfaces; Windows Firewall must allow inbound traffic from the WSL subnet. WSL
 is limited: the log line ``display N of M`` shows what SDL actually sees. On the Pi a single HDMI display
 keeps index 0.
 
-``[display] skin`` picks the look: ``apollo`` (the default since 2026-11-14) or ``classic`` (the previous flat
-dark panels, kept for switching back). Apollo draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
-seven-segment readouts (``segments.cpp``), caution and warning lamps (UPLINK, NO DATA, NO LINK, SAS, RCS,
-PE ATMO, PE SURF, LOW PWR, LOW FUEL, ESCAPE), edgewise resource meters and bezels around ORBIT and the
-NavBall (round metal bezel, segment readouts for speed, heading, pitch, roll, throttle, G and the maneuver
-node, SAS modes as lamp tiles). Its static art is one texture per screen size and screen kind; per frame only
-lit segments, lamps, pointers and the two plots are drawn. Try it with ``./ci hmi --demo --skin apollo``.
+``steampunk`` (approved 2026-11-16) uses generated brass-and-iron artwork, nine-sliced
+copper pipe frames, dark petrol enamel, convex-glass instrument faces, an ornate bronze
+NavBall bezel, and bundled Cinzel headings / Crimson Pro figures (SIL Open Font License).
+The revised reference concept is stored at ``docs/design/steampunk-v2/concept.png``;
+it is artwork, not a capture of the running HMI. Ten circular instruments form two rows
+of five, with telemetry-driven gold needles and exact numerical readouts underneath.
+Each dial has a fixed labelled scale; an out-of-range needle stops at the scale end and
+shows ``LIMIT`` without clamping the numerical readout. Missing/non-finite measurements
+have no needle, and escaping orbits have no apoapsis/period needle. A compact header
+uses amber jewel lamps and a priority warning indicator. Glass sight tubes show vessel
+resource fractions, followed by a live altitude/speed history and read-only staging. History keeps up to 180 seconds of received telemetry and resets when
+the vessel/body changes or UT goes backwards; before two samples it says it is collecting.
+The shared right-column layout keeps ORBIT and VESSEL above the NavBall. Editor and facility
+screens use the same artwork. Classic keeps its original appearance; Apollo has its own Flight Deck materials.
+Select it with Ctrl+3 or ``--skin steampunk``.
+
+Waiting and generic no-vessel screens share the flight themes' planet materials:
+Apollo uses green CRT phosphor; Steampunk uses the colour globe and bronze bezel.
+The animated reticle is explicitly labelled ``LINK SEARCH / ILLUSTRATION`` and does
+not imply live orbital telemetry. Facility checklist cards use each skin's generated
+panel material. Steampunk's changing caution legend is drawn only in the live pass,
+with an unavailable-clock placeholder outside flight. Critical warnings remain red,
+and VAB destination jewels retain green/red reachability and a circular selection ring.
+
+``KSPHMI_SHOTS=DIR ./ci test_hmi`` now captures the three skins' waiting/no-vessel
+screens, every facility, VAB report variants, editor modes and flight cautions. These
+are fixture-driven renderer captures, not game sessions; review them together when
+changing shared artwork rather than checking only the flight screen.
+
+The source PNGs, runtime BMPs, typefaces, licenses and generation notes live under
+``hmi-cpp/assets/`` and travel with ``config.toml`` during deployment. BMP loading uses
+SDL2 itself (no new runtime image library). Static art is baked once per size/screen;
+normal telemetry frames draw the live values and plots only. Font atlases are keyed by
+family and size. See ``assets/steampunk/README.md`` for provenance and demo capture commands.
+
+``[display] skin`` selects ``apollo`` (shipped default), ``steampunk`` or ``classic``.
+Apollo Flight Deck (approved 2026-11-16) implements proposal A's light painted aluminum
+mounting plates, steel fasteners, charcoal inset modules, smoked instrument windows,
+Barlow Condensed headings and green seven-segment readings, combined with proposal B's
+black/stainless NavBall bezel. The NavBall uses a single local five/ten-degree pitch
+ladder, sparse meridians, quaternion-driven attitude, volume lighting and live markers.
+Its side instruments are speed, heading, pitch, roll, throttle and G-force. SAS mode lamps
+run along the bottom. Flight warnings use the header's priority caution window:
+stale data, surface/atmosphere periapsis, low power, escape, then fuel.
+
+``flightdeck.cpp`` composes the flight screen with equal-width halves and ten metric
+modules in two rows. It uses the Apollo profile of ``flight_layout()`` for ORBIT / VESSEL
+and the NavBall. Resources remain vessel totals in KSP units; staging is read-only.
+The altitude/speed plot records up to 180 seconds of received telemetry, shows a collecting
+state before two samples, and resets on a different vessel name/body or UT rewind.
+Static art is cached per size/screen. The same materials and heading face extend to
+waiting, facility and editor screens. Select it with Ctrl+2 or ``--skin apollo``.
+
+ORBIT retains the inertial view axes, live Cartesian ship position, physically scaled
+body radius, conics and maneuver dashes of the shared renderer. Apollo supplies a separate
+surface-material callback. The full-colour illustrated planet view belongs to Steampunk
+(theme 3); its source PNG and runtime BMP live under ``assets/steampunk``. Apollo draws the
+whole ORBIT screen as a green phosphor CRT, including the planet, atmosphere, orbital and
+maneuver curves, markers and annotations. The maneuver retains dashes and a dimmer green
+intensity. Green vector under-strokes supply glow; a size-cached scanline/vignette mask
+suggests the tube face. The green planet texture is converted once from source luminance,
+with no image readback or per-pixel colour conversion in the telemetry loop.
+
+Other bodies receive shaded spheres rather than Kerbin geography. The illustrated artwork
+is not a cartographic terrain map or a live cloud/lighting sensor. Body name, Ap/Pe altitude,
+semi-major axis, eccentricity and inclination come from the current snapshot. Material
+callbacks, the CRT palette and clipping restore the caller's state on every exit.
+
+Assets, source PNGs, opaque runtime BMPs, font license, generation prompts and capture
+commands are recorded in ``hmi-cpp/assets/apollo/README.md``. The approved source renders
+are stored under ``docs/design/apollo-flight-deck/`` as concept art, never runtime evidence.
+Try ``./ci hmi --demo --skin apollo --size 1920x1080 --seconds 3 --screenshot build/apollo-flight-deck.png``.
 
 The skin can change while the HMI runs: the context reply on UDP 50002 may carry an optional field,
 ``KSPHMI/1 <scene> skin=<name>``. Only the simulator sends it (its *HMI skin* selector, or ``--skin``);
