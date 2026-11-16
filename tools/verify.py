@@ -610,6 +610,11 @@ def check_hmi_cpp_layout(ctx):
         for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ["(missing)"]:
             if not name.endswith(allowed):
                 bad.append("%s/%s" % (sub, name))
+    # The broad HMI LF rule must never normalize image/font bytes during git add or a Windows checkout.
+    attributes = read(os.path.join(ROOT, ".gitattributes"))
+    for extension in ("png", "bmp", "ttf"):
+        if "hmi-cpp/assets/**/*.%s binary" % extension not in attributes:
+            bad.append("HMI .%s assets need a binary Git attribute" % extension)
     # deploy_hmi tars a fixed list: a new top-level folder (include/ on 2026-11-14) broke the Pi build when missing.
     m = re.search(r"tar -cf - ([^)]*)\)", read(os.path.join(ROOT, "ci")))
     shipped = set(m.group(1).split()) if m else set()

@@ -234,6 +234,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   glyph caches must include font face, and cached redraw must restore the last frame's face; otherwise a
   Classic-to-Apollo switch changes cached animation pixels even when fresh full frames look correct.
 
+- The broad `hmi-cpp/** text eol=lf` Git attribute needs explicit binary overrides for PNG/BMP/TTF assets.
+  Verify committed asset bytes against their originals before pushing new art/fonts; text normalization can
+  silently corrupt them even when a local renderer still reads the untouched working-copy files.
+
 - Review theme changes across waiting/no-vessel, every facility, all editor modes and flight/stale states.
   Shared frame artwork does not automatically restyle local illustrations/cards. Changing lamp legends must
   not be baked into static art; material changes must preserve red/green warning and reachability semantics.
