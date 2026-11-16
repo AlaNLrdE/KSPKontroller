@@ -433,7 +433,7 @@ public:
         key_ = key;
         refresh_at_ = now + 1.0;
         result_ = Result{};
-        auto [vessel, body, n] = key;
+        const uint64_t vessel = std::get<0>(key), body = std::get<1>(key), n = std::get<2>(key);
         uint64_t target = 0;  // the target's orbit object
         part("target orbit", [&] { target = read_target(vessel, body, ut); });
         uint64_t path = orbit_;  // KSP plans approaches on the post-maneuver orbit
