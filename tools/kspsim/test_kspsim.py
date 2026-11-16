@@ -524,6 +524,43 @@ class KrpcTest(unittest.TestCase):
         self.assertNotIn('soi', low)
         self.assertGreaterEqual(low['approach'], 0)
 
+    def test_cockpit_panel_procedures(self):
+        """What the HMI cockpit panel reads and clicks (hmi-cpp/src/telemetry.cpp CockpitStreams, send_command)."""
+        import krpc
+        from kspsim.krpcserver import KrpcServer
+
+        sim = Simulator("orbit")
+        server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
+        server.start()
+        conn = krpc.connect(name="test", address="127.0.0.1", rpc_port=server.rpc_port, stream_port=server.stream_port)
+        try:
+            vessel = conn.space_center.active_vessel
+            control, parts = vessel.control, vessel.parts
+            self.assertEqual((len(parts.solar_panels), len(parts.radiators), len(parts.legs)), (1, 0, 0))
+            self.assertFalse(control.solar_panels)
+            control.solar_panels = True
+            self.assertTrue(control.solar_panels and sim.panel["SolarPanels"])
+            self.assertTrue(control.reaction_wheels)
+            control.set_action_group(3, True)
+            self.assertTrue(control.get_action_group(3))
+            self.assertFalse(control.get_action_group(0))  # kRPC group 0 = custom group 10
+            control.speed_mode = conn.space_center.SpeedMode.surface
+            self.assertEqual(control.speed_mode.name, "surface")
+            chutes = parts.parachutes
+            self.assertEqual([c.state.name for c in chutes], ["stowed", "stowed"])
+            self.assertEqual(chutes[0].safe_state.name, "unsafe")  # in orbit
+            control.parachutes = True
+            self.assertEqual([c.state.name for c in parts.parachutes], ["semi_deployed", "semi_deployed"])
+            parts.parachutes[0].cut()
+            self.assertEqual([c.state.name for c in parts.parachutes], ["cut", "semi_deployed"])
+            current = control.current_stage
+            nxt = [p.title for p in parts.all if p.stage == current - 1]
+            self.assertTrue(nxt and all(t.startswith("Simulated part") for t in nxt))
+            self.assertEqual(conn.space_center.warp_rate, sim.warp)
+        finally:
+            conn.close()
+            server.stop()
+
     def test_krpc_client_end_to_end(self):
         import krpc
         from kspsim.krpcserver import KrpcServer

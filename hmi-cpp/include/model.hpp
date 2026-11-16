@@ -63,6 +63,37 @@ struct Systems {
     std::vector<Stage> stages;
 };
 
+// ------------------------------------------------------------------------------------------- cockpit panel
+/// The switches of the cockpit panel scene, in its order.
+enum class CockpitSwitch { ReactionWheels, Gear, Lights, Brakes, SolarPanels, Antennas, Radiators, CargoBays, Intakes };
+constexpr int COCKPIT_SWITCHES = 9;
+
+/// One switch as the game reports it. `on` empty = unknown; `fitted` false = the vessel has no such part (shown
+/// grey, never as OFF), empty = unknown.
+struct SwitchState {
+    std::optional<bool> on, fitted;
+};
+
+/// ParachuteState values (kRPC): a bit per state any parachute is in.
+enum ChuteState { CHUTE_STOWED, CHUTE_ARMED, CHUTE_SEMI_DEPLOYED, CHUTE_DEPLOYED, CHUTE_CUT, CHUTE_STATES };
+
+/// What only the cockpit panel scene shows, read over kRPC while that scene is visible (telemetry.cpp
+/// CockpitStreams). Every value is optional: a failing stream blanks its control, never the panel.
+struct Cockpit {
+    std::array<SwitchState, COCKPIT_SWITCHES> switches{};
+    std::array<std::optional<bool>, 10> groups{};  ///< custom action groups 1-10 ([9] = group 10)
+    std::optional<bool> abort, stage_lock;
+    std::optional<int> chutes;           ///< parachute parts; 0 = none fitted
+    unsigned chute_states = 0;           ///< bit (1 << ChuteState) per state of any parachute
+    std::optional<int> chute_safety;     ///< worst kRPC ParachuteSafeState of the stowed/armed ones (0 safe, 1 risky, 2 unsafe)
+    /// Part titles the next stage activates, with their counts, in part order; empty with `next_known` = nothing.
+    std::vector<std::pair<std::string, int>> next_stage;
+    bool next_known = false;
+    std::optional<double> warp_rate;  ///< current time warp multiplier (1 = real time)
+    const SwitchState& at(CockpitSwitch s) const { return switches[static_cast<size_t>(s)]; }
+    SwitchState& at(CockpitSwitch s) { return switches[static_cast<size_t>(s)]; }
+};
+
 // ------------------------------------------------------------------------------------------- orbit view
 struct Axes {
     Vec3 x{1, 0, 0}, y{0, 0, 1};
@@ -211,6 +242,8 @@ struct Snapshot {
     std::shared_ptr<const ShipReport> ship;
     /// Flight only: the VESSEL panel's side view with fuel and heat (KSPHMIFlight); null = unavailable.
     std::shared_ptr<const VesselView> vessel_view;
+    /// Flight only, while the cockpit panel scene is shown: switch states, parachutes, next stage (kRPC).
+    std::optional<Cockpit> cockpit;
     double received = 0;  ///< monotonic seconds when the sample was taken
 };
 

@@ -92,6 +92,9 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
      - classic / apollo / steampunk / ksp1 / ksp2 skin until the HMI exits, over the context reply and ``[display] skin``
    * - Ctrl+0
      - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
+   * - Ctrl+"+" / Ctrl+"-"
+     - next / previous flight scene: instruments or the clickable :ref:`cockpit panel <hmi-cockpit>`. The "+" of
+       a Spanish layout, "=" of a US one and the keypad +/- all work; the chord never ramps the throttle
    * - Esc
      - quit the HMI (``q`` is roll left; on macOS Cmd+Q also quits)
 
@@ -264,6 +267,102 @@ signals the worker without waiting for a system DNS lookup; its shared state sur
 
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
+
+
+.. _hmi-cockpit:
+
+Cockpit panel
+-------------
+
+A second flight scene turns the screen into a clickable switch panel (approved 2026-11-16; design proposal with
+mockups, in Spanish: `Tablero de cabina <https://claude.ai/artifact/EE5hSyVGXevZa6o73wNuYS>`_). ``Ctrl+"+"`` /
+``Ctrl+"-"`` cycle Instruments and Cockpit panel, as do the two tabs of the ribbon below the header. The scene is
+kept while the HMI runs (also across screen-size rebuilds); ``[display] flight_scene`` or ``--flight-scene
+cockpit`` choose the first one. Outside flight every skin shows its usual facility, VAB or waiting screens.
+
+Every skin draws the same layout (``cockpit_layout`` in ``src/cockpit.cpp``, five groups and a bottom strip) with
+its own materials through a ``CockpitPainter``: Apollo's lamp tiles, white group lines, segment windows and a bat
+toggle on a hex nut; Steampunk's bulbs and brass plates; Classic's cards; the KSP 1 / KSP 2 buttons and title
+bars. Static art (frames, housings, unlit legends, key caps) is cached with the skin's panel; lit lamps, lever
+positions, values and click feedback are drawn live.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 40 38
+
+   * - Group
+     - Controls (KSP key engraved under each)
+     - Shown state (kRPC)
+   * - Attitude control
+     - SAS ``T``, RCS ``R``, reaction wheels; the ten SAS modes (``Alt+1`` ... ``Alt+0``); speed reference
+       ORBIT / SURFACE / TARGET
+     - ``Control.SAS``, ``SASMode`` (white when the mode is set but SAS is off), ``ReactionWheels``,
+       ``SpeedMode``; TGT / ANTI / NODE and TARGET are veiled without a target or node
+   * - Staging & abort
+     - ARM, then STAGE (``Space``); guarded ABORT (``Backspace``)
+     - current stage, the part titles the next stage activates (``Part.Stage == current - 1``), ``StageLock``,
+       ``Abort``
+   * - Recovery
+     - DEPLOY (``Control.Parachutes = true``), guarded CUT (``Parachute.Cut`` on open chutes)
+     - STOWED / ARMED / OPEN / CUT from every ``Parachute.State``; SAFE / RISKY / UNSAFE from KSP's own
+       ``Parachute.SafeState`` (worst of the stowed or armed chutes); the parachute count
+   * - Systems
+     - gear ``G``, lights ``U``, brakes ``B`` (held), solar panels, antennas, radiators, cargo bays, intakes
+     - the ``Control`` property; grey "NOT FITTED" when ``Parts`` has no such part (legs + wheels for gear)
+   * - Action groups
+     - custom groups 1-10 (keys ``1`` ... ``0``)
+     - ``Control.GetActionGroup``
+   * - Throttle · time warp · view
+     - FULL ``Z`` / CUT ``X``, ``,`` ``/`` ``.``, MAP ``M``, QUICK SAVE ``F5``, guarded QUICK LOAD (``F9``)
+     - throttle %, ``SpaceCenter.WarpRate``
+
+**A click is the key.** ``CockpitInput`` (``src/cockpitinput.cpp``, no SDL) turns a click into the same
+``Command`` the key produces, into the same queue (at most 16); only the telemetry thread calls kRPC. New commands:
+``ToggleControl`` (``ReactionWheels``, ``SolarPanels``, ``Antennas``, ``Radiators``, ``CargoBays``, ``Intakes``),
+``SpeedMode``, ``DeployChutes`` and ``CutChutes``. In flight a command thread sends each queued command as soon as
+it arrives, on the telemetry connection (``krpc::Client::invoke`` serializes calls) with the vessel's ``Control``
+object looked up once, so a click waits at most for the one call in progress, not for a telemetry iteration. A
+click on a switch or action group already knows the state its lamp shows and writes the other state in one call
+(``Command::set``); the keys still read the state first. The log shows each command's time in the queue and in
+kRPC (``key: Lights on (queued 2 ms, kRPC 48 ms)``). Over Wi-Fi a kRPC call takes about 50 ms (up to about 250 ms)
+against a few ms over Ethernet: a wired Mac or PC answers clicks fastest. Mouse coordinates are converted to
+canvas pixels (HiDPI);
+a touch screen's synthesized mouse events work the same way. BRAKES act while the button is held; losing focus,
+changing scene or leaving flight releases them.
+
+**Lamps follow the game, never the click.** A pressed control shows a "sent" outline until the snapshot reports
+the change (switch flipped, mode selected, stage number changed, chute state changed). No change within 2.5 s
+blinks the control amber for 1.2 s (for example a SAS mode KSP refused); the log says why (``key ... not
+applied``). Controls whose result the game does not report (throttle, warp, map, saves) only flash "sent".
+
+**Dangerous controls.** STAGE needs ARM first (a 5 s window, one stage per arming; STAGE without ARM blinks the
+ARM lamp). ABORT, CUT and QUICK LOAD have a guard: the first click lifts it, the second within 5 s acts. The keys
+(``Space``, ``Backspace``, ``F9``) act exactly as in KSP.
+
+**Data only while shown, never blocking.** ``Source::set_cockpit`` tells the telemetry thread whether the panel is
+on screen; ``CockpitStreams`` (``src/telemetry.cpp``) exist only then. Everything read per sample is a stream:
+switch states, groups, abort, stage lock, warp rate, the part lists (which systems are fitted, the parachutes, all
+parts) and the current stage, so a sample makes no synchronous call. The work that needs calls (adding those
+streams, one State and SafeState stream per parachute, at most 16, and reading ``Part.Stage`` / ``Part.Title``
+when the current stage or the part set changes) is queued and run within 40 ms per sample. From a laptop on Wi-Fi
+a kRPC call takes about 50 ms: the first version scanned 90 parts in one go and delayed the first sample and every
+queued click by seconds. Every value is optional: a failing call blanks that control, never the session.
+
+**Mouse on the Pi.** The Pi screen has no touch input; plug a USB mouse. Under SDL KMSDRM SDL reads it through
+evdev. The full-screen HMI hides the cursor; moving the mouse shows it until 3 s without motion. The fbdev
+fallback output has no SDL input events: there the panel is operated with the engraved keys. On KSP 2 Redux the
+new commands are logged as not supported (no ``KSP2KEY`` verb yet); the other controls work.
+
+.. uml:: diagrams/seq_cockpit_click.puml
+
+Tests: ``ctrl_plus_and_minus_step_the_flight_scene_without_moving_the_throttle``, ``cockpit_clicks_*``,
+``cockpit_stage_needs_arm_and_guards_need_two_clicks``, ``cockpit_lamps_follow_the_game_never_the_click``,
+``cockpit_commands_reach_krpc`` (core); ``cockpit_layout_fits_every_screen_without_overlaps`` (3:2, 16:9, 4:3
+and the Mac's 2940x1846; every control placed, no overlaps, hit test) and
+``cockpit_renders_inside_its_groups_in_every_skin`` (render). ``KSPHMI_SHOTS=DIR`` also writes
+``SKIN_cockpit.png`` and ``SKIN_cockpit_clicks.png`` (armed, guard lifted, sent and rejected) for review;
+``--demo --flight-scene cockpit`` shows the demo vessel's panel. ``tools/kspsim`` serves every procedure above
+(``KrpcTest.test_cockpit_panel_procedures``).
 
 VESSEL panel
 ------------

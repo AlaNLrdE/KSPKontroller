@@ -29,7 +29,9 @@ constexpr double KEY_THROTTLE_RATE = 0.5;
 /// one-shot change, so the PC's own Shift / Ctrl keep working); time warp and quicksave / quickload through
 /// SpaceCenter. In the VAB only SAS / RCS, through KSPHMI.Press, the board's editor navigation (SAS next screen,
 /// RCS previous). Any other scene ignores keys. Returns what happened, for the log. Errors propagate.
-std::string send_command(krpc::Client& c, const Command& cmd, uint64_t vessel, const std::string& scene);
+/// `control`: the vessel's cached Control object (0 = look it up).
+std::string send_command(krpc::Client& c, const Command& cmd, uint64_t vessel, const std::string& scene,
+                         uint64_t control = 0);
 
 /// The held keys, in flight: KSPHMIFlight.SetAxes with the six axes when `axes` (every tick while one is held, then
 /// once with zeros; the plugin drops values older than 0.5 s and the board's joystick wins over them) and
@@ -48,6 +50,8 @@ public:
     virtual void command(const Command& c);
     /// The held keys now (display thread, on every change). Ignored without a game link.
     virtual void hold(const Held&) {}
+    /// Whether the cockpit panel scene is on screen (display thread): its extra kRPC streams exist only then.
+    virtual void set_cockpit(bool) {}
 
 protected:
     explicit Source(const char* name);
@@ -138,6 +142,7 @@ public:
     std::string address() const;
     void command(const Command& c) override;
     void hold(const Held& h) override;
+    void set_cockpit(bool shown) override;
 
 protected:
     void run() override;
@@ -151,6 +156,11 @@ protected:
     /// Send the queued keyboard commands and the held keys (telemetry thread). An RpcError is logged and drops
     /// that command only; a failing held-key call is logged once per distinct error.
     void send_inputs(krpc::Client& conn, uint64_t vessel, const std::string& scene);
+    /// In flight, a command thread sends each queued command as soon as it arrives, on the same connection (one
+    /// RPC at a time), so a click never waits for the rest of a telemetry iteration. Returns when `stop` is set.
+    void command_loop(krpc::Client& conn, uint64_t vessel, uint64_t control, const std::atomic<bool>& stop);
+    /// Send one command and log what happened, with its time in the queue and in kRPC.
+    void send_one(krpc::Client& conn, const Command& cmd, uint64_t vessel, const std::string& scene, uint64_t control);
 
     Options options_;
     double period_;
@@ -166,7 +176,10 @@ private:
     VesselViewPoller vessel_view_;
     std::mutex input_mutex_;
     std::vector<Command> commands_;  ///< keyboard commands waiting for the telemetry thread (input_mutex_)
+    std::condition_variable input_cv_;  ///< a command was queued, or the command thread must stop
+    bool sender_active_ = false;        ///< in flight the command thread sends commands_ (input_mutex_)
     Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)
+    std::atomic<bool> cockpit_{false};  ///< the cockpit panel scene is shown: follow() keeps CockpitStreams
     Held sent_;                      ///< held keys last sent (telemetry thread)
     double nudged_at_ = -1;          ///< last NudgeThrottle, -1 while no throttle key is held
     std::string held_problem_;       ///< last held-key error logged

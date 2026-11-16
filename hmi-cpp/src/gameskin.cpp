@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 
+#include "cockpit.hpp"
 #include "config.hpp"
 #include "display.hpp"
 #include "fmt.hpp"
@@ -253,6 +254,48 @@ struct OrbitScope {
         d.orbit_body = std::move(body);
     }
 };
+
+/// The cockpit panel with the game's own boxes, title bars, buttons and bars (KSP 1 stock grey, KSP 2 indigo).
+class GameCockpitPainter : public CockpitPainter {
+public:
+    GameCockpitPainter(Canvas& c, bool redux) : p_(c, redux) {}
+    Color ink() const override { return WHITE; }
+    Color dim_ink() const override { return p_.muted; }
+    Color well() const override { return p_.well; }
+    Color key_fill() const override { return p_.redux ? Color{30, 36, 62} : Color{59, 64, 70}; }
+    Color key_ink() const override { return Color{214, 220, 228}; }
+    Color unlit_ink() const override { return p_.muted; }
+    void readout(Canvas& c, const Rect& r, const std::string& pattern, const std::string& text, bool art) override {
+        if (art) p_.box(r, true);
+        else CockpitPainter::readout(c, r, pattern, text, art);
+    }
+    Color lamp_color(Lamp l) const override {
+        switch (l) {
+            case Lamp::Green: return p_.green;
+            case Lamp::White: return p_.redux ? CYAN : WHITE;
+            case Lamp::Amber: return AMBER;
+            case Lamp::Red: return RED;
+            default: return p_.rail;
+        }
+    }
+    void frame(Canvas&, const Rect& r, const std::string& title) override { p_.group(r, title); }
+    void text(Canvas&, const std::string& s, float units, Color color, double x, double y, Anchor a, double room) override {
+        p_.text(s, units, color, x, y, a, room > 0 ? room : 1e9);
+    }
+    void lamp(Canvas&, const Rect& r, const std::string& legend, Lamp lit, bool art) override {
+        if (art) p_.button(r, legend, false);
+        else if (lit != Lamp::Off) p_.button(r, legend, true, lamp_color(lit), true);
+    }
+    Color lit_ink() const override { return Color{12, 25, 11}; }
+    void bar(Canvas& c, const Rect& r, double fraction, bool art) override {
+        if (art) p_.bar(r, 0, p_.green);
+        else if (fraction > 0) p_.bar(r, fraction, p_.green);
+        (void)c;
+    }
+
+private:
+    mutable Paint p_;
+};
 }  // namespace
 GameSkin::GameSkin(Display& d, bool redux) : d_(d), redux_(redux), net_(d.config().krpc.address) {}
 GameSkin::~GameSkin() { SDL_DestroyTexture(panel_); }
@@ -294,6 +337,7 @@ void GameSkin::draw(const Snapshot& s, double now) {
     if (s.state == State::Flight)
         for (const auto& item : visible_resources(s)) key += ":" + item.first;
     if (s.ship) key += ":" + s.ship->editor_mode + ":" + std::to_string(d_.config().vab.destinations.size());
+    if (d_.cockpit_scene(s)) key = std::to_string(c.w) + ":" + std::to_string(c.h) + ":cockpit";
     if (!panel_ || key != key_) build(s, key);
     c.image(panel_, 0, 0, float(c.w), float(c.h));
     paint(c, false, s, now);
@@ -302,7 +346,10 @@ void GameSkin::draw(const Snapshot& s, double now) {
 void GameSkin::paint(Canvas& c, bool art, const Snapshot& s, double now) {
     if (art) c.clear(Paint(c, redux_).bg);
     header(c, art, s, now);
-    if (s.state == State::Flight)
+    if (d_.cockpit_scene(s)) {
+        GameCockpitPainter painter(c, redux_);
+        paint_cockpit(c, art, s, CockpitView{d_.cockpit_input(), now}, painter);
+    } else if (s.state == State::Flight)
         flight(c, art, s, now);
     else if (s.state == State::NoVessel && s.scene == "vab" && s.ship) {
         if (s.ship->editor_mode == "construction")

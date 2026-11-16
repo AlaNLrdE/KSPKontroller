@@ -16,6 +16,7 @@
 
 #include "bootstate.hpp"
 #include "check.hpp"
+#include "cockpitinput.hpp"
 #include "config.hpp"
 #include "fake_krpc.hpp"
 #include "fmt.hpp"
@@ -2094,6 +2095,237 @@ TEST(editor_pagination_visits_every_row_without_unbounded_casts) {
     CHECK_EQ(page_slice(21, 10, 24).begin, size_t(0));
     CHECK_EQ(page_slice(21, 10, std::numeric_limits<double>::infinity()).page, size_t(0));
     CHECK(page_slice(21, 10, 1e300).page < 3);
+}
+
+
+// ------------------------------------------------------------------------------------------- cockpit panel
+TEST(ctrl_plus_and_minus_step_the_flight_scene_without_moving_the_throttle) {
+    Keyboard kb;
+    KeyEvent ctrl{Key::LeftCtrl}, plus{Key::Plus, -1, true}, minus{Key::Minus, -1, true};
+    kb.down(ctrl, 0);
+    KeyResult r = kb.down(plus, 0.05);
+    CHECK_EQ(r.flight_scene, 1);
+    CHECK(r.commands.empty());
+    kb.up(plus, 0.1);
+    CHECK_EQ(kb.down(minus, 0.2).flight_scene, -1);
+    CHECK_EQ(kb.held(5).throttle, 0);  // a chord: this Ctrl press never ramps the throttle down
+    kb.up(ctrl, 5);
+    CHECK_EQ(kb.down(KeyEvent{Key::Plus}, 6).flight_scene, 0);  // "+" alone is not a KSP flight key
+    CHECK(step_scene(FlightScene::Instruments, 1) == FlightScene::Cockpit);
+    CHECK(step_scene(FlightScene::Cockpit, 1) == FlightScene::Instruments);
+    CHECK(step_scene(FlightScene::Instruments, -1) == FlightScene::Cockpit);
+    CHECK(parse_flight_scene("cockpit") == FlightScene::Cockpit);
+    CHECK(parse_flight_scene("panel") == FlightScene::Cockpit);
+    CHECK(parse_flight_scene("instruments") == FlightScene::Instruments);
+    CHECK(!parse_flight_scene("map"));
+}
+
+namespace {
+Snapshot panel_snapshot(bool sas = false) {
+    Snapshot s;
+    s.state = State::Flight;
+    Navigation n;
+    n.sas = sas;
+    s.nav = n;
+    Systems sys;
+    sys.current_stage = 3;
+    s.systems = sys;
+    Cockpit k;
+    k.at(CockpitSwitch::SolarPanels) = SwitchState{false, true};
+    k.groups[0] = false;
+    k.chutes = 2, k.chute_states = 1u << CHUTE_STOWED;
+    s.cockpit = k;
+    return s;
+}
+}  // namespace
+
+TEST(cockpit_clicks_send_the_same_commands_as_the_keys) {
+    CockpitInput in;
+    const Snapshot s = panel_snapshot();
+    auto only = [&](Ctl c, Command expected) {
+        CockpitPress p = in.press(c, s, 0);
+        return p.commands.size() == 1 && p.commands[0] == expected;
+    };
+    CHECK(only(Ctl::Sas, {Command::ToggleSas, 0, 1}));  // the lamp shows off: set on in one call
+    CHECK(only(Ctl::Rcs, {Command::ToggleRcs, 0, 1}));
+    CHECK(only(Ctl::Gear, {Command::ToggleGear}));  // state unknown: read, then flip
+    CHECK(only(Ctl::Lights, {Command::ToggleLights}));
+    CHECK(only(Ctl::Wheels, {Command::ToggleControl, 0}));
+    CHECK(only(Ctl::Solar, {Command::ToggleControl, 1, 1}));
+    CHECK(only(Ctl::Intakes, {Command::ToggleControl, 5}));
+    CHECK(only(Ctl::Mode1, {Command::SasMode, 2}));  // PRO = kRPC Prograde, as Alt+2
+    CHECK(only(Ctl::Mode9, {Command::SasMode, 1}));  // NODE = kRPC Maneuver, as Alt+0
+    CHECK(only(Ctl::RefSurface, {Command::SpeedMode, 1}));
+    CHECK(only(Ctl::Group1, {Command::ActionGroup, 1, 1}));
+    CHECK(only(Ctl::Group10, {Command::ActionGroup, 0}));  // kRPC group 0 = custom group 10, as key 0
+    CHECK(only(Ctl::Deploy, {Command::DeployChutes}));
+    CHECK(only(Ctl::ThrottleFull, {Command::ThrottleFull}));
+    CHECK(only(Ctl::WarpUp, {Command::WarpUp}));
+    CHECK(only(Ctl::Map, {Command::ToggleMap}));
+    CHECK(only(Ctl::Quicksave, {Command::Quicksave}));
+    CHECK(in.press(Ctl::TabInstruments, s, 0).scene == FlightScene::Instruments);
+    CHECK(in.press(Ctl::TabCockpit, s, 0).commands.empty());
+    CHECK_EQ(std::string(ctl_key(Ctl::Mode1)), "Alt+2");
+    CHECK_EQ(std::string(ctl_key(Ctl::Group10)), "0");
+    // Held like the B key: brakes on while the button is down, off on release or when everything is reset
+    CHECK(only(Ctl::Brakes, {Command::SetBrakes, 1}));
+    auto up = in.release(1);
+    CHECK(up.size() == 1 && up[0] == (Command{Command::SetBrakes, 0}));
+    CHECK(in.release(1).empty());
+    in.press(Ctl::Brakes, s, 2);
+    auto reset = in.reset();
+    CHECK(reset.size() == 1 && reset[0] == (Command{Command::SetBrakes, 0}));
+}
+
+TEST(cockpit_stage_needs_arm_and_guards_need_two_clicks) {
+    CockpitInput in;
+    const Snapshot s = panel_snapshot();
+    // STAGE without ARM does nothing and flashes the ARM lamp
+    CHECK(in.press(Ctl::Stage, s, 0).commands.empty());
+    CHECK(in.feedback(Ctl::Arm, 0.1) == CockpitInput::Feedback::Rejected);
+    in.press(Ctl::Arm, s, 1);
+    CHECK(in.armed(2) && in.busy(2));
+    CHECK(std::fabs(in.armed_left(2) - (CockpitInput::ARM_WINDOW - 1)) < 1e-9);
+    auto staged = in.press(Ctl::Stage, s, 2).commands;
+    CHECK(staged.size() == 1 && staged[0] == Command{Command::Stage});
+    CHECK(!in.armed(2));  // one stage per arming
+    CHECK(in.press(Ctl::Stage, s, 3).commands.empty());
+    in.press(Ctl::Arm, s, 10);
+    in.update(s, 10 + CockpitInput::ARM_WINDOW + .1);
+    CHECK(in.press(Ctl::Stage, s, 10 + CockpitInput::ARM_WINDOW + .1).commands.empty());  // the window closed
+    in.press(Ctl::Arm, s, 20), in.press(Ctl::Arm, s, 21);  // a second ARM click disarms
+    CHECK(!in.armed(21));
+    // ABORT, CUT and QUICK LOAD: the first click lifts the guard, the second one acts
+    for (auto [ctl, cmd] : {std::pair<Ctl, Command::Kind>{Ctl::Abort, Command::Abort}, {Ctl::Cut, Command::CutChutes},
+                            {Ctl::Quickload, Command::Quickload}}) {
+        CHECK(in.press(ctl, s, 30).commands.empty());
+        CHECK(in.cover_open(ctl, 30.5));
+        auto act = in.press(ctl, s, 31).commands;
+        CHECK(act.size() == 1 && act[0].kind == cmd);
+        CHECK(!in.cover_open(ctl, 31));
+        in.press(ctl, s, 40);
+        in.update(s, 40 + CockpitInput::COVER_WINDOW + .1);
+        CHECK(!in.cover_open(ctl, 40 + CockpitInput::COVER_WINDOW + .1));
+        CHECK(in.press(ctl, s, 46).commands.empty());  // closed again: the next click only lifts it
+        in.reset();
+    }
+}
+
+TEST(cockpit_lamps_follow_the_game_never_the_click) {
+    CockpitInput in;
+    Snapshot off = panel_snapshot(false), on = panel_snapshot(true);
+    in.press(Ctl::Sas, off, 0);
+    CHECK(in.feedback(Ctl::Sas, 0.1) == CockpitInput::Feedback::Sent);
+    in.update(off, 0.5);
+    CHECK(in.feedback(Ctl::Sas, 0.5) == CockpitInput::Feedback::Sent);  // not yet confirmed
+    in.update(on, 0.7);
+    CHECK(in.feedback(Ctl::Sas, 0.7) == CockpitInput::Feedback::None);  // the game reports it: confirmed
+    // No change within the timeout: rejected for a moment (e.g. KSP refused the SAS mode)
+    in.press(Ctl::Mode7, on, 10);  // TGT without a target
+    in.update(on, 10 + CockpitInput::CONFIRM_TIMEOUT + .1);
+    CHECK(in.feedback(Ctl::Mode7, 10 + CockpitInput::CONFIRM_TIMEOUT + .2) == CockpitInput::Feedback::Rejected);
+    in.update(on, 20);
+    CHECK(in.feedback(Ctl::Mode7, 20) == CockpitInput::Feedback::None);
+    CHECK(!in.busy(20));
+    // A switch the game does not report (no cockpit data) only flashes "sent"
+    Snapshot bare = off;
+    bare.cockpit.reset();
+    in.press(Ctl::Solar, bare, 30);
+    CHECK(in.feedback(Ctl::Solar, 30.1) == CockpitInput::Feedback::Sent);
+    in.update(bare, 30 + CockpitInput::SENT_FLASH + .1);
+    CHECK(in.feedback(Ctl::Solar, 30 + CockpitInput::SENT_FLASH + .1) == CockpitInput::Feedback::None);
+    // Staging is confirmed by the stage number changing
+    Snapshot after = on;
+    after.systems->current_stage = 2;
+    in.press(Ctl::Arm, on, 40);
+    in.press(Ctl::Stage, on, 40.5);
+    in.update(after, 41);
+    CHECK(in.feedback(Ctl::Stage, 41) == CockpitInput::Feedback::None);
+    // SAS modes unavailable without their reference
+    CHECK(sas_mode_unavailable(7, on) && sas_mode_unavailable(9, on) && !sas_mode_unavailable(1, on));
+}
+
+TEST(cockpit_commands_reach_krpc) {
+    std::mutex m;
+    std::map<std::string, std::string> last_args;
+    std::vector<std::string> cut;
+    bool solar = false;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        std::lock_guard<std::mutex> lock(m);
+        std::string rest;
+        for (size_t i = 1; i < args.size(); ++i) rest += args[i];
+        last_args[proc] = rest;
+        auto list = [](std::initializer_list<uint64_t> ids) {
+            pb::Writer w;
+            for (uint64_t id : ids) w.field_bytes(1, pb::enc_object(id));
+            return w.out;
+        };
+        if (proc == "Vessel_get_Control") return {pb::enc_object(42)};
+        if (proc == "Vessel_get_Parts") return {pb::enc_object(43)};
+        if (proc == "Parts_get_Parachutes") return {list({51, 52, 53})};
+        if (proc == "Parachute_get_State") {  // 51 stowed, 52 deployed, 53 semi-deployed
+            const uint64_t id = pb::dec_object(args.at(0));
+            return {pb::enc_sint32(id == 51 ? CHUTE_STOWED : id == 52 ? CHUTE_DEPLOYED : CHUTE_SEMI_DEPLOYED)};
+        }
+        if (proc == "Parachute_Cut") return cut.push_back(std::to_string(pb::dec_object(args.at(0)))), FakeResult{""};
+        if (proc == "Control_get_SolarPanels") return {pb::enc_bool(solar)};
+        if (proc == "Control_set_SolarPanels") return solar = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "Control_set_SpeedMode" || proc == "Control_set_Parachutes" || proc == "Control_SetActionGroup") return {""};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    CHECK_EQ(send_command(c, {Command::ToggleControl, 1}, 7, "flight"), "SolarPanels on");
+    CHECK(solar);
+    CHECK_EQ(send_command(c, {Command::SpeedMode, 1}, 7, "flight"), "speed mode surface");
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK_EQ(last_args["Control_set_SpeedMode"], pb::enc_sint32(1));
+    }
+    CHECK_EQ(send_command(c, {Command::DeployChutes}, 7, "flight"), "deploy parachutes");
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK_EQ(last_args["Control_set_Parachutes"], pb::enc_bool(true));
+    }
+    CHECK_EQ(send_command(c, {Command::CutChutes}, 7, "flight"), "2 parachutes cut");  // only the open ones
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK_EQ(cut.size(), size_t(2));
+        last_args.clear();
+    }
+    // A click that knows the state: one write with the cached Control object, no lookup and no read
+    CHECK_EQ(send_command(c, {Command::ToggleControl, 1, 0}, 7, "flight", 42), "SolarPanels off");
+    CHECK(!solar);
+    CHECK_EQ(send_command(c, {Command::ActionGroup, 0, 1}, 7, "flight", 42), "action group 10 on");
+    std::lock_guard<std::mutex> lock(m);
+    CHECK(!last_args.count("Vessel_get_Control") && !last_args.count("Control_get_SolarPanels"));
+    CHECK_EQ(last_args["Control_SetActionGroup"], pb::enc_uint32(0) + pb::enc_bool(true));
+}
+
+TEST(krpc_client_serializes_calls_from_two_threads) {
+    // The telemetry thread and the in-flight command thread share one connection: replies never cross.
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        if (proc == "Echo") return {args.at(0)};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    std::atomic<int> wrong{0};
+    auto run = [&](int base) {
+        for (int i = 0; i < 200; ++i) {
+            const std::string v = pb::enc_sint32(base + i);
+            if (c.invoke(krpc::Call{"SpaceCenter", "Echo", {v}}).data != v) ++wrong;
+        }
+    };
+    std::thread a(run, 0), b(run, 100000);
+    a.join(), b.join();
+    CHECK_EQ(wrong.load(), 0);
 }
 
 int main(int argc, char** argv) {

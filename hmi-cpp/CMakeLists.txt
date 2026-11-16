@@ -45,6 +45,7 @@ endif()
 # Pure logic: formatting, attitude and orbit geometry, config, scenes, discovery, kRPC client, telemetry sources.
 add_library(ksphmi_core STATIC
   src/bootstate.cpp
+  src/cockpitinput.cpp
   src/config.cpp
   src/discovery.cpp
   src/fmt.cpp
@@ -76,6 +77,7 @@ endif()
 add_library(ksphmi_ui STATIC
   src/apollo.cpp
   src/canvas.cpp
+  src/cockpit.cpp
   src/display.cpp
   src/fbdev.cpp
   src/flightdeck.cpp

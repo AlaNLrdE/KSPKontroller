@@ -17,6 +17,7 @@
 #include "gameskin.hpp"
 #include "bootstate.hpp"
 #include "check.hpp"
+#include "cockpit.hpp"
 #include "config.hpp"
 #include "display.hpp"
 #include "log.hpp"
@@ -1533,6 +1534,99 @@ TEST(navball_attitude_smoothing) {
     CHECK(prev < 0.1);
     CHECK_NEAR(angle_between(Navball::smooth(a, b, 1.0 / 30), b), 0, 1e-6);  // 90 > SNAP_DEG
     CHECK_NEAR(angle_between(Navball::smooth(a, attitude(0, 20, 0), 0), attitude(0, 20, 0)), 0, 1e-6);
+}
+
+// ------------------------------------------------------------------------------------------- cockpit panel
+TEST(cockpit_layout_fits_every_screen_without_overlaps) {
+    for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}, {2940, 1846}, {1024, 768}}) {
+        Screen s(size.first, size.second);
+        const CockpitLayout l = cockpit_layout(*s.canvas);
+        const Rect screen(0, 0, size.first, size.second);
+        const Rect blocks[] = {l.attitude, l.staging, l.recovery, l.systems, l.groups, l.strip};
+        for (const Rect& b : blocks) CHECK(screen.contains(b));
+        for (size_t i = 0; i < std::size(blocks); ++i)
+            for (size_t j = i + 1; j < std::size(blocks); ++j) CHECK(!blocks[i].collides(blocks[j]));
+        std::vector<Rect> placed;
+        for (int i = 0; i < CTL_COUNT; ++i) {
+            const Rect& f = l.face[size_t(i)];
+            if (f.w <= 0) check::fail(__FILE__, __LINE__, std::string("control without a place: ") + ctl_legend(Ctl(i)));
+            const bool tab = Ctl(i) == Ctl::TabInstruments || Ctl(i) == Ctl::TabCockpit;
+            bool inside = tab ? l.ribbon.contains(f) : false;
+            for (const Rect& b : blocks) inside = inside || b.contains(f);
+            if (!inside) check::fail(__FILE__, __LINE__, std::string("control outside its group: ") + ctl_legend(Ctl(i)));
+            for (const Rect& o : placed)
+                if (o.collides(f)) check::fail(__FILE__, __LINE__, std::string("controls overlap: ") + ctl_legend(Ctl(i)));
+            placed.push_back(f);
+            const Rect& k = l.key[size_t(i)];
+            if (k.w > 0 && !screen.contains(k)) check::fail(__FILE__, __LINE__, "key cap outside the screen");
+            // the hit test finds every control at its centre
+            const auto hit = cockpit_hit(l, f.centerx(), f.centery());
+            CHECK(hit && *hit == Ctl(i));
+        }
+        for (const Rect& r : {l.stage_readout, l.next_list, l.speed_readout, l.throttle_bar, l.throttle_readout, l.warp_readout})
+            for (const Rect& f : placed) CHECK(!r.collides(f));
+        CHECK(!cockpit_hit(l, 1, 1));  // the header is not a control
+    }
+}
+
+TEST(cockpit_renders_inside_its_groups_in_every_skin) {
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"})
+        for (const auto& size : SIZES) {
+            Screen s(size.first, size.second, skin);
+            Display& d = *s.display;
+            CockpitInput input;
+            d.set_flight_scene(FlightScene::Cockpit);
+            d.set_cockpit_input(&input);
+            const CockpitLayout l = cockpit_layout(*s.canvas);
+            const Rect blocks[] = {l.ribbon, l.attitude, l.staging, l.recovery, l.systems, l.groups, l.strip};
+            s.canvas->on_text = [&](const std::string& t, const Rect& r) {
+                if (r.bottom() <= l.ribbon.y) return;  // the skin's own header
+                bool inside = false;
+                for (const Rect& b : blocks) inside = inside || b.contains(r);
+                if (!inside) check::fail(__FILE__, __LINE__, std::string(skin) + ": text outside its group: " + t);
+            };
+            Snapshot snap = demo(30);
+            // Every live state at once: armed, open guards, a confirmed and a rejected click, long next stage,
+            // unknown data in a second frame.
+            input.press(Ctl::Arm, snap, 1), input.press(Ctl::Abort, snap, 1), input.press(Ctl::Cut, snap, 1);
+            input.press(Ctl::Quickload, snap, 1), input.press(Ctl::Gear, snap, 1), input.press(Ctl::Mode7, snap, 0);
+            input.update(snap, 1.8);
+            snap.cockpit->next_stage = {{"An extremely long part title that never fits on one line of the panel", 12},
+                                        {"Mk16 Parachute", 3}, {"TT-38K Radial Decoupler", 2}, {"FL-T400", 4}};
+            snap.cockpit->stage_lock = true;
+            d.draw(snap, 1.9);
+            CHECK(d.cockpit_shown());
+            CHECK(d.cockpit_hit(l.face[size_t(Ctl::Sas)].centerx(), l.face[size_t(Ctl::Sas)].centery()) == Ctl::Sas);
+            Snapshot bare = demo(30);
+            bare.cockpit.reset(), bare.systems.reset(), bare.nav.reset();
+            d.draw(bare, 2);
+            // the instruments scene is unchanged and takes no panel clicks
+            s.canvas->on_text = nullptr;
+            d.set_flight_scene(FlightScene::Instruments);
+            d.draw(demo(30), 2);
+            CHECK(!d.cockpit_shown());
+            CHECK(!d.cockpit_hit(l.face[size_t(Ctl::Sas)].centerx(), l.face[size_t(Ctl::Sas)].centery()));
+        }
+}
+
+TEST(cockpit_review_screenshots_on_request) {
+    const char* dir = std::getenv("KSPHMI_SHOTS");
+    if (!dir) return;
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
+        Screen s(2520, 1680, skin);
+        CockpitInput input;
+        s.display->set_flight_scene(FlightScene::Cockpit);
+        s.display->set_cockpit_input(&input);
+        const Snapshot snap = demo(1200);
+        s.display->draw(snap, 1);
+        CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_cockpit.png"));
+        // ARM pressed, the ABORT guard lifted, a click waiting for the game and one the game refused
+        input.press(Ctl::Arm, snap, 1), input.press(Ctl::Abort, snap, 1), input.press(Ctl::Gear, snap, 1.2);
+        input.press(Ctl::Mode7, snap, 0);
+        input.update(snap, 1.6);
+        s.display->draw(snap, 1.65);
+        CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_cockpit_clicks.png"));
+    }
 }
 
 int main(int argc, char** argv) {

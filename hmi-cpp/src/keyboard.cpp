@@ -36,6 +36,15 @@ std::string command_name(const Command& c) {
         case Command::Quicksave: return "quicksave";
         case Command::Quickload: return "quickload";
         case Command::ToggleMap: return "map view toggle";
+        case Command::ToggleControl:
+            return std::string(c.value >= 0 && c.value < CONTROL_PROPERTY_COUNT ? CONTROL_PROPERTIES[c.value] : "?") +
+                   " toggle";
+        case Command::SpeedMode: {
+            static const char* const modes[] = {"orbit", "surface", "target"};
+            return std::string("speed mode ") + (c.value >= 0 && c.value < 3 ? modes[c.value] : "?");
+        }
+        case Command::DeployChutes: return "deploy parachutes";
+        case Command::CutChutes: return "cut parachutes";
     }
     return "?";
 }
@@ -62,6 +71,10 @@ KeyResult Keyboard::down(const KeyEvent& e, double now) {
             } else {
                 r.commands.push_back({Command::ActionGroup, e.digit});  // kRPC: 0 = group 10, as KSP's key 0
             }
+            break;
+        case Key::Plus:
+        case Key::Minus:  // Ctrl+"+" / Ctrl+"-": next / previous flight scene; alone they are not KSP flight keys
+            if (e.ctrl) ctrl_used_ = true, r.flight_scene = e.key == Key::Plus ? 1 : -1;
             break;
         case Key::T: r.commands.push_back({Command::ToggleSas}); break;
         case Key::F: r.commands.push_back({Command::ToggleSas}); break;  // SAS hold: inverted while held

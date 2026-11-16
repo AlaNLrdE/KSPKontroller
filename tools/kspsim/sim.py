@@ -51,6 +51,15 @@ class Simulator:
         # sent before (VControlsOld), so a toggle pressed in the game is kept until the board's bit changes.
         self.game = {f: False for f in GAME_FLAGS}
         self.game_groups = 0            # custom action groups, bit n = group n (1-10)
+        # The HMI cockpit panel (kRPC Control properties without a board bit): which systems the simulated vessel
+        # has (Parts lists) and their state, its parachutes (kRPC ParachuteState) and a NavBall speed mode set
+        # over kRPC (None = the window's / flight model's value).
+        self.fitted = {"ReactionWheels": True, "SolarPanels": True, "Antennas": True, "Lights": True,
+                       "Legs": False, "Wheels": False, "Radiators": False, "CargoBays": False, "Intakes": False}
+        self.panel = {"ReactionWheels": True, "SolarPanels": False, "Antennas": False, "Radiators": False,
+                      "CargoBays": False, "Intakes": False, "StageLock": False}
+        self.chutes = [0, 0]            # two parachutes, stowed
+        self.speed_mode_set = None
         self.keyboard_axes = (0.0,) * 6  # KSPHMIFlight.SetAxes: pitch, yaw, roll, X, Y, Z (recorded, not flown)
         self._sas_mode = 1              # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
         self._sas_state = (False, 1)    # (SAS on, mode) last logged

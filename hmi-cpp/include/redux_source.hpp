@@ -66,6 +66,7 @@ public:
     ~ReduxSource() override { stop(); }
     void command(const Command& c) override;
     void hold(const Held& h) override;
+    void set_cockpit(bool shown) override;
 
 protected:
     void run() override;
@@ -77,6 +78,7 @@ private:
     std::mutex input_mutex_;
     bool linked_ = false;                 ///< Redux answering (input_mutex_)
     KrpcSource* krpc_ = nullptr;          ///< the fallback while it runs (input_mutex_)
+    bool cockpit_ = false;                ///< the cockpit panel is shown; passed to a fallback (input_mutex_)
     std::vector<Command> commands_;       ///< keyboard commands for the Redux thread (input_mutex_)
     Held held_;                           ///< held keys as the display thread last saw them (input_mutex_)
     Held sent_;                           ///< held keys last sent (Redux thread)

@@ -1,4 +1,6 @@
 #include "display.hpp"
+
+#include "cockpit.hpp"
 #include "gameskin.hpp"
 #include "orbitart.hpp"
 #include "resource_ui.hpp"
@@ -356,6 +358,7 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     else if (known_skin(snap.skin)) set_skin(snap.skin, "context");
     else if (config_skin_ == "auto") set_skin(auto_skin(snap.game), snap.game.empty() ? "auto" : "auto, game");
     else set_skin(config_skin_, "config");
+    cockpit_shown_ = cockpit_scene(snap);
     navball_.flight_deck = skin_ == "apollo" || skin_ == "ksp2";
     if (skin_ == "ksp1" || skin_ == "ksp2") {
         auto& skin=skin_=="ksp2"?ksp2_:ksp1_;
@@ -374,10 +377,23 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     }
     c_.clear(BG);
     header(snap, now);
-    if (snap.state == State::Flight) flight(snap);
+    if (cockpit_shown_) cockpit(snap, now);
+    else if (snap.state == State::Flight) flight(snap);
     else if (snap.state == State::NoVessel && find_view(snap.scene)) facility(snap);
     else waiting(snap, now);
     c_.flush();
+}
+
+std::optional<Ctl> Display::cockpit_hit(int x, int y) const {
+    if (!cockpit_shown_) return std::nullopt;
+    return ksphmi::cockpit_hit(cockpit_layout(c_), x, y);
+}
+
+void Display::cockpit(const Snapshot& s, double now) {
+    ClassicCockpitPainter painter;
+    const CockpitView view{cockpit_input_, now};
+    paint_cockpit(c_, true, s, view, painter);
+    paint_cockpit(c_, false, s, view, painter);
 }
 
 void Display::header(const Snapshot& snap, double now) {

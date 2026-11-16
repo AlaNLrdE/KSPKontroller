@@ -21,6 +21,7 @@
 #include "display.hpp"
 #include "fbdev.hpp"
 #include "fmt.hpp"
+#include "cockpitinput.hpp"
 #include "keyboard.hpp"
 #include "redux_source.hpp"
 #include "log.hpp"
@@ -46,7 +47,7 @@ std::string live_shot_path() {
 }
 
 struct Args {
-    std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor;
+    std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor, flight_scene;
     bool demo = false, windowed = false, desktop = false, offscreen = false, splash = false, bench_anim = false;
     bool vessel_heat = false;
     double seconds = 1.5;
@@ -79,6 +80,7 @@ void usage(FILE* out) {
                  "                     frames over the cached layer; full frames when the layer cache is off)\n"
                  "  --layer-cache M    auto (GPU renderer only), on or off (overrides [display] layer_cache)\n"
                  "  --vessel-heat      start the VESSEL panel on heat instead of fuel (Ctrl+0 switches)\n"
+                 "  --flight-scene S   first flight scene: instruments or cockpit (Ctrl+\"+\" / Ctrl+\"-\" switch)\n"
                  "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
                  "  --splash           animate the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) until\n"
                  "                     the HMI writes $XDG_RUNTIME_DIR/ksphmi.ready; reads no settings\n"
@@ -100,6 +102,7 @@ bool parse(int argc, char** argv, Args& a) {
         } else if (k == "--config") value(a.config);
         else if (k == "--address") value(a.address);
         else if (k == "--skin") value(a.skin);
+        else if (k == "--flight-scene") value(a.flight_scene);
         else if (k == "--size") value(a.size);
         else if (k == "--screenshot") value(a.screenshot);
         else if (k == "--seconds") value(v), a.seconds = std::stod(v);
@@ -222,6 +225,24 @@ public:
         return true;
     }
 
+    /// Window coordinates of a mouse event -> canvas pixels (HiDPI: the renderer has more pixels than points).
+    std::pair<int, int> to_canvas(int x, int y) const {
+        if (!window_) return {x, y};
+        int ww = 0, wh = 0;
+        SDL_GetWindowSize(window_, &ww, &wh);
+        if (ww <= 0 || wh <= 0) return {x, y};
+        return {int(std::lround(double(x) * w_ / ww)), int(std::lround(double(y) * h_ / wh))};
+    }
+    /// A full-screen HMI hides the cursor; moving the mouse shows it until CURSOR_IDLE seconds pass without motion.
+    static constexpr double CURSOR_IDLE = 3.0;
+    void cursor_moved(double now) {
+        cursor_at_ = now;
+        if (hide_cursor_ && !cursor_shown_) SDL_ShowCursor(SDL_ENABLE), cursor_shown_ = true;
+    }
+    void cursor_tick(double now) {
+        if (hide_cursor_ && cursor_shown_ && now - cursor_at_ > CURSOR_IDLE) SDL_ShowCursor(SDL_DISABLE), cursor_shown_ = false;
+    }
+
     SDL_Renderer* renderer() const { return renderer_; }
     bool video() const { return video_; }
     bool accelerated() const { return accelerated_; }
@@ -282,7 +303,7 @@ private:
         accelerated_ = (info.flags & SDL_RENDERER_ACCELERATED) != 0;
         if (need_gpu && !accelerated_) return why = std::string("only a software renderer (") + info.name + ")", false;
         SDL_GetRendererOutputSize(renderer_, &w_, &h_);
-        if (fullscreen) SDL_ShowCursor(SDL_DISABLE);
+        if (fullscreen) SDL_ShowCursor(SDL_DISABLE), hide_cursor_ = true;
         kind_ = std::string("SDL ") + SDL_GetCurrentVideoDriver() + " / " + info.name;
         return true;
     }
@@ -299,6 +320,8 @@ private:
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
     bool video_ = false, accelerated_ = false;
+    bool hide_cursor_ = false, cursor_shown_ = false;
+    double cursor_at_ = -1e9;
     int w_ = 0, h_ = 0;
     std::string kind_;
 };
@@ -323,7 +346,10 @@ KeyEvent key_event(const SDL_KeyboardEvent& k) {
         {SDLK_BACKSPACE, Key::Backspace}, {SDLK_F5, Key::F5}, {SDLK_F9, Key::F9}, {SDLK_w, Key::W},
         {SDLK_s, Key::S}, {SDLK_a, Key::A}, {SDLK_d, Key::D}, {SDLK_q, Key::Q}, {SDLK_e, Key::E}, {SDLK_h, Key::H},
         {SDLK_n, Key::N}, {SDLK_i, Key::I}, {SDLK_k, Key::K}, {SDLK_j, Key::J}, {SDLK_l, Key::L},
-        {SDLK_LSHIFT, Key::LeftShift}, {SDLK_LCTRL, Key::LeftCtrl}};
+        {SDLK_LSHIFT, Key::LeftShift}, {SDLK_LCTRL, Key::LeftCtrl},
+        // Ctrl+"+" / Ctrl+"-": the "+" key of a Spanish layout, "=" (Shift: "+") of a US one, the keypad
+        {SDLK_PLUS, Key::Plus}, {SDLK_EQUALS, Key::Plus}, {SDLK_KP_PLUS, Key::Plus}, {SDLK_MINUS, Key::Minus},
+        {SDLK_KP_MINUS, Key::Minus}};
     for (const auto& [code, key] : keys)
         if (s == code) return e.key = key, e;
     return e;
@@ -439,6 +465,12 @@ int run(int argc, char** argv) {
         std::string key_skin;  // Ctrl+1 through Ctrl+5 on the keyboard; survives a rebuild for a new screen size
         Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
         bool vessel_heat = args.vessel_heat;  // Ctrl+0: the VESSEL panel shows heat instead of fuel
+        // The flight scene (Ctrl+"+" / Ctrl+"-", or a tab click): kept across screen rebuilds, like the skin.
+        const std::string scene_name = args.flight_scene.empty() ? cfg.display.flight_scene : args.flight_scene;
+        FlightScene scene = parse_flight_scene(scene_name).value_or(FlightScene::Instruments);
+        if (!parse_flight_scene(scene_name)) log::warning(LOG, "unknown flight scene '" + scene_name + "', using instruments");
+        CockpitInput cockpit_input;  // clicks on the cockpit panel: armed STAGE, open guards, sent/rejected lamps
+        std::shared_ptr<const Snapshot> shown;  // the snapshot on screen: what a click acts on
         auto build_view = [&] {
             display.reset();
             canvas.reset();
@@ -446,6 +478,8 @@ int run(int argc, char** argv) {
             display = std::make_unique<Display>(cfg, *canvas);
             display->choose_skin(key_skin);
             display->set_vessel_heat(vessel_heat);
+            display->set_flight_scene(scene);
+            display->set_cockpit_input(&cockpit_input);
             log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
             const std::string mode = args.layer_cache.empty() ? cfg.display.layer_cache : args.layer_cache;
             const bool want = mode == "on" || (mode != "off" && out.accelerated());
@@ -473,11 +507,24 @@ int run(int argc, char** argv) {
             if (args.bench_anim) last = bench_snap;
             out.present();
         }
+        auto send = [&](const std::vector<Command>& commands) {
+            if (source)
+                for (const Command& c : commands) source->command(c);
+        };
+        // A new flight scene: whatever the panel held, armed or opened is released first.
+        auto set_scene = [&](FlightScene next) {
+            if (next == scene) return;
+            send(cockpit_input.reset());
+            scene = next;
+            display->set_flight_scene(scene);
+            log::info(LOG, std::string("flight scene: ") + flight_scene_name(scene));
+            last = nullptr;  // redraw now
+        };
         // Apply what a key asked for: game commands to the source (its own thread sends them), skin, quit.
         auto apply_keys = [&](const KeyResult& r) {
             if (r.quit) quit_signal = 1;
-            if (source)
-                for (const Command& c : r.commands) source->command(c);
+            send(r.commands);
+            if (r.flight_scene) set_scene(step_scene(scene, r.flight_scene));
             if (r.vessel_mode) {
                 vessel_heat = !vessel_heat;
                 display->set_vessel_heat(vessel_heat);
@@ -504,8 +551,28 @@ int run(int argc, char** argv) {
                         apply_keys(keyboard.down(key_event(ev.key), tick));
                     else if (ev.type == SDL_KEYUP)
                         apply_keys(keyboard.up(key_event(ev.key), tick));
-                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
                         apply_keys(keyboard.release_all());  // no key-up events follow: never leave keys held
+                        send(cockpit_input.release(tick));
+                    } else if (ev.type == SDL_MOUSEMOTION) {
+                        out.cursor_moved(tick);
+                    } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                        // A click on the cockpit panel (a touch screen's synthesized mouse events too) acts like
+                        // the control's KSP key: same Command, same queue.
+                        out.cursor_moved(tick);
+                        const auto [x, y] = out.to_canvas(ev.button.x, ev.button.y);
+                        const std::optional<Ctl> hit = display->cockpit_hit(x, y);
+                        if (hit && shown) {
+                            const CockpitPress press = cockpit_input.press(*hit, *shown, tick);
+                            log::info(LOG, std::string("click: ") + ctl_legend(*hit));
+                            send(press.commands);
+                            if (press.scene) set_scene(*press.scene);
+                            last = nullptr;  // show the pressed state now
+                        }
+                    } else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT) {
+                        const auto released = cockpit_input.release(tick);
+                        if (!released.empty()) send(released), last = nullptr;
+                    }
                     else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
                         resized = true;
                     else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
@@ -513,6 +580,7 @@ int run(int argc, char** argv) {
                 }
                 apply_keys(keyboard.tick(tick));
                 if (source) source->hold(keyboard.held(tick));
+                out.cursor_tick(tick);
                 const bool changed = (resized || reset) && out.refresh_size();
                 if (changed || reset) {
                     build_view();
@@ -523,10 +591,17 @@ int run(int argc, char** argv) {
             if (!args.bench) snap = source->latest();
             else if (args.bench_anim) snap = bench_snap, display->navball().hold = bench_attitude(i + 1);
             else snap = std::make_shared<const Snapshot>(bench_source.sample(i + 1));
+            // The cockpit panel's own kRPC streams exist only while it is on screen. Clicks are compared with the
+            // newest sample (confirmed or rejected); leaving the panel releases what it held.
+            const bool panel = display->cockpit_scene(*snap);
+            if (source) source->set_cockpit(scene == FlightScene::Cockpit);
+            if (panel) cockpit_input.update(*snap, tick);
+            else if (cockpit_input.busy(tick)) send(cockpit_input.reset());
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick. Between samples
             // only the NavBall turns: a NavBall-only frame over the cached layer when there is one.
             const bool shot = shot_signal != 0;
-            bool full = shot || snap != last || snap->state != State::Flight || stale(*snap, tick);
+            bool full = shot || snap != last || snap->state != State::Flight || stale(*snap, tick) ||
+                        (panel && cockpit_input.busy(tick));
             bool anim = !full && snap->state == State::Flight && display->navball().animating();
             if (full || anim) {
                 double t0 = monotonic();
@@ -543,6 +618,7 @@ int run(int argc, char** argv) {
                 if (anim) anim_ms += (t1 - t0) * 1000, ++anim_frames;
                 else full_ms += (t1 - t0) * 1000, ++full_frames;
                 last = snap;
+                shown = snap;
                 if (announce && ready_at < 0) {
                     ready_at = t2;
                     if (write_ready_file()) log::info(LOG, "first frame presented: " + ready_file_path());

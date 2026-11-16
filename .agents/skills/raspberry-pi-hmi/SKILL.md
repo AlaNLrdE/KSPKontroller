@@ -24,6 +24,12 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 
 ## Deploy and check
 
+- Only one machine deploys at a time: Mac and PC both run `./ci deploy_hmi` against the same `~/ksphmi/cpp.new`
+  and build directory. Two runs at once (2026-11-16) mixed trees and objects (tests SegFault, `tar: Cannot mkdir`).
+  Announce the deploy on the mailbox and wait for the other agent's ACK first.
+- On macOS `deploy_hmi` packs with `COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata`: bsdtar's AppleDouble
+  `._*` files stayed in `cpp.new` after `mv cpp.new/*`, so `rmdir cpp.new` failed the copy.
+
 1. `./ci test_hmi` (native MSYS2 here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
    command), copy to `~/ksphmi/cpp`, `cmake` Release + `cmake --build -j4` + `ctest` **on the Pi** (a failure stops
    before the restart, the old binary keeps running), install the unit, restart. It requires `active` **and**
@@ -332,3 +338,27 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
   unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
   Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
+
+## Cockpit panel scene (2026-11-16, docs/hmi.rst "Cockpit panel")
+
+- One `cockpit_layout()` for every skin (geometry, hit test, tests); each skin only supplies a `CockpitPainter`
+  built from its real helpers (Apollo `lamp`/`frame`/segments, GameSkin `Paint`, Classic theme). Never fork the
+  layout per skin; add a painter override instead.
+- A lamp is lit only by the snapshot. `CockpitInput` keeps clicks as "sent" until the game reports the change and
+  blinks amber after 1.5 s without it. Clicks produce the same `Command` as the key, into the same queue.
+- `CockpitStreams` exist only while the panel is shown (`Source::set_cockpit`) and never block the telemetry loop:
+  part lists and the current stage are streams; adding streams and the Part.Stage/Title scan run as queued steps
+  within 40 ms per sample. A blocking 90-part scan over the Mac's Wi-Fi (~50 ms per call) delayed clicks and the
+  first sample by seconds (2026-11-16): never add a per-part synchronous loop to the telemetry thread.
+- Click latency: in flight `KrpcSource::command_loop` sends commands on their own thread (shared Client,
+  `invoke` holds `rpc_mutex_`), with a cached Control object; panel toggles carry `Command::set` and cost one call.
+  Read `key: ... (queued N ms, kRPC N ms)` in the log before blaming the game. The Mac is on Wi-Fi (~50 ms per call,
+  spikes ~250 ms), the Pi on Ethernet: compare the two machines' logs, not their absolute speed.
+- kRPC 0.7 facts: `Parachute.SafeState` / `Cut` exist; `Control.Parachutes` cannot be set to false; there is no
+  `Parts.InStage`, so the next stage is `Part.Stage == CurrentStage - 1` over `Parts.All`.
+- Apollo's non-flight panel is light grey with dark `INK`: text over dark wells (scene ribbon, grey veils) must use
+  `key_ink()` / `veil_ink()`, not `ink()`. The KSP 1/2 group title bars are about 4.1u tall, so panel content
+  starts 4.6u below a frame's top in every skin.
+- The Pi has no touch screen and normally no mouse: clicks need a USB mouse (SDL KMSDRM reads evdev); the fbdev
+  fallback has no SDL input. The full-screen cursor shows on motion and hides after 3 s.
+- On macOS the system `python3` has no `krpc`: run kspsim's tests with `build/venv/bin/python`.

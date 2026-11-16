@@ -42,7 +42,7 @@ public:
     std::function<void(const std::string&, const Color*)> on_lamp;
 
 private:
-    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL, VAB };
+    enum Screen { FLIGHT, FACILITY, WAITING, NO_VESSEL, VAB, COCKPIT };
     struct Key {
         int w = 0, h = 0, screen = -1;
         std::string scene;
@@ -71,6 +71,8 @@ private:
     void editor(Canvas& c, bool art, const Snapshot& s);
     void vab(Canvas& c, bool art, const Snapshot& s);
     void waiting(Canvas& c, bool art, const Snapshot& s, double now, bool no_vessel);
+    /// The cockpit panel scene below the header, with this skin's lamps, frames and segment windows.
+    void cockpit(Canvas& c, bool art, const Snapshot& s, double now);
 
     Display& d_;
     bool steampunk_;
