@@ -79,6 +79,10 @@ std::string key_name(const Command& c, int& value) {
         case Command::Quicksave: return "quicksave";
         case Command::Quickload: return "quickload";
         case Command::ToggleMap: return "map";
+        case Command::ToggleControl:  // cockpit panel controls: no KSP2KEY verb yet (docs/hmi.rst)
+        case Command::SpeedMode:
+        case Command::DeployChutes:
+        case Command::CutChutes: return "";
     }
     return "";
 }
@@ -298,6 +302,12 @@ void ReduxSource::hold(const Held& h) {
     if (krpc_) krpc_->hold(linked_ ? Held{} : h);
 }
 
+void ReduxSource::set_cockpit(bool shown) {
+    std::lock_guard<std::mutex> lock(input_mutex_);
+    cockpit_ = shown;
+    if (krpc_) krpc_->set_cockpit(shown);  // KSP 1 through the fallback
+}
+
 void ReduxSource::send_inputs(net::socket_t fd, uint64_t& sequence) {
     std::vector<Command> todo;
     Held held;
@@ -307,6 +317,11 @@ void ReduxSource::send_inputs(net::socket_t fd, uint64_t& sequence) {
         held = held_;
     }
     for (const Command& c : todo) {
+        int unused = 0;
+        if (key_name(c, unused).empty()) {
+            log::warning(LOG, "key " + command_name(c) + " not applied: not supported by the KSP 2 Redux plugin");
+            continue;
+        }
         // Never resent: the game acknowledges a queued press, and a lost reply must not apply it twice.
         const std::string nonce = std::to_string(++sequence);
         auto status = redux_ack_exchange(fd, redux_key_request(c, nonce), "KSP2KEY", nonce, 0.08);
@@ -365,6 +380,7 @@ void ReduxSource::run() {
         krpc->start();
         std::lock_guard<std::mutex> lock(input_mutex_);
         krpc_ = krpc.get();
+        krpc_->set_cockpit(cockpit_);
     }
     log::info(LOG, "KSP 2 Redux UDP source at " + host + ":" + std::to_string(REDUX_PORT) + (fallback_ ? ", kRPC fallback" : ""));
     uint64_t sequence = 0;

@@ -21,6 +21,7 @@ enum class Key {
     H, N, I, K, J, L,                       // translate forward / back, down / up, left / right
     LeftShift, LeftCtrl,                    // throttle up / down (held)
     Digit,                                  // 0-9: action groups; Ctrl+1-5 skins, Ctrl+0 VESSEL view; Alt+digit SAS modes
+    Plus, Minus,                            // Ctrl+"+" / Ctrl+"-": next / previous flight scene
     Escape, Quit,                           // Esc and q close the HMI
 };
 
@@ -37,14 +38,22 @@ struct Command {
     enum Kind {
         ToggleSas, ToggleRcs, Stage, ToggleGear, ToggleLights, SetBrakes, Abort, ActionGroup, SasMode,
         ThrottleFull, ThrottleCut, WarpUp, WarpDown, WarpStop, Quicksave, Quickload, ToggleMap,
+        ToggleControl, SpeedMode, DeployChutes, CutChutes,  // cockpit panel controls (cockpitinput.hpp)
     };
     Kind kind;
-    int value = 0;  ///< SetBrakes: 1 on / 0 off; ActionGroup: kRPC group 0-9 (0 = group 10); SasMode: kRPC SASMode
+    /// SetBrakes: 1 on / 0 off; ActionGroup: kRPC group 0-9 (0 = group 10); SasMode: kRPC SASMode; ToggleControl:
+    /// an index of CONTROL_PROPERTIES; SpeedMode: kRPC SpeedMode (0 orbit, 1 surface, 2 target)
+    int value = 0;
     bool operator==(const Command& o) const { return kind == o.kind && value == o.value; }
 };
 
 /// "SAS on/off toggle", "stage", ... for the log.
 std::string command_name(const Command& c);
+
+/// The kRPC Control properties a ToggleControl command flips, by Command::value.
+inline constexpr const char* CONTROL_PROPERTIES[] = {"ReactionWheels", "SolarPanels", "Antennas",
+                                                     "Radiators",      "CargoBays",   "Intakes"};
+constexpr int CONTROL_PROPERTY_COUNT = 6;
 
 /// Keys held right now, as KSP's FlightInputHandler would apply them: FlightCtrlState signs (W pitch -1, S +1,
 /// A yaw -1, D +1, Q roll -1, E +1; L translate X -1, J +1; I translate Y -1, K +1; H translate Z -1, N +1) and a
@@ -60,12 +69,13 @@ struct Held {
     bool operator!=(const Held& o) const { return !(*this == o); }
 };
 
-/// What a key event asks for: game commands, a skin ("classic" / "apollo"), the VESSEL view switch (Ctrl+0)
-/// and/or quitting.
+/// What a key event asks for: game commands, a skin ("classic" / "apollo"), the VESSEL view switch (Ctrl+0),
+/// a flight scene step (Ctrl+"+" = +1, Ctrl+"-" = -1) and/or quitting.
 struct KeyResult {
     std::vector<Command> commands;
     std::string skin;
     bool vessel_mode = false;
+    int flight_scene = 0;
     bool quit = false;
 };
 
@@ -88,7 +98,7 @@ public:
 private:
     std::set<Key> down_;
     double ctrl_since_ = -1;
-    bool ctrl_used_ = false;  ///< a Ctrl+digit chord: this Ctrl press never ramps the throttle
+    bool ctrl_used_ = false;  ///< a Ctrl+digit or Ctrl+"+"/"-" chord: this Ctrl press never ramps the throttle
     double f9_since_ = -1;
     bool f9_fired_ = false;
 };

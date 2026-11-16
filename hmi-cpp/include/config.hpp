@@ -33,6 +33,8 @@ struct Config {
         int width = 0, height = 0;
         /// auto (the last display when there are several, so the game keeps the primary one) | display index
         std::string monitor = "auto";
+        /// instruments | cockpit: the flight scene shown first (Ctrl+"+" / Ctrl+"-" switch while running)
+        std::string flight_scene = "instruments";
     } display;
     struct {
         int day_hours = 6;

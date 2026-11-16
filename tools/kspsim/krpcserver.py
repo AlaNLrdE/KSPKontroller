@@ -232,14 +232,16 @@ def services_message(ksphmi: bool = True) -> K.Services:
             proc.game_scenes.append(K.Procedure.FLIGHT)
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
-                "Resources", "Stage", "Part", "Parts"):
+                "Resources", "Stage", "Part", "Parts", "Parachute"):
         sc.classes.add(name=cls)
     situation = sc.enumerations.add(name="VesselSituation")
     for i, name in enumerate(SITUATIONS):
         situation.values.add(name="".join(p.capitalize() for p in name.split("_")), value=i)
     for enum, names in (('SpeedMode', ('Orbit', 'Surface', 'Target')),
                         ('SASMode', ('StabilityAssist', 'Maneuver', 'Prograde', 'Retrograde', 'Normal',
-                                     'AntiNormal', 'Radial', 'AntiRadial', 'Target', 'AntiTarget'))):
+                                     'AntiNormal', 'Radial', 'AntiRadial', 'Target', 'AntiTarget')),
+                        ('ParachuteState', ('Stowed', 'Armed', 'SemiDeployed', 'Deployed', 'Cut')),
+                        ('ParachuteSafeState', ('Safe', 'Risky', 'Unsafe', 'None'))):
         item = sc.enumerations.add(name=enum)
         for i, name in enumerate(names):
             item.values.add(name=name, value=i)
@@ -634,6 +636,68 @@ class KrpcServer:
             raise RpcFailure('kspsim does not implement SpaceCenter.%s' % proc)
         return None
 
+    def _cockpit(self, proc: str, args: dict):
+        """The HMI cockpit panel's procedures: Parts lists of the fitted systems, parachutes, the next stage's
+        parts, Control properties without a board bit, action group levels, speed mode and the warp rate. Returns
+        None when `proc` is not one of them, NULL for a procedure without a value."""
+        sim = self.sim
+        uid = sim.vessel_uid
+        cls, _, member = proc.partition("_")
+        if proc == 'get_WarpRate':
+            return enc_float(float(sim.warp))
+        if cls == 'Parts' and member.startswith('get_') and member[4:] in sim.fitted:
+            return enc_list([uid * 10000 + 7100 + i for i in range(1 if sim.fitted[member[4:]] else 0)])
+        if proc == 'Parts_get_Parachutes':
+            return enc_list([uid * 10000 + 7000 + i for i in range(len(sim.chutes))])
+        if cls == 'Parachute':
+            ident = read_varint(args[0]) - uid * 10000 - 7000
+            if not 0 <= ident < len(sim.chutes):
+                raise RpcFailure('Parachute belongs to a previous vessel')
+            if member == 'get_State':
+                return enc_enum(sim.chutes[ident])
+            if member == 'get_SafeState':  # KSP's rule of thumb: slow enough in an atmosphere
+                r = sim.reported()
+                if r['altitude'] > 70000:
+                    return enc_enum(2)
+                return enc_enum(0 if r['surface_speed'] < 250 else 1 if r['surface_speed'] < 500 else 2)
+            if member == 'Cut':
+                if sim.chutes[ident] in (2, 3):
+                    sim.chutes[ident] = 4
+                return NULL
+            if member == 'Deploy':
+                sim.chutes[ident] = max(sim.chutes[ident], 2)
+                return NULL
+        if cls == 'Part' and member in ('get_Stage', 'get_Title'):
+            ident = read_varint(args[0]) - uid * 10000 - 5000
+            per = max(1, int(sim.reported()['stage_parts']))
+            if not 0 <= ident < 10000:
+                raise RpcFailure('Part belongs to a previous vessel')
+            return enc_enum(ident // per) if member == 'get_Stage' else enc_string("Simulated part %d" % ident)
+        if cls == 'Control':
+            if member.startswith(('get_', 'set_')) and member[4:] in sim.panel:
+                if member.startswith('get_'):
+                    return enc_bool(sim.panel[member[4:]])
+                sim.panel[member[4:]] = bool(read_varint(args.get(1, b'\x00')))
+                return NULL
+            if member == 'get_Parachutes':
+                return enc_bool(bool(sim.chutes) and all(s in (2, 3) for s in sim.chutes))
+            if member == 'set_Parachutes':  # kRPC cannot set it back to false
+                sim.chutes = [max(s, 2) if s < 2 else s for s in sim.chutes]
+                return NULL
+            if member in ('GetActionGroup', 'SetActionGroup'):
+                n = read_varint(args.get(1, b'\x00')) or 10
+                if member == 'GetActionGroup':
+                    return enc_bool(bool(sim.game_groups >> n & 1))
+                sim.set_game_group(n, bool(read_varint(args.get(2, b'\x00'))))
+                return NULL
+            if member == 'set_SpeedMode':
+                value = read_varint(args.get(1, b'\x00'))
+                sim.speed_mode_set = (value >> 1) ^ -(value & 1)  # zigzag sint32
+                return NULL
+            if member == 'get_SpeedMode' and sim.speed_mode_set is not None:
+                return enc_enum(sim.speed_mode_set)
+        return None
+
     def _space_center(self, proc: str, args: dict) -> bytes | None:
         sim = self.sim
         if proc == "get_ActiveVessel":  # real kRPC 0.7: null outside flight (seen at the Space Center), not an error
@@ -665,6 +729,9 @@ class KrpcServer:
             x, y, z = (struct.unpack('<d', item)[0] for item in value.items)
             return enc_tuple(tuple(-x * radial[i] + y * pro[i] + z * normal[i] for i in range(3)))
 
+        cockpit = self._cockpit(proc, args)
+        if cockpit is not None:
+            return None if cockpit is NULL else cockpit
         if proc.startswith(('Resources_', 'Stage_', 'Parts_')):
             ident = read_varint(args[0])
             if ident // 10000 != sim.vessel_uid:

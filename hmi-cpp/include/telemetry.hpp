@@ -48,6 +48,8 @@ public:
     virtual void command(const Command& c);
     /// The held keys now (display thread, on every change). Ignored without a game link.
     virtual void hold(const Held&) {}
+    /// Whether the cockpit panel scene is on screen (display thread): its extra kRPC streams exist only then.
+    virtual void set_cockpit(bool) {}
 
 protected:
     explicit Source(const char* name);
@@ -138,6 +140,7 @@ public:
     std::string address() const;
     void command(const Command& c) override;
     void hold(const Held& h) override;
+    void set_cockpit(bool shown) override;
 
 protected:
     void run() override;
@@ -167,6 +170,7 @@ private:
     std::mutex input_mutex_;
     std::vector<Command> commands_;  ///< keyboard commands waiting for the telemetry thread (input_mutex_)
     Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)
+    std::atomic<bool> cockpit_{false};  ///< the cockpit panel scene is shown: follow() keeps CockpitStreams
     Held sent_;                      ///< held keys last sent (telemetry thread)
     double nudged_at_ = -1;          ///< last NudgeThrottle, -1 while no throttle key is held
     std::string held_problem_;       ///< last held-key error logged

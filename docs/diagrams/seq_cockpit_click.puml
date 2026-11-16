@@ -1,0 +1,40 @@
+@startuml seq_cockpit_click
+title Cockpit panel click: same command queue as the keys, lamp lit only by the game's reply
+skinparam sequenceMessageAlign left
+actor "Player\n(mouse / touch)" as Player
+participant "Display thread\nmain.cpp event loop" as UI
+participant "CockpitInput" as Input
+participant "KrpcSource worker\nsend_inputs / CockpitStreams" as Worker
+participant "kRPC server\nSpaceCenter.Control" as Krpc
+activate UI
+Player -> UI : SDL_MOUSEBUTTONDOWN (x, y)
+UI -> UI : to_canvas (HiDPI) and\ncockpit_hit(layout) -> Ctl
+UI -> Input : press(Ctl, shown snapshot, now)
+activate Input
+Input -> Input : ARM window / guard state;\nrecord the expected game value
+Input --> UI : CockpitPress (Commands, scene)
+deactivate Input
+UI ->> Worker : command(Command) (queue, at most 16)
+UI -> UI : redraw: "sent" outline
+deactivate UI
+activate Worker
+Worker -> Krpc : Control_set_SolarPanels(true)\n(or SAS, SASMode, ActivateNextStage ...)
+activate Krpc
+Krpc --> Worker : ok / RpcError (logged "not applied")
+deactivate Krpc
+Worker -> Krpc : stream updates (Control_get_SolarPanels ...)
+activate Krpc
+Krpc --> Worker : true
+deactivate Krpc
+Worker -> Worker : publish Snapshot.cockpit
+deactivate Worker
+activate UI
+UI -> Input : update(latest snapshot, now)
+activate Input
+Input -> Input : confirmed: drop pending;\nno change after 1.5 s: rejected (amber)
+Input --> UI : feedback per control
+deactivate Input
+UI -> UI : draw lamps from Snapshot.cockpit,\nfeedback from CockpitInput
+deactivate UI
+note over Worker : CockpitStreams exist only while the cockpit scene is shown\n(Source::set_cockpit); part lists and the next stage are polled every 2 s.
+@enduml

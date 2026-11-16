@@ -5,7 +5,8 @@ Scope and build graph
 ---------------------
 
 ``hmi-cpp`` is the production HMI, implemented in C++17 with SDL2 and SDL2_ttf. It reads KSP through
-the kRPC mod and the KSPSerialIO UDP context responder. It is read-only with respect to vessel controls.
+the kRPC mod and the KSPSerialIO UDP context responder. Vessel controls (the remote keyboard and the cockpit
+panel's clicks) go only through the source's command queue to its telemetry thread.
 Python remains in tests and development tools; there is no Python/pygame production HMI runtime.
 
 .. uml:: ../diagrams/components_hmi.puml
@@ -43,6 +44,12 @@ Source map
    * - ``telemetry.*`` / ``model.hpp``
      - Live/demo sources, stream groups and immutable display snapshots.
      - No SDL calls from telemetry workers.
+   * - ``keyboard.*`` / ``cockpitinput.*``
+     - Remote KSP keyboard and cockpit panel clicks: Commands, held state, ARM / guards, click confirmation.
+     - No SDL; the display thread only queues Commands, the telemetry thread sends them.
+   * - ``cockpit.*``
+     - Cockpit panel layout, hit test and composition over a skin's ``CockpitPainter``.
+     - One layout for every skin; materials stay in each skin.
    * - ``shipreport.*``
      - VAB ship report model and parser (format v1 from ``KSPHMI.ShipReport``), percent decoding, labels.
      - Reject unknown versions and malformed fields; ignore unknown line kinds (later phases).

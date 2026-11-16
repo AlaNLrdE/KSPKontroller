@@ -332,3 +332,21 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
   unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
   Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
+
+## Cockpit panel scene (2026-11-16, docs/hmi.rst "Cockpit panel")
+
+- One `cockpit_layout()` for every skin (geometry, hit test, tests); each skin only supplies a `CockpitPainter`
+  built from its real helpers (Apollo `lamp`/`frame`/segments, GameSkin `Paint`, Classic theme). Never fork the
+  layout per skin; add a painter override instead.
+- A lamp is lit only by the snapshot. `CockpitInput` keeps clicks as "sent" until the game reports the change and
+  blinks amber after 1.5 s without it. Clicks produce the same `Command` as the key, into the same queue.
+- `CockpitStreams` exist only while the panel is shown (`Source::set_cockpit`); part lists, parachutes and the next
+  stage are polled every 2 s, not streamed per part.
+- kRPC 0.7 facts: `Parachute.SafeState` / `Cut` exist; `Control.Parachutes` cannot be set to false; there is no
+  `Parts.InStage`, so the next stage is `Part.Stage == CurrentStage - 1` over `Parts.All`.
+- Apollo's non-flight panel is light grey with dark `INK`: text over dark wells (scene ribbon, grey veils) must use
+  `key_ink()` / `veil_ink()`, not `ink()`. The KSP 1/2 group title bars are about 4.1u tall, so panel content
+  starts 4.6u below a frame's top in every skin.
+- The Pi has no touch screen and normally no mouse: clicks need a USB mouse (SDL KMSDRM reads evdev); the fbdev
+  fallback has no SDL input. The full-screen cursor shows on motion and hides after 3 s.
+- On macOS the system `python3` has no `krpc`: run kspsim's tests with `build/venv/bin/python`.

@@ -27,6 +27,7 @@ height = 0
 monitor = "auto"         # auto = the last display when several are connected (the game keeps display 0); or "0", "1"...
 skin = "auto"           # auto (default) = ksp1 (Stock) with KSP 1, ksp2 (Redux) with KSP2 Redux; or apollo | classic |
                          # steampunk | ksp1 | ksp2 always
+flight_scene = "instruments"  # first flight scene: instruments | cockpit (the clickable panel); Ctrl+"+"/"-" switch
 
 [format]
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time

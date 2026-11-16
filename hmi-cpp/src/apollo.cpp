@@ -1,4 +1,5 @@
 #include "apollo.hpp"
+#include "cockpit.hpp"
 #include "resource_ui.hpp"
 
 #include <algorithm>
@@ -548,6 +549,82 @@ std::vector<std::pair<float, float>> groups(const seg::Layout& l) {
     return out;
 }
 
+// ------------------------------------------------------------------------------------------- cockpit panel
+void panel_frame(Canvas& c, const Rect& r, const std::string& title) { frame(c, r, title); }
+void panel_lamp(Canvas& c, const Rect& r, const std::string& legend, float units, bool art, const Color* lit) {
+    lamp(c, r, legend, units, art, lit);
+}
+
+/// The cockpit panel in this skin's materials: white group lines (brass plates in steampunk), backlit lamp
+/// tiles, segment windows and a metal bat toggle on a hex nut.
+class InstrumentCockpitPainter : public CockpitPainter {
+public:
+    Color ink() const override { return palette.INK; }
+    Color dim_ink() const override { return palette.DIM_INK; }
+    Color lit_ink() const override { return palette.LAMP_TEXT; }
+    Color unlit_ink() const override { return brass ? palette.DIM_INK : palette.LAMP_LEGEND; }
+    /// Steampunk lamps are bulbs beside a painted legend: a symbol on the panel stays in the panel's ink.
+    Color face_ink(Lamp lit) const override {
+        if (brass) return lit != Lamp::Off ? palette.INK : palette.DIM_INK;
+        return CockpitPainter::face_ink(lit);
+    }
+    Color well() const override { return palette.WELL; }
+    Color key_fill() const override { return palette.BEZEL; }
+    Color key_ink() const override { return brass ? palette.INK : Color{232, 232, 222}; }
+    Color lamp_color(Lamp l) const override {
+        switch (l) {
+            case Lamp::Green: return palette.L_GREEN;
+            case Lamp::White: return palette.L_WHITE;
+            case Lamp::Amber: return palette.L_AMBER;
+            case Lamp::Red: return palette.L_RED;
+            default: return palette.LAMP_OFF;
+        }
+    }
+    void frame(Canvas& c, const Rect& r, const std::string& title) override { panel_frame(c, r, title); }
+    void text(Canvas& c, const std::string& s, float units, Color color, double x, double y, Anchor a,
+              double room) override {
+        if (s.empty()) return;
+        const float size = room > 0 ? std::min(units, fit(c, {s}, units, room)) : units;
+        label(c, s, std::max(.8f, size), x, y, a, color, false, .06f);
+    }
+    void lamp(Canvas& c, const Rect& r, const std::string& legend, Lamp lit, bool art) override {
+        const double u = c.u;
+        const float units = std::min(float(r.h / u * .42), fit(c, {legend.empty() ? " " : legend}, 1.6f, r.w - 1.8 * u));
+        const Color color = lamp_color(lit);
+        panel_lamp(c, r, legend, std::max(.8f, units), art, lit == Lamp::Off ? nullptr : &color);
+    }
+    void readout(Canvas& c, const Rect& r, const std::string& pattern, const std::string& text, bool art) override {
+        seg::Layout l = seg::layout(pattern, rnd(r.h * .6));
+        if (l.w > r.w) l = seg::layout(pattern, rnd(r.h * .6 * r.w / l.w));
+        const float x = float(r.right() - l.w), y = float(r.centery() - l.h / 2);
+        if (art) instrument_window(c, x, y, l);
+        else if (!text.empty()) instrument_digits(c, x, y, l, text, seg::GREEN);
+    }
+    void lever(Canvas& c, const Rect& r, std::optional<bool> on, bool fitted, bool art) override {
+        const double u = c.u, cx = r.centerx(), cy = r.centery(), nut = std::min(r.w, r.h) * .26;
+        if (art) {  // hex nut on a round plate
+            c.circle(float(cx), float(cy), float(nut * 1.45), mix(palette.BEZEL, Color{0, 0, 0}, .2));
+            c.circle(float(cx), float(cy), float(nut * 1.3), palette.BEZEL_HI);
+            std::vector<Pt> hex;
+            for (int i = 0; i < 6; ++i)
+                hex.push_back({float(cx + nut * std::cos(i * M_PI / 3)), float(cy + nut * std::sin(i * M_PI / 3))});
+            c.polygon(hex, brass ? Color{196, 150, 72} : Color{168, 171, 172});
+            c.circle(float(cx), float(cy), float(nut * .55), brass ? Color{120, 84, 36} : Color{92, 95, 97});
+            return;
+        }
+        if (!on) return;  // unknown: no lever drawn rather than a guessed position
+        const double tip = cy + (*on ? -1 : 1) * r.h * .42;
+        const Color metal = !fitted ? Color{118, 120, 120} : brass ? Color{236, 196, 112} : Color{238, 238, 230};
+        c.line({float(cx), float(cy)}, {float(cx), float(tip)}, float(std::max(3.0, .8 * u)), Color{40, 42, 44});
+        c.line({float(cx), float(cy)}, {float(cx), float(tip)}, float(std::max(2.0, .6 * u)), metal);
+        c.circle(float(cx), float(tip), float(std::max(3.0, .75 * u)), metal);
+    }
+    void keycap(Canvas& c, const Rect& r, const std::string& key) override {
+        c.rounded_rect(r, rnd(.35 * c.u), key_fill());
+        text(c, key, float(r.h / c.u * .55), key_ink(), r.centerx(), r.centery(), Anchor::Center, r.w - .6 * c.u);
+    }
+};
+
 }  // namespace
 
 // ============================================================================================ skin
@@ -568,7 +645,9 @@ ApolloSkin::~ApolloSkin() {
 ApolloSkin::Key ApolloSkin::key_for(const Snapshot& s) const {
     Key k;
     k.w = d_.w(), k.h = d_.h();
-    if (s.state == State::Flight) {
+    if (d_.cockpit_scene(s)) {
+        k.screen = COCKPIT;  // the panel art depends on the screen size only
+    } else if (s.state == State::Flight) {
         k.screen = FLIGHT;
         const auto resource_names = hmi_resource_names(s);
         k.resource_names = resource_names;
@@ -607,6 +686,8 @@ void ApolloSkin::build(const Key& key, const Snapshot& s) {
             if (steampunk_ || key.screen != FLIGHT) header(art, true, s, 0, key.screen);
             if (key.screen == FLIGHT)
                 flight(art, true, s);
+            else if (key.screen == COCKPIT)
+                cockpit(art, true, s, 0);
             else if (key.screen == FACILITY)
                 facility(art, true, s);
             else if (key.screen == VAB)
@@ -621,6 +702,11 @@ void ApolloSkin::build(const Key& key, const Snapshot& s) {
         if (panel_) SDL_SetTextureBlendMode(panel_, SDL_BLENDMODE_NONE);
     }
     SDL_FreeSurface(surface);
+}
+
+void ApolloSkin::cockpit(Canvas& c, bool art, const Snapshot& s, double now) {
+    InstrumentCockpitPainter painter;
+    paint_cockpit(c, art, s, CockpitView{d_.cockpit_input(), now}, painter);
 }
 
 void ApolloSkin::draw(const Snapshot& s, double now) {
@@ -639,6 +725,8 @@ void ApolloSkin::draw(const Snapshot& s, double now) {
     if (steampunk_ || key.screen != FLIGHT) header(c, false, s, now, key.screen);
     if (key.screen == FLIGHT)
         flight(c, false, s);
+    else if (key.screen == COCKPIT)
+        cockpit(c, false, s, now);
     else if (key.screen == FACILITY)
         facility(c, false, s);
     else if (key.screen == VAB)
@@ -667,7 +755,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
             return;
         }
         std::string title = "KSP KONTROLLER", subtitle = "FLIGHT DATA DISPLAY";
-        if (screen == FLIGHT) {
+        if ((screen == FLIGHT || screen == COCKPIT)) {
             title = upper(s.vessel.empty() ? "Unnamed vessel" : s.vessel);
             subtitle = upper(s.body) + " / " + upper(fmt::situation(s.situation));
         } else if (screen == VAB && s.ship) {
@@ -679,7 +767,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
               Anchor::TopLeft, palette.INK, false, .06f);
         label(c, subtitle, fit(c, {subtitle}, 1.55f, nameplate.w - 3 * u), nameplate.x + 1.5 * u,
               nameplate.y + 3.65 * u, Anchor::TopLeft, palette.DIM_INK, false, .06f);
-        c.text(screen == FLIGHT ? fmt::clock(s.ut, day_hours_) : "--", 2.8f, palette.INK, clockplate.centerx(),
+        c.text((screen == FLIGHT || screen == COCKPIT) ? fmt::clock(s.ut, day_hours_) : "--", 2.8f, palette.INK, clockplate.centerx(),
                clockplate.y + 3.6 * u, Anchor::Center);
         const bool is_stale = stale(s, now), flight = s.state == State::Flight;
         struct Alert {
@@ -738,7 +826,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
         screw(c, p.x + .9 * u, p.bottom() - .9 * u, sr, 2.7),
             screw(c, p.right() - .9 * u, p.bottom() - .9 * u, sr, 1.1);
         if (steam_art) steam_art->panel(p, 1.7 * u);
-        if (screen == FLIGHT) {
+        if ((screen == FLIGHT || screen == COCKPIT)) {
             label(c, "UNIVERSAL TIME", 1.5f, g.ut_x, 1.1 * u);
             instrument_window(c, g.ut_x, g.ut_y, g.ut);
             static const char* names[] = {"YR", "DAY", "HR", "MIN", "SEC"};
@@ -756,7 +844,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
     // name plate: engraved white on black, uppercase
     const double room = p.w - 3.6 * u;
     std::string title, line2;
-    if (screen == FLIGHT) {
+    if ((screen == FLIGHT || screen == COCKPIT)) {
         title = upper(s.vessel.empty() ? "Unnamed vessel" : s.vessel);
         line2 = upper(s.body) + "   \xC2\xB7   " + upper(fmt::situation(s.situation));
     } else if (screen == VAB && s.ship) {
@@ -770,7 +858,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
     float tu = fit(c, {title}, 3.6f, room), lu = fit(c, {line2}, 2.1f, room);
     label(c, title, std::max(tu, 2.0f), p.x + 1.8 * u, p.y + 1.1 * u, Anchor::TopLeft, palette.INK, false);
     label(c, line2, std::max(lu, 1.4f), p.x + 1.8 * u, p.y + 5.3 * u, Anchor::TopLeft, palette.DIM_INK, false);
-    if (screen == FLIGHT) {
+    if ((screen == FLIGHT || screen == COCKPIT)) {
         std::string clock = fmt::clock(s.ut, day_hours_);
         clock.erase(std::remove_if(clock.begin(), clock.end(), [](char ch) { return ch == 'Y' || ch == 'D'; }),
                     clock.end());

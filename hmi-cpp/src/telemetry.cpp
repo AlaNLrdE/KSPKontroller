@@ -307,6 +307,146 @@ private:
     double retry_frame_at_ = 0;
 };
 
+// ------------------------------------------------------------------------------------------- cockpit panel
+/// The cockpit panel's switches, action groups, parachutes, next stage and time warp. Created only while that
+/// scene is shown (KrpcSource::set_cockpit), dropped when it is hidden. Switch states and groups are streams;
+/// what changes only with the vessel's parts (which switches are fitted, the parachutes, the next stage's parts) is
+/// read again every POLL seconds. Every value is optional: a failing call blanks that control only.
+class CockpitStreams {
+public:
+    static constexpr double POLL = 2.0;
+    static constexpr size_t MAX_CHUTES = 16;
+
+    CockpitStreams(Client& c, uint64_t vessel, double rate) : c_(c), rate_(rate), controls_(c), chutes_(c) {
+        control_ = object(c, sc("Vessel_get_Control", {obj(vessel)}));
+        parts_ = object(c, sc("Vessel_get_Parts", {obj(vessel)}));
+        if (!control_) throw RpcError("no vessel control");
+        static const char* const props[] = {"ReactionWheels", "Gear",     "Lights",    "Brakes", "SolarPanels",
+                                            "Antennas",       "Radiators", "CargoBays", "Intakes", "Abort", "StageLock"};
+        for (const char* p : props)
+            optional_step([&] { controls_.add(p, sc(std::string("Control_get_") + p, {obj(control_)}), rate); }, [] {});
+        for (int n = 1; n <= 10; ++n)  // kRPC group 0 is custom group 10
+            optional_step([&] {
+                controls_.add("group" + std::to_string(n),
+                              sc("Control_GetActionGroup", {obj(control_), pb::enc_uint32(uint32_t(n % 10))}), rate);
+            }, [] {});
+        optional_step([&] { controls_.add("warp", sc("get_WarpRate"), rate); }, [] {});
+    }
+
+    Cockpit sample(double now) {
+        if (now >= next_poll_) poll(), next_poll_ = now + POLL;
+        Cockpit k = slow_;
+        auto flag = [&](const std::string& name) -> std::optional<bool> {
+            std::optional<bool> v;
+            if (controls_.has(name))
+                optional_step([&] { v = pb::dec_bool(c_.stream(controls_.id(name)).data); }, [&] { controls_.remove(name); });
+            return v;
+        };
+        static const char* const switch_props[COCKPIT_SWITCHES] = {"ReactionWheels", "Gear",      "Lights",
+                                                                   "Brakes",         "SolarPanels", "Antennas",
+                                                                   "Radiators",      "CargoBays", "Intakes"};
+        for (int i = 0; i < COCKPIT_SWITCHES; ++i) k.switches[size_t(i)].on = flag(switch_props[i]);
+        k.abort = flag("Abort"), k.stage_lock = flag("StageLock");
+        for (int n = 1; n <= 10; ++n) k.groups[size_t(n - 1)] = flag("group" + std::to_string(n));
+        if (controls_.has("warp"))
+            optional_step([&] {
+                const double w = pb::dec_float(c_.stream(controls_.id("warp")).data);
+                if (std::isfinite(w) && w > 0) k.warp_rate = w;
+            }, [&] { controls_.remove("warp"); });
+        unsigned states = 0;
+        int worst = -1;
+        for (const uint64_t chute : chute_ids_) {
+            const std::string key = std::to_string(chute);
+            optional_step([&] {
+                const int state = pb::dec_sint32(c_.stream(chutes_.id(key + ".state")).data);
+                if (state >= 0 && state < CHUTE_STATES) states |= 1u << state;
+                if (state == CHUTE_STOWED || state == CHUTE_ARMED) {
+                    const int safe = pb::dec_sint32(c_.stream(chutes_.id(key + ".safe")).data);
+                    if (safe >= 0 && safe <= 2) worst = std::max(worst, safe);  // 3 = none (not a stock chute)
+                }
+            }, [&] { chute_ids_.clear(), chutes_.clear(); });  // re-read with the next poll
+        }
+        k.chute_states = states;
+        if (worst >= 0) k.chute_safety = worst;
+        return k;
+    }
+
+private:
+    int count(const char* list) {
+        int n = -1;
+        optional_step([&] { n = int(pb::dec_items(c_.invoke(sc(std::string("Parts_get_") + list, {obj(parts_)})).data).size()); },
+                      [] {});
+        return n;
+    }
+
+    void poll() {
+        // Which switches the vessel can use: 0 parts = not fitted (grey), a failing call = unknown.
+        auto fitted = [&](CockpitSwitch s, std::initializer_list<const char*> lists) {
+            int total = 0;
+            for (const char* l : lists) {
+                const int n = count(l);
+                if (n < 0) return;
+                total += n;
+            }
+            slow_.at(s).fitted = total > 0;
+        };
+        fitted(CockpitSwitch::ReactionWheels, {"ReactionWheels"});
+        fitted(CockpitSwitch::Gear, {"Legs", "Wheels"});
+        fitted(CockpitSwitch::Lights, {"Lights"});
+        fitted(CockpitSwitch::SolarPanels, {"SolarPanels"});
+        fitted(CockpitSwitch::Antennas, {"Antennas"});
+        fitted(CockpitSwitch::Radiators, {"Radiators"});
+        fitted(CockpitSwitch::CargoBays, {"CargoBays"});
+        fitted(CockpitSwitch::Intakes, {"Intakes"});
+        // Parachutes: one State and SafeState stream per chute, re-created when the set of chutes changes.
+        optional_step([&] {
+            std::vector<uint64_t> ids;
+            for (const auto& item : pb::dec_items(c_.invoke(sc("Parts_get_Parachutes", {obj(parts_)})).data))
+                if (ids.size() < MAX_CHUTES) ids.push_back(pb::dec_object(item));
+            slow_.chutes = int(ids.size());
+            if (ids != chute_ids_) {
+                chutes_.clear();
+                chute_ids_.clear();
+                for (const uint64_t id : ids) {
+                    const std::string key = std::to_string(id);
+                    chutes_.add(key + ".state", sc("Parachute_get_State", {obj(id)}), rate_);
+                    chutes_.add(key + ".safe", sc("Parachute_get_SafeState", {obj(id)}), rate_);
+                }
+                chute_ids_ = ids;
+            }
+        }, [&] { slow_.chutes.reset(), chutes_.clear(), chute_ids_.clear(); });
+        // The next stage: parts whose activation stage is the current stage - 1, read again only when the current
+        // stage or the part count changes (staging, docking, decoupling).
+        optional_step([&] {
+            const int current = pb::dec_sint32(c_.invoke(sc("Control_get_CurrentStage", {obj(control_)})).data);
+            const auto all = pb::dec_items(c_.invoke(sc("Parts_get_All", {obj(parts_)})).data);
+            const auto key = std::make_pair(current, all.size());
+            if (slow_.next_known && key == next_key_) return;
+            std::vector<std::pair<std::string, int>> next;
+            for (const auto& item : all) {
+                const uint64_t part = pb::dec_object(item);
+                if (pb::dec_sint32(c_.invoke(sc("Part_get_Stage", {obj(part)})).data) != current - 1) continue;
+                const std::string title = get_string(c_, sc("Part_get_Title", {obj(part)}));
+                auto it = std::find_if(next.begin(), next.end(), [&](const auto& p) { return p.first == title; });
+                if (it == next.end()) next.emplace_back(title, 1);
+                else ++it->second;
+            }
+            slow_.next_stage = std::move(next);
+            slow_.next_known = true;
+            next_key_ = key;
+        }, [&] { slow_.next_known = false, slow_.next_stage.clear(); });
+    }
+
+    Client& c_;
+    uint64_t control_ = 0, parts_ = 0;
+    double rate_;
+    Group controls_, chutes_;
+    std::vector<uint64_t> chute_ids_;
+    Cockpit slow_;
+    std::pair<int, size_t> next_key_{-1, 0};
+    double next_poll_ = -1e9;
+};
+
 // ------------------------------------------------------------------------------------------- maneuver orbit
 /// The orbit after the first maneuver node (Node.orbit) as state vectors at the node's UT, read with
 /// Orbit.position_at / velocity_at in the body's non-rotating frame, the frame of the current orbit. Only the node
@@ -768,6 +908,27 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
         case Command::Quickload:
             c.invoke(sc("Quickload"));
             return name;
+        case Command::ToggleControl:
+            if (cmd.value < 0 || cmd.value >= CONTROL_PROPERTY_COUNT) return name + " unknown";
+            return toggle(c, control(), CONTROL_PROPERTIES[cmd.value]);
+        case Command::SpeedMode:
+            c.invoke(sc("Control_set_SpeedMode", {obj(control()), pb::enc_sint32(cmd.value)}));
+            return name;
+        case Command::DeployChutes:  // KSP's own "deploy all parachutes"; kRPC cannot set it back to false
+            c.invoke(sc("Control_set_Parachutes", {obj(control()), pb::enc_bool(true)}));
+            return name;
+        case Command::CutChutes: {
+            const uint64_t parts = object(c, sc("Vessel_get_Parts", {obj(vessel)}));
+            int n = 0;
+            for (const auto& item : pb::dec_items(c.invoke(sc("Parts_get_Parachutes", {obj(parts)})).data)) {
+                const uint64_t chute = pb::dec_object(item);
+                const int state = get_int(c, sc("Parachute_get_State", {obj(chute)}));
+                if (state != CHUTE_SEMI_DEPLOYED && state != CHUTE_DEPLOYED) continue;  // only open ones can be cut
+                c.invoke(sc("Parachute_Cut", {obj(chute)}));
+                ++n;
+            }
+            return fmt::str("%d parachute%s cut", n, n == 1 ? "" : "s");
+        }
         case Command::ToggleMap: {  // kRPC: Map enters the map view, any other mode only leaves it
             const uint64_t camera = object(c, sc("get_Camera"));
             const bool map = get_int(c, sc("Camera_get_Mode", {obj(camera)})) == CAMERA_MAP;
@@ -944,6 +1105,10 @@ void KrpcSource::hold(const Held& h) {
         held_ = h;
     }
     wake();
+}
+
+void KrpcSource::set_cockpit(bool shown) {
+    if (cockpit_.exchange(shown) != shown) wake();
 }
 
 void KrpcSource::send_inputs(Client& conn, uint64_t vessel, const std::string& scene) {
@@ -1149,6 +1314,8 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     } catch (const RpcError& e) {
         log::warning(LOG, "resources/staging unavailable: " + short_error(e));
     }
+    std::unique_ptr<CockpitStreams> cockpit;  // only while the cockpit panel scene is shown
+    double cockpit_retry = 0;
     log::info(LOG, "following " + name + " around " + body_name);
     vessel_view_.reset();
     auto d = [&](const std::string& key) { return pb::dec_double(c.stream(streams.id(key)).data); };
@@ -1197,6 +1364,21 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
                 },
                 [] {});
         s.vessel_view = vessel_view_.poll(c, monotonic());  // its own errors only clear the VESSEL panel
+        if (cockpit_.load()) {
+            const double now = monotonic();
+            if (!cockpit && now >= cockpit_retry) {
+                try {
+                    cockpit = std::make_unique<CockpitStreams>(c, vessel, rate);
+                } catch (const RpcError& e) {
+                    log::warning(LOG, "cockpit panel data unavailable: " + short_error(e));
+                    cockpit_retry = now + 5;
+                }
+            }
+            if (cockpit)  // a failure blanks the panel's states for a moment, never the session
+                optional_step([&] { s.cockpit = cockpit->sample(now); }, [&] { cockpit.reset(), cockpit_retry = now + 2; });
+        } else {
+            cockpit.reset();
+        }
         s.received = monotonic();
         publish(std::move(s));
         wait(period_);
@@ -1307,6 +1489,24 @@ Snapshot DemoSource::sample(double ut) const {
                      {"MonoPropellant", 24, 30}};
     sys.stages = {{2, 7, 1430}, {1, 4, 820}, {0, 2, 0}};
     s.systems = sys;
+    Cockpit panel;  // the demo vessel: a probe with solar panels, an antenna, lights and three parachutes, no gear
+    auto set = [&](CockpitSwitch w, bool on, bool fitted) { panel.at(w) = SwitchState{on, fitted}; };
+    set(CockpitSwitch::ReactionWheels, true, true);
+    set(CockpitSwitch::Gear, false, false);
+    set(CockpitSwitch::Lights, true, true);
+    set(CockpitSwitch::Brakes, false, true);
+    set(CockpitSwitch::SolarPanels, true, true);
+    set(CockpitSwitch::Antennas, true, true);
+    set(CockpitSwitch::Radiators, false, false);
+    set(CockpitSwitch::CargoBays, false, false);
+    set(CockpitSwitch::Intakes, false, false);
+    for (int n = 0; n < 10; ++n) panel.groups[size_t(n)] = n < 2;
+    panel.abort = false, panel.stage_lock = false;
+    panel.chutes = 3, panel.chute_states = 1u << CHUTE_STOWED, panel.chute_safety = 2;  // unsafe at orbital speed
+    panel.next_stage = {{"LV-909 \"Terrier\" Liquid Fuel Engine", 1}, {"TD-12 Decoupler", 1}};
+    panel.next_known = true;
+    panel.warp_rate = 1;
+    s.cockpit = panel;
     s.orbit_state = OrbitState{position, velocity, mu, Axes{{1, 0, 0}, {0, 0, 1}}};
     s.maneuver_orbit = demo_maneuver(a, e, mu);
     s.received = monotonic();

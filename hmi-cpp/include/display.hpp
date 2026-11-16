@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "canvas.hpp"
+#include "cockpitinput.hpp"
 #include "config.hpp"
 #include "model.hpp"
 #include "navball.hpp"
@@ -79,6 +80,21 @@ public:
     /// What the VESSEL panel shows; Ctrl+0 switches.
     bool vessel_heat() const { return vessel_heat_; }
     void set_vessel_heat(bool heat) { vessel_heat_ = heat; }
+
+    /// The flight scene: the instruments or the cockpit panel (Ctrl+"+" / Ctrl+"-", or a click on its tab).
+    FlightScene flight_scene() const { return flight_scene_; }
+    void set_flight_scene(FlightScene s) { flight_scene_ = s; }
+    /// True when `s` is drawn as the cockpit panel (in flight with that scene chosen).
+    bool cockpit_scene(const Snapshot& s) const { return s.state == State::Flight && flight_scene_ == FlightScene::Cockpit; }
+    /// The click state the panel shows (armed, open guards, feedback); owned by the caller, may be null.
+    void set_cockpit_input(const CockpitInput* input) { cockpit_input_ = input; }
+    const CockpitInput* cockpit_input() const { return cockpit_input_; }
+    /// Whether the last draw() showed the cockpit panel: only then do clicks hit its controls.
+    bool cockpit_shown() const { return cockpit_shown_; }
+    /// The panel control under canvas pixel (x, y) of the last frame, if the panel was shown.
+    std::optional<Ctl> cockpit_hit(int x, int y) const;
+    /// Classic skin's cockpit panel (header, then the shared composition with the Classic materials).
+    void cockpit(const Snapshot& s, double now);
 
     Canvas& canvas() { return c_; }
     Navball& navball() { return navball_; }
@@ -197,6 +213,9 @@ private:
     Config cfg_;
     std::string config_skin_, skin_, chosen_skin_;
     bool vessel_heat_ = false;
+    FlightScene flight_scene_ = FlightScene::Instruments;
+    const CockpitInput* cockpit_input_ = nullptr;
+    bool cockpit_shown_ = false;
     std::unique_ptr<OrbitArt> orbit_art_;
     std::unique_ptr<OrbitArt> target_art_;  ///< the target body's own cached material
     std::unique_ptr<ApolloSkin> apollo_;

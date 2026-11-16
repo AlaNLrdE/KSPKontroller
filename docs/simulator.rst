@@ -135,6 +135,13 @@ orbit is planar. The rule for what points the vessel and its engine:
 SAS, RCS, lights, gear, brakes, abort and the custom action groups go into ``ActionGroups`` from the game state
 (above), which is what the board's LEDs show.
 
+For the HMI's cockpit panel the kRPC server also answers the ``Control`` properties without a board bit (reaction
+wheels, solar panels, antennas, radiators, cargo bays, intakes, stage lock: ``Simulator.panel``), which systems
+are fitted (``Parts`` lists from ``Simulator.fitted``: reaction wheels, solar panels, antennas and lights by
+default), two parachutes (``Simulator.chutes``, kRPC ``ParachuteState``; ``SafeState`` safe below 250 m/s, risky
+below 500 m/s in the atmosphere, unsafe above 70 km), ``Control.Parachutes``, ``Get/SetActionGroup``,
+``set_SpeedMode``, ``Part.Stage`` / ``Part.Title`` for the next stage and ``SpaceCenter.WarpRate``.
+
 Not modelled: other bodies and sphere of influence changes, torque from RCS or reaction wheels (one fixed
 rotation rate), real targets (``target_*`` values only), electric charge use beyond a slow drain. A maneuver node has a fixed UT (it
 counts down) and prograde / normal / radial-out delta-v; its ``Node.orbit`` is the reported state coasted to
