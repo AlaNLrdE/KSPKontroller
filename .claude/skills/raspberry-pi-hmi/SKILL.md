@@ -295,3 +295,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   compare each hull's extents with `part.bounding_box(root.reference_frame)`. Plume FX meshes (Waterfall) sit
   under the part model, stay enabled at zero throttle and stretched outlines tens of metres (fixed 0.19.7.1 by
   skipping effect shaders); kRPC's own bounding boxes include them too, so they are not ground truth.
+  0.19.7.2 (user: "se ve perfecto", 2026-11-16) also skips LaunchClamp parts, turns the view to the root's
+  forward axis when wider, and skips meshes far outside their part's colliders: struts and fuel lines are
+  skipped that way by design (`vessel view: skipped mesh` in KSP.log names each one with its shader).
+  Render a dumped shape with a stdlib PNG rasterizer to look at it before asking the user.
