@@ -159,6 +159,40 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(self.journal.messages, [])
         self.assertEqual(request(self.config, '/health')['last_seq'], 2)
 
+    def test_transient_dns_failure_is_retried_without_model_intervention(self):
+        from unittest.mock import patch
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        calls = []
+        def open_url(req, **kwargs):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise urllib.error.URLError(socket.gaierror('temporary mDNS failure'))
+            return opener.open(req, **kwargs)
+        from types import SimpleNamespace
+        fake = SimpleNamespace(open=open_url)
+        with patch('agent_mailbox.urllib.request.build_opener', return_value=fake), \
+                patch('agent_mailbox.time.sleep'):
+            self.assertTrue(request(self.config, '/health')['ok'])
+        self.assertEqual(len(calls), 2)
+
+    def test_lost_send_reply_is_retried_without_duplicate_message(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        calls = []
+        def open_url(req, **kwargs):
+            calls.append(req.full_url)
+            response = opener.open(req, **kwargs)
+            if len(calls) == 1:
+                response.close()  # server already stored the message, but the client lost its response
+                raise urllib.error.URLError('reply lost')
+            return response
+        with patch('agent_mailbox.urllib.request.build_opener', return_value=SimpleNamespace(open=open_url)), \
+                patch('agent_mailbox.time.sleep'):
+            item = self.send()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.journal.messages, [item])
+
     def test_named_server_is_resolved_again_for_each_request(self):
         from unittest.mock import patch
         other_journal = Journal(self.root / 'other.jsonl')

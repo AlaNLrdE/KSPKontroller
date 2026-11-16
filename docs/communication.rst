@@ -205,7 +205,10 @@ Use a stable LAN hostname in each mailbox URL, not a DHCP address. On the LAN ho
 changes. The default loopback binding is for local tests. Each new HTTP request resolves its
 hostname again; a running watcher also reloads its private config before each retry, so a
 URL/token update does not require restarting that watcher. Keep the peer identity unchanged.
-A temporary resolver outage is retried by watch; one-shot sends still fail visibly and can be
+HTTP operations retry transient transport/DNS failures up to three times, resolving the name
+again on each attempt. Mutation IDs and archive digests make retries safe even when the server
+committed a message but its reply was lost. Authentication/client errors fail immediately.
+After bounded retries, watch keeps reconnecting; one-shot commands fail visibly and can be
 retried with the same message ID. Hosts must advertise/resolve their names on the actual LAN.
 Using a hostname alone does not install a Windows mDNS responder or configure a router.
 

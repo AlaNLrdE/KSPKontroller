@@ -5,6 +5,7 @@ import base64
 import hashlib
 from datetime import datetime, timezone
 import hmac
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -241,15 +242,30 @@ def make_server(host, port, journal, token, artifact_dir=None):
     return Server((host, port), Handler)
 
 
+def request_bytes(config, route, payload=None):
+    """Re-resolve on bounded transport retries; IDs/digests make mutation retries safe."""
+    for attempt in range(3):
+        req = urllib.request.Request(config['url'].rstrip('/') + route, data=payload,
+                                     headers={'Authorization': 'Bearer ' + config['token'],
+                                              'Content-Type': 'application/json'})
+        # No environment proxy or persistent connection: resolve the LAN hostname on each attempt.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(req, timeout=35) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code < 500 or attempt == 2:
+                raise
+            error.close()
+        except (OSError, http.client.IncompleteRead):
+            if attempt == 2:
+                raise
+        time.sleep(.5 * (attempt + 1))
+
+
 def request(config, route, data=None):
     payload = None if data is None else json.dumps(data).encode()
-    req = urllib.request.Request(config['url'].rstrip('/') + route, data=payload,
-                                 headers={'Authorization': 'Bearer ' + config['token'],
-                                          'Content-Type': 'application/json'})
-    # LAN endpoints must not be redirected through an environment-configured HTTP proxy.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(req, timeout=35) as response:
-        return json.load(response)
+    return json.loads(request_bytes(config, route, payload))
 
 
 def receive(config, cursor_path, once=False, continuous=False, config_path=None):
@@ -420,11 +436,7 @@ def main(argv=None):
                                            'to': args.to, 'text': body})
         print('Stored message #{seq} ({id}); receipt is not an acknowledgement from the other agent'.format(**item))
     elif args.command == 'fetch':
-        req = urllib.request.Request(config['url'].rstrip('/') + '/artifact?' + urllib.parse.urlencode({'name': args.name}),
-                                     headers={'Authorization': 'Bearer ' + config['token']})
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(req, timeout=35) as response:
-            payload = response.read()
+        payload = request_bytes(config, '/artifact?' + urllib.parse.urlencode({'name': args.name}))
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_bytes(payload)
         print('Saved evidence to ' + str(args.out))
