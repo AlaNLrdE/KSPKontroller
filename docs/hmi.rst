@@ -407,7 +407,11 @@ NavBall-only frames (full frames when the cache is off).
 ``--desktop``: ``[display] monitor`` (``auto`` by default, or a display index; ``--monitor``) picks the SDL
 display, and ``auto`` takes the last one when several are connected, so KSP1 or KSP2 keeps the primary
 monitor (display 0). ``--desktop`` always opens a plain window there: WSLg (2026-11-15, secondary
-monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows. WSL uses NAT networking here, so ``127.0.0.1`` is WSL itself: without ``--address`` or ``--demo``,
+monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows. WSLg reports
+that monitor in physical pixels while Windows places windows in logical units, so the window is anchored at
+the display origin and ``./ci hmi`` on Windows passes the monitor's logical work area minus the title bar
+(``HMI_TITLE_BAR``, 32) as ``--size``. A new WSLg window may open behind the active Windows window: click
+its taskbar icon. WSL uses NAT networking here, so ``127.0.0.1`` is WSL itself: without ``--address`` or ``--demo``,
 ``./ci hmi`` targets the Windows host (the default route's gateway) and exports it as
 ``KSPHMI_REDUX_ADDRESS`` for the KSP2 Redux backend. kRPC listens on ``0.0.0.0`` (50000/50001, context
 UDP 50002) and the Redux endpoint binds UDP 50003 on all interfaces; Windows Firewall must allow inbound
