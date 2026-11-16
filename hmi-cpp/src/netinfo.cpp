@@ -1,62 +1,97 @@
 #include "netinfo.hpp"
 
-#include <arpa/inet.h>
+#include "net.hpp"
+
+#if defined(_WIN32)
+#include <iphlpapi.h>
+#else
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/time.h>
+#endif
 
-#include <cstring>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
 
-#include "net.hpp"
-
 namespace ksphmi {
-
-namespace net {
-
-std::optional<sockaddr_in> resolve_ipv4(const std::string& host, int port) {
-    addrinfo hints{};
-    hints.ai_family = AF_INET;
-    addrinfo* res = nullptr;
-    if (host.empty() || getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return std::nullopt;
-    sockaddr_in out{};
-    std::memcpy(&out, res->ai_addr, sizeof out);
-    freeaddrinfo(res);
-    out.sin_port = htons(static_cast<uint16_t>(port));
-    return out;
-}
-
-std::string to_string(const in_addr& a) {
-    char buf[INET_ADDRSTRLEN];
-    return inet_ntop(AF_INET, &a, buf, sizeof buf) ? buf : "";
-}
-
-void set_timeout(int fd, double seconds) {
-    timeval tv{};
-    tv.tv_sec = static_cast<time_t>(seconds);
-    tv.tv_usec = static_cast<suseconds_t>((seconds - static_cast<double>(tv.tv_sec)) * 1e6);
-    if (tv.tv_sec == 0 && tv.tv_usec == 0) tv.tv_usec = 1000;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
-}
-
-}  // namespace net
 
 std::string route_address(const std::string& target) {
     auto addr = net::resolve_ipv4(target, 9);
     if (!addr) return "";
-    net::Fd s(socket(AF_INET, SOCK_DGRAM, 0));
+    net::Fd s(net::open_socket(SOCK_DGRAM));
     if (!s || connect(s.get(), reinterpret_cast<const sockaddr*>(&*addr), sizeof *addr) != 0) return "";
     sockaddr_in local{};
     socklen_t len = sizeof local;
     if (getsockname(s.get(), reinterpret_cast<sockaddr*>(&local), &len) != 0) return "";
     return net::to_string(local.sin_addr);
 }
+
+#if defined(_WIN32)
+
+namespace {
+// One network adapter as the waiting and boot screens need it (Windows: GetAdaptersAddresses).
+struct Adapter {
+    std::string name;
+    bool up = false;
+    std::vector<std::string> addresses;  // IPv4, loopback excluded
+};
+
+std::string utf8(const wchar_t* w) {
+    if (!w || !*w) return "";
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 1) return "";
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], n, nullptr, nullptr);
+    out.resize(static_cast<size_t>(n - 1));
+    return out;
+}
+
+std::vector<Adapter> adapters() {
+    std::vector<Adapter> found;
+    ULONG size = 16 * 1024;
+    std::vector<unsigned char> buf;
+    ULONG r = ERROR_BUFFER_OVERFLOW;
+    for (int tries = 0; tries < 3 && r == ERROR_BUFFER_OVERFLOW; ++tries) {
+        buf.resize(size);
+        r = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                 nullptr, reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data()), &size);
+    }
+    if (r != NO_ERROR) return found;
+    for (auto* a = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buf.data()); a; a = a->Next) {
+        if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        Adapter one;
+        one.name = utf8(a->FriendlyName);
+        one.up = a->OperStatus == IfOperStatusUp;
+        for (auto* u = a->FirstUnicastAddress; u; u = u->Next) {
+            if (!u->Address.lpSockaddr || u->Address.lpSockaddr->sa_family != AF_INET) continue;
+            std::string s = net::to_string(reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr)->sin_addr);
+            if (!s.empty() && s.rfind("127.", 0) != 0) one.addresses.push_back(s);
+        }
+        found.push_back(std::move(one));
+    }
+    return found;
+}
+}  // namespace
+
+std::vector<std::string> all_addresses() {
+    std::vector<std::string> found;
+    for (const auto& a : adapters())
+        if (a.up) found.insert(found.end(), a.addresses.begin(), a.addresses.end());
+    return found;
+}
+
+NetInterface primary_interface() {
+    NetInterface up;
+    for (const auto& a : adapters()) {
+        if (!a.up) continue;
+        if (!a.addresses.empty()) return {a.name, a.addresses.front()};
+        if (up.name.empty()) up.name = a.name;
+    }
+    return up;
+}
+
+#else
 
 std::vector<std::string> all_addresses() {
     std::vector<std::string> found;
@@ -89,6 +124,8 @@ NetInterface primary_interface() {
     return found.name.empty() ? up : found;
 }
 
+#endif
+
 namespace {
 std::string network_line(const std::string& server, const std::string& hostname) {
     std::string primary = route_address(server);
@@ -115,9 +152,7 @@ struct NetInfo::State {
 };
 
 NetInfo::NetInfo(std::string server, double every, Query query) : state_(std::make_shared<State>()) {
-    char name[256] = {0};
-    gethostname(name, sizeof name - 1);
-    const std::string hostname = name;
+    const std::string hostname = net::host_name();
     state_->text = "This display: looking up network address (" + hostname + ")";
     if (!query) query = [hostname](const std::string& target) { return network_line(target, hostname); };
     // A system DNS call cannot be cancelled portably. The worker owns only shared state, so destruction

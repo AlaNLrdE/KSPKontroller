@@ -1,8 +1,5 @@
 // Find KSPSerialIO on the local IPv4 LAN with its existing scene responder (port of discovery.py).
-#include <arpa/inet.h>
-#include <poll.h>
-#include <sys/socket.h>
-
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -67,10 +64,10 @@ bool is_local(const std::string& address) {
 }
 
 std::string discover(int port, double timeout, const std::vector<std::string>& targets) {
-    net::Fd sock(socket(AF_INET, SOCK_DGRAM, 0));
+    net::Fd sock(net::open_socket(SOCK_DGRAM));
     if (!sock) return "";
     int yes = 1;
-    setsockopt(sock.get(), SOL_SOCKET, SO_BROADCAST, &yes, sizeof yes);
+    setsockopt(sock.get(), SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&yes), sizeof yes);
     static const char request[] = "KSPHMI/1";
     for (const auto& target : targets) {
         auto addr = net::resolve_ipv4(target, port);
@@ -82,12 +79,11 @@ std::string discover(int port, double timeout, const std::vector<std::string>& t
     for (;;) {
         double left = deadline - monotonic();
         if (left <= 0) return "";
-        pollfd p{sock.get(), POLLIN, 0};
-        if (poll(&p, 1, std::max(1, static_cast<int>(left * 1000))) <= 0) continue;
+        if (net::wait(sock.get(), false, std::max(1, static_cast<int>(left * 1000))) <= 0) continue;
         char buf[256];
         sockaddr_in peer{};
         socklen_t len = sizeof peer;
-        ssize_t n = recvfrom(sock.get(), buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&peer), &len);
+        long n = recvfrom(sock.get(), buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&peer), &len);
         if (n < 0) return "";
         std::string data(buf, static_cast<size_t>(n));
         std::string host = net::to_string(peer.sin_addr);

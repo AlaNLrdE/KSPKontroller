@@ -1,10 +1,14 @@
 #include "bootstate.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -91,6 +95,44 @@ BootInputs boot_demo_inputs(const std::string& stage, int width, int height) {
     return in;
 }
 
+#if defined(_WIN32)
+
+// The boot splash is the Pi's (ksphmi-splash.service, /dev/fb0): on Windows the probes only keep the HMI's
+// ready-file hand-over harmless (written to %TEMP%) and report a system without systemd or a splash to wait for.
+double boot_seconds() { return static_cast<double>(GetTickCount64()) / 1000.0; }
+
+std::string ready_file_path() {
+    const char* dir = std::getenv("XDG_RUNTIME_DIR");
+    if (dir && *dir) return std::string(dir) + "/ksphmi.ready";
+    char temp[MAX_PATH + 1] = {0};
+    DWORD n = GetTempPathA(sizeof temp, temp);
+    std::string base = n > 0 && n < sizeof temp ? std::string(temp, n) : std::string(".\\");
+    return base + "ksphmi.ready";
+}
+
+void remove_ready_file() { std::remove(ready_file_path().c_str()); }
+
+bool write_ready_file() {
+    std::ofstream f(ready_file_path(), std::ios::trunc);
+    if (!f) return false;
+    f << GetCurrentProcessId() << "\n";
+    return static_cast<bool>(f);
+}
+
+bool file_exists(const std::string& path) { return GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES; }
+
+bool unit_active(const std::string&) { return false; }
+
+bool hmi_process_running() { return false; }
+
+std::string host_name() {
+    char name[MAX_COMPUTERNAME_LENGTH + 1] = {0};
+    DWORD size = sizeof name;
+    return GetComputerNameA(name, &size) ? std::string(name, size) : std::string();
+}
+
+#else
+
 double boot_seconds() {
     timespec t{};
 #ifdef CLOCK_BOOTTIME
@@ -162,5 +204,7 @@ std::string host_name() {
     if (gethostname(name, sizeof name - 1) != 0) return "";
     return name;
 }
+
+#endif
 
 }  // namespace ksphmi

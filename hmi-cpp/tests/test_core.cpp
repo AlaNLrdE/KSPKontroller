@@ -1,9 +1,8 @@
 // Pure-logic tests (formatting, attitude, orbit geometry, resources, scenes,
 // discovery, config, kRPC client, reconnect). No display, no game.
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 #include <atomic>
 #include <cstdlib>
@@ -25,6 +24,7 @@
 #include "log.hpp"
 #include "model.hpp"
 #include "navmath.hpp"
+#include "net.hpp"
 #include "netinfo.hpp"
 #include "pb.hpp"
 #include "scenes.hpp"
@@ -347,7 +347,7 @@ TEST(discovery_accepts_only_local_peers) {
 }
 
 TEST(discovery_uses_scene_protocol_and_ignores_unrelated_replies) {
-    int server = socket(AF_INET, SOCK_DGRAM, 0);
+    net::socket_t server = net::open_socket(SOCK_DGRAM);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -360,7 +360,7 @@ TEST(discovery_uses_scene_protocol_and_ignores_unrelated_replies) {
         char buf[256];
         sockaddr_in peer{};
         socklen_t plen = sizeof peer;
-        ssize_t n = recvfrom(server, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&peer), &plen);
+        long n = recvfrom(server, buf, sizeof buf, 0, reinterpret_cast<sockaddr*>(&peer), &plen);
         if (n > 0) request.assign(buf, static_cast<size_t>(n));
         for (const char* reply : {"unrelated packet", "KSPHMI/1 mainmenu"})
             sendto(server, reply, std::strlen(reply), 0, reinterpret_cast<sockaddr*>(&peer), plen);
@@ -369,7 +369,7 @@ TEST(discovery_uses_scene_protocol_and_ignores_unrelated_replies) {
     responder.join();
     CHECK_EQ(request, "KSPHMI/1");
     CHECK_EQ(discover(port, 0.02, {"127.0.0.1"}), "");
-    close(server);
+    net::close_socket(server);
 }
 
 TEST(read_context_is_bounded_without_a_server) {
@@ -383,9 +383,7 @@ TEST(netinfo_line_names_this_machine) {
     NetInfo info("127.0.0.1");
     std::string line = info.line();
     CHECK(line.rfind("This display: ", 0) == 0);
-    char hostname[256] = {0};
-    gethostname(hostname, sizeof hostname - 1);
-    CHECK(line.find(hostname) != std::string::npos);
+    CHECK(line.find(net::host_name()) != std::string::npos);
     CHECK_EQ(route_address("127.0.0.1"), "127.0.0.1");
     CHECK_EQ(route_address("not a host name"), "");
     double end = monotonic() + 2;
@@ -453,19 +451,19 @@ TEST(netinfo_slow_query_does_not_block_cached_reads_or_destruction) {
 
 // ------------------------------------------------------------------------------------------- config
 TEST(config_layers_and_environment) {
-    char dir[] = "/tmp/ksphmi-test-XXXXXX";
-    CHECK(mkdtemp(dir) != nullptr);
-    std::string app = std::string(dir), local = app + "/local.toml";
+    const std::string dir = check::make_temp_dir("ksphmi-test");
+    CHECK(!dir.empty());
+    std::string app = dir, local = app + "/local.toml";
     std::ofstream(app + "/config.toml") << "source = \"krpc\"  # comment\n[krpc]\naddress = 'pc'\nrate_hz = 10\n"
                                            "[display]\nfps = 10\nfullscreen = true\n[format]\nday_hours = 6\n";
     std::ofstream(local) << "[display]\nfps = 5\n";
-    setenv("KSPHMI_APP_DIR", app.c_str(), 1);
-    setenv("KSPHMI_LOCAL_CONFIG", local.c_str(), 1);
-    setenv("KSPHMI_KRPC_ADDRESS", "10.0.0.9", 1);
+    check::set_env("KSPHMI_APP_DIR", app);
+    check::set_env("KSPHMI_LOCAL_CONFIG", local);
+    check::set_env("KSPHMI_KRPC_ADDRESS", "10.0.0.9");
     Config cfg = load_config();
-    unsetenv("KSPHMI_APP_DIR");
-    unsetenv("KSPHMI_LOCAL_CONFIG");
-    unsetenv("KSPHMI_KRPC_ADDRESS");
+    check::unset_env("KSPHMI_APP_DIR");
+    check::unset_env("KSPHMI_LOCAL_CONFIG");
+    check::unset_env("KSPHMI_KRPC_ADDRESS");
     CHECK_EQ(cfg.display.fps, 5);
     CHECK(cfg.display.fullscreen);  // untouched keys keep config.toml / defaults
     CHECK_EQ(cfg.krpc.address, "10.0.0.9");
@@ -476,7 +474,7 @@ TEST(config_layers_and_environment) {
     CHECK_EQ(only.krpc.address, "localhost");
     std::remove((app + "/config.toml").c_str());
     std::remove(local.c_str());
-    rmdir(dir);
+    check::remove_dir(dir);
 }
 
 TEST(config_integer_fields_reject_invalid_conversions) {
@@ -503,9 +501,9 @@ TEST(config_integer_fields_reject_invalid_conversions) {
     Config cfg;
     apply_toml(cfg, parse_toml("[display]\nfps = 60.0"));
     CHECK_EQ(cfg.display.fps, 60);
-    char dir[] = "/tmp/ksphmi-int-XXXXXX";
-    CHECK(mkdtemp(dir) != nullptr);
-    const std::string path = std::string(dir) + "/invalid.toml";
+    const std::string dir = check::make_temp_dir("ksphmi-int");
+    CHECK(!dir.empty());
+    const std::string path = dir + "/invalid.toml";
     std::ofstream(path) << "[display]\nfps = 1e100\n";
     bool descriptive = false;
     try {
@@ -515,7 +513,7 @@ TEST(config_integer_fields_reject_invalid_conversions) {
     }
     CHECK(descriptive);
     std::remove(path.c_str());
-    rmdir(dir);
+    check::remove_dir(dir);
 }
 
 TEST(config_monitor_picks_the_secondary_display) {
@@ -559,9 +557,9 @@ TEST(config_day_hours_requires_a_positive_representable_integer) {
         CHECK_EQ(fmt::duration(static_cast<double>(hours) * 3600, hours), "1d 0h");
         CHECK_EQ(fmt::clock(static_cast<double>(hours) * 3600, hours), "Y1 D002 00:00:00");
     }
-    char dir[] = "/tmp/ksphmi-config-XXXXXX";
-    CHECK(mkdtemp(dir) != nullptr);
-    const std::string path = std::string(dir) + "/invalid.toml";
+    const std::string dir = check::make_temp_dir("ksphmi-config");
+    CHECK(!dir.empty());
+    const std::string path = dir + "/invalid.toml";
     std::ofstream(path) << "[format]\nday_hours = 0\n";
     bool descriptive = false;
     try {
@@ -571,7 +569,7 @@ TEST(config_day_hours_requires_a_positive_representable_integer) {
     }
     CHECK(descriptive);
     std::remove(path.c_str());
-    rmdir(dir);
+    check::remove_dir(dir);
 }
 
 TEST(toml_subset_and_errors) {
@@ -713,7 +711,7 @@ namespace {
 // Accepts connections and never answers: like kRPC with maxTimePerUpdate = 0.
 struct SilentServer {
     SilentServer() {
-        fd = socket(AF_INET, SOCK_STREAM, 0);
+        fd = net::open_socket(SOCK_STREAM);
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -723,8 +721,9 @@ struct SilentServer {
         getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len);
         port = ntohs(a.sin_port);
     }
-    ~SilentServer() { close(fd); }
-    int fd, port;
+    ~SilentServer() { net::close_socket(fd); }
+    net::socket_t fd;
+    int port;
 };
 }  // namespace
 
@@ -1173,20 +1172,25 @@ TEST(boot_view_gives_up_on_network_and_hmi_without_blocking) {
 TEST(ready_file_follows_xdg_runtime_dir) {
     const char* old = std::getenv("XDG_RUNTIME_DIR");
     const std::string saved = old ? old : "";
-    unsetenv("XDG_RUNTIME_DIR");
+    check::unset_env("XDG_RUNTIME_DIR");
+#if defined(_WIN32)
+    const std::string fallback = ready_file_path();  // %TEMP%\ksphmi.ready: no systemd runtime directory
+    CHECK(fallback.size() > 13 && fallback.compare(fallback.size() - 13, 13, "\\ksphmi.ready") == 0);
+#else
     CHECK_EQ(ready_file_path(), "/run/user/" + std::to_string(getuid()) + "/ksphmi.ready");
-    char dir[] = "/tmp/ksphmi-ready-XXXXXX";
-    CHECK(mkdtemp(dir) != nullptr);
-    setenv("XDG_RUNTIME_DIR", dir, 1);
-    CHECK_EQ(ready_file_path(), std::string(dir) + "/ksphmi.ready");
+#endif
+    const std::string dir = check::make_temp_dir("ksphmi-ready");
+    CHECK(!dir.empty());
+    check::set_env("XDG_RUNTIME_DIR", dir);
+    CHECK_EQ(ready_file_path(), dir + "/ksphmi.ready");
     CHECK(!file_exists(ready_file_path()));
     CHECK(write_ready_file());
     CHECK(file_exists(ready_file_path()));
     remove_ready_file();
     CHECK(!file_exists(ready_file_path()));
-    rmdir(dir);
-    if (old) setenv("XDG_RUNTIME_DIR", saved.c_str(), 1);
-    else unsetenv("XDG_RUNTIME_DIR");
+    check::remove_dir(dir);
+    if (old) check::set_env("XDG_RUNTIME_DIR", saved);
+    else check::unset_env("XDG_RUNTIME_DIR");
 }
 
 TEST(boot_probes_answer_without_systemd) {

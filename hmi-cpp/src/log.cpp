@@ -22,7 +22,11 @@ void write(Level level, const char* name, const std::string& text) {
     std::time_t t = system_clock::to_time_t(now);
     int ms = static_cast<int>(duration_cast<milliseconds>(now.time_since_epoch()).count() % 1000);
     std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);  // the CRT's thread-safe form, arguments swapped
+#else
     localtime_r(&t, &tm);
+#endif
     char stamp[32];
     std::strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &tm);
     static const char* names[] = {"DEBUG", "INFO", "WARNING", "ERROR"};

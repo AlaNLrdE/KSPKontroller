@@ -1,6 +1,9 @@
 // Entry point: ksphmi [--demo] [--windowed] [--address HOST] [--screenshot FILE] [--bench N] ...
 // Settings: config.toml + config.local.toml + KSPHMI_* environment (config.hpp); see --help.
 #include <SDL.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #include <cmath>
 #include <csignal>
@@ -51,8 +54,8 @@ void usage(FILE* out) {
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
                  "  --skin NAME        classic or apollo (overrides [display] skin)\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
-                 "  --desktop          on the PC that runs the game: a window on the chosen monitor, never full\n"
-                 "                     screen (./ci hmi; WSLg draws nothing for full-screen windows)\n"
+                 "  --desktop          on the PC that runs the game (./ci hmi): fills the chosen secondary monitor\n"
+                 "                     (full-screen desktop), else a window; KSPHMI_WSLG=1: always a window\n"
                  "  --monitor M        auto (the last display when there are several) or a display index\n"
                  "                     (overrides [display] monitor)\n"
                  "  --size WxH         window or screen size, for example 1920x1080\n"
@@ -105,9 +108,16 @@ bool parse(int argc, char** argv, Args& a) {
 
 /// CPU time of this thread, in seconds: tells waiting (vsync / page flip) from work inside present.
 double thread_cpu() {
+#if defined(_WIN32)
+    FILETIME created, exited, kernel, user;  // 100 ns units
+    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0;
+    auto ticks = [](const FILETIME& f) { return (static_cast<unsigned long long>(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
+    return static_cast<double>(ticks(kernel) + ticks(user)) * 1e-7;
+#else
     timespec t{};
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
     return t.tv_sec + t.tv_nsec * 1e-9;
+#endif
 }
 
 /// Where frames go: an SDL window (GPU renderer when available; kmsdrm on the Pi console), the Linux
@@ -121,12 +131,24 @@ public:
         const char* env = std::getenv("KSPHMI_OUTPUT");
         std::string output = env && *env ? env : cfg.display.output;
         bool offscreen = args.offscreen || !args.screenshot.empty();
+#if !defined(__linux__)
+        // The framebuffer is the Pi's (Linux /dev/fb0): elsewhere "fbdev" and "auto" draw through SDL.
+        if (!offscreen && output == "fbdev" && !args.windowed) {
+            log::warning(LOG, "fbdev output needs Linux, using SDL");
+            output = "sdl";
+        }
+#endif
         if (!offscreen && output == "auto" && !args.windowed) {
             std::string why;
             if (open_sdl(cfg, args, want_w, want_h, true, why)) return;
-            log::warning(LOG, "GPU output unavailable (" + why + "), using the framebuffer");
             close_sdl();
+#if defined(__linux__)
+            log::warning(LOG, "GPU output unavailable (" + why + "), using the framebuffer");
             output = "fbdev";
+#else
+            log::warning(LOG, "GPU output unavailable (" + why + "), using SDL's software renderer");
+            output = "sdl";
+#endif
         }
         if (offscreen || (output == "fbdev" && !args.windowed)) {
             if (!offscreen) {
@@ -185,23 +207,32 @@ private:
         video_ = true;
         const int displays = SDL_GetNumVideoDisplays();
         const int monitor = monitor_index(cfg.display.monitor, displays);
-        // --desktop shares the PC with the game: always a plain window, on the chosen monitor. WSLg (2026-11-15,
-        // secondary monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows
-        // there; only a plain decorated window was visible. Its display bounds are physical pixels while Windows
-        // places the window in logical units, so centering misses: anchor a secondary monitor's window at the
-        // display origin (exact) and let ./ci hmi pass that monitor's logical work area as --size.
+        // --desktop shares the PC with the game, on the chosen monitor. A secondary monitor gets the whole of it
+        // (full-screen desktop: no mode change, the game keeps its own screen); the primary one a plain window.
+        // Under WSLg (./ci hmi sets KSPHMI_WSLG=1) a secondary monitor gets a plain window instead: WSLg
+        // (2026-11-15, secondary monitor at 175% scale) showed nothing for full-screen, borderless or maximized
+        // X11 windows; only a plain decorated window was visible. Its display bounds are physical pixels while
+        // Windows places the window in logical units, so centering misses: anchor that window at the display
+        // origin (exact) and let ./ci hmi pass that monitor's logical work area as --size.
+        const char* wslg_env = std::getenv("KSPHMI_WSLG");
+        const bool wslg = wslg_env && *wslg_env && std::string(wslg_env) != "0";
         SDL_Rect bounds{};
-        const bool anchor = args.desktop && monitor != 0 && SDL_GetDisplayBounds(monitor, &bounds) == 0;
+        const bool anchor = args.desktop && monitor != 0 && wslg && SDL_GetDisplayBounds(monitor, &bounds) == 0;
+        const bool desktop_fill = args.desktop && monitor != 0 && !wslg;  // --desktop also sets windowed
         bool fullscreen = !args.desktop && cfg.display.fullscreen && !args.windowed;
         Uint32 flags = 0;
         if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
+        if (desktop_fill) {
+            flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+            if (want_w <= 0 || want_h <= 0) want_w = 1280, want_h = 800;  // the window size before it fills
+        }
         if (want_w <= 0 || want_h <= 0) {
             SDL_DisplayMode mode;
             if (fullscreen && SDL_GetDesktopDisplayMode(monitor, &mode) == 0) want_w = mode.w, want_h = mode.h;
             else want_w = 1280, want_h = 800;
         }
         log::info(LOG, fmt::str("display %d of %d (monitor %s)%s", monitor, displays, cfg.display.monitor.c_str(),
-                                fullscreen ? ", full screen" : ", window"));
+                                fullscreen ? ", full screen" : desktop_fill ? ", full-screen desktop" : ", window"));
         const int x = anchor ? bounds.x : SDL_WINDOWPOS_CENTERED_DISPLAY(monitor);
         const int y = anchor ? bounds.y : SDL_WINDOWPOS_CENTERED_DISPLAY(monitor);
         window_ = SDL_CreateWindow("KSP HMI", x, y, want_w, want_h, flags);
@@ -253,6 +284,11 @@ std::unique_ptr<Source> make_source(const Config& cfg, const Args& args) {
 
 /// --splash: before any settings, network or SDL video; --screenshot saves the same picture off-screen instead.
 int splash(const Args& args) {
+#if !defined(__linux__)
+    if (args.screenshot.empty())
+        throw std::runtime_error("--splash animates the Pi's framebuffer (Linux /dev/fb0), not available here; "
+                                 "--splash --screenshot FILE still saves its picture");
+#endif
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
     int code = 0;
     if (args.screenshot.empty()) {
@@ -424,6 +460,9 @@ int run(int argc, char** argv) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    SDL_SetMainReady();  // SDL_MAIN_HANDLED (CMake): this main() is the entry point, console logging included
+#endif
     try {
         return run(argc, argv);
     } catch (const std::exception& e) {

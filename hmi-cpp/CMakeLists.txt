@@ -1,9 +1,11 @@
-# KSP HMI flight data display for the Raspberry Pi 4 (Debian bookworm) and Linux PCs (WSL included).
+# KSP HMI flight data display for the Raspberry Pi 4 (Debian bookworm), Linux PCs (WSL included) and Windows
+# (MSYS2 UCRT64 gcc: ./ci build_hmi builds it natively into build/hmi-cpp-win).
 #
 #   cmake -S hmi-cpp -B build/hmi-cpp -DCMAKE_BUILD_TYPE=Release && cmake --build build/hmi-cpp -j4
 #   ctest --test-dir build/hmi-cpp --output-on-failure
 #
 # Dependencies (apt): build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf.
+# Dependencies (MSYS2 pacman): mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,SDL2_ttf}.
 # The kRPC wire protocol is encoded by hand (src/pb.cpp, include/pb.hpp): no libprotobuf / protoc needed.
 #
 # Layout: src/ holds only .cpp files, include/ only .hpp headers (./ci verify checks it); tests/ keeps the
@@ -24,6 +26,22 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
 pkg_check_modules(SDL2TTF REQUIRED IMPORTED_TARGET SDL2_ttf)
 
+if(WIN32)
+  # Winsock and windows.h without the min/max macros and GDI names (ERROR, ...) that clash with our code.
+  add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX NOGDI _WIN32_WINNT=0x0601)
+  # sdl2.pc links SDL2main and -mwindows (a GUI program without a console, entered through WinMain): ksphmi
+  # and the tests keep their own main() (SDL_MAIN_HANDLED) and stay console programs that log to stdout.
+  foreach(target PkgConfig::SDL2 PkgConfig::SDL2TTF)
+    foreach(property INTERFACE_LINK_OPTIONS INTERFACE_LINK_LIBRARIES)
+      get_target_property(values ${target} ${property})
+      if(values)
+        list(FILTER values EXCLUDE REGEX "^-mwindows$|SDL2main")
+        set_target_properties(${target} PROPERTIES ${property} "${values}")
+      endif()
+    endforeach()
+  endforeach()
+endif()
+
 # Pure logic: formatting, attitude and orbit geometry, config, scenes, discovery, kRPC client, telemetry sources.
 add_library(ksphmi_core STATIC
   src/bootstate.cpp
@@ -35,6 +53,7 @@ add_library(ksphmi_core STATIC
   src/krpc.cpp
   src/log.cpp
   src/navmath.cpp
+  src/net.cpp
   src/netinfo.cpp
   src/orbitview.cpp
   src/pb.cpp
@@ -45,6 +64,9 @@ add_library(ksphmi_core STATIC
 target_include_directories(ksphmi_core PUBLIC include)
 target_compile_definitions(ksphmi_core PUBLIC KSPHMI_VERSION="${PROJECT_VERSION}")
 target_link_libraries(ksphmi_core PUBLIC Threads::Threads)
+if(WIN32)
+  target_link_libraries(ksphmi_core PUBLIC ws2_32 iphlpapi)
+endif()
 
 # Drawing: SDL2 renderer (GPU when available, software for /dev/fb0 and off-screen frames) and SDL2_ttf text.
 add_library(ksphmi_ui STATIC
@@ -57,6 +79,9 @@ add_library(ksphmi_ui STATIC
   src/segments.cpp
   src/splash.cpp)
 target_link_libraries(ksphmi_ui PUBLIC ksphmi_core PkgConfig::SDL2 PkgConfig::SDL2TTF)
+if(WIN32)
+  target_compile_definitions(ksphmi_ui PUBLIC SDL_MAIN_HANDLED)
+endif()
 
 add_executable(ksphmi src/main.cpp)
 target_link_libraries(ksphmi PRIVATE ksphmi_ui)

@@ -1,6 +1,10 @@
 #include "config.hpp"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -255,7 +259,16 @@ std::string find_app_dir() {
     if (const char* env = std::getenv("KSPHMI_APP_DIR")) return env;
     std::vector<std::string> candidates;
     char exe[4096];
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    // ksphmi.exe's path as UTF-8 with forward slashes (dirname() and the candidates below use '/').
+    wchar_t wide[4096];
+    DWORD w = GetModuleFileNameW(nullptr, wide, sizeof wide / sizeof wide[0]);
+    long n = w > 0 && w < sizeof wide / sizeof wide[0]
+                 ? WideCharToMultiByte(CP_UTF8, 0, wide, static_cast<int>(w), exe, sizeof exe - 1, nullptr, nullptr)
+                 : -1;
+    for (long i = 0; i < n; ++i)
+        if (exe[i] == '\\') exe[i] = '/';
+#elif defined(__APPLE__)
     uint32_t size = sizeof exe;
     ssize_t n = _NSGetExecutablePath(exe, &size) == 0 ? static_cast<ssize_t>(std::char_traits<char>::length(exe)) : -1;
 #else
