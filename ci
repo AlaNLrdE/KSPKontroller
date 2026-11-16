@@ -848,17 +848,24 @@ run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-lin
 hmi_pc_address() {
   if [ -n "${HMI_KRPC_ADDRESS:-}" ]; then echo "$HMI_KRPC_ADDRESS"; return; fi
   local ip name short
-  ip="$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')"
+  # Over IPv4: with ksphmi reached by its .local name, ssh may prefer IPv6 link-local, which the HMI cannot use.
+  ip="$("$(hmi_ssh_client)" -4 -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" 'echo "${SSH_CLIENT%% *}"' </dev/null)"
+  ip="${ip%%\%*}"
   short="$(hostname 2>/dev/null || true)"
   short="${short%%.*}"
   if [ -n "$short" ]; then
     name="$short.local"
-    if hmi_ssh "getent ahostsv4 '$name' 2>/dev/null | awk '{print \$1}' | grep -qx '$ip'" </dev/null; then
+    # IPv4 and IPv6 answers: over a .local alias the SSH session itself may arrive on IPv6 link-local.
+    if hmi_ssh "getent ahosts '$name' 2>/dev/null | cut -d' ' -f1 | sed 's/%.*//' | grep -qix '$ip'" </dev/null; then
       echo "$name"
       return
     fi
-    echo "==> $HMI_HOST does not resolve $name to $ip: using the numeric address" >&2
+    echo "==> $HMI_HOST does not resolve $name to $ip" >&2
   fi
+  # The HMI connects over IPv4 only: never hand it an IPv6 address.
+  case "$ip" in
+    *:*) die "cannot give the Pi this PC's IPv4 address (SSH came over IPv6 $ip): set HMI_KRPC_ADDRESS" ;;
+  esac
   echo "$ip"
 }
 
