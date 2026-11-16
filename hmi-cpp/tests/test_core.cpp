@@ -347,6 +347,11 @@ TEST(encounter_patch_enters_and_leaves_the_sphere_of_influence) {
     CHECK(!captured.exit());
     // Impact: a periapsis below the surface reads negative.
     CHECK(ike_flyby(100000, 1.3).periapsis_altitude().value_or(1) < 0);
+    // Live Ike encounter (2026-11-16): kRPC put the entry 18 m outside the 1,049,599 m sphere; it must still draw.
+    Encounter live = flyby;
+    live.soi = 1049599;
+    live.position = live.position * (1049617 / std::sqrt(dot(live.position, live.position)));
+    CHECK(live.span().has_value());
     Encounter broken = flyby;
     broken.mu = 0;
     CHECK(!broken.conic() && !broken.span() && !broken.exit());

@@ -100,8 +100,15 @@ std::optional<Conic> Encounter::conic() const { return OrbitState{position, velo
 std::optional<ConicSpan> Encounter::span() const {
     auto c = conic();
     if (!c) return std::nullopt;
-    // The entry lies on the sphere itself: a hair of tolerance keeps it inside the drawable arc.
-    double limit = soi > 0 && std::isfinite(soi) ? soi * (1 + 1e-6) : 0;
+    // The entry lies on the sphere itself, but kRPC's position at the SOI change can sit slightly outside it (Ike,
+    // 2026-11-16: 18 m beyond a 1,049,599 m sphere, which discarded the whole encounter). An entry up to 0.1 %
+    // outside widens the limit just to reach it, so the exit stays on the sphere.
+    double limit = 0;
+    if (soi > 0 && std::isfinite(soi)) {
+        const double entry = std::sqrt(dot(position, position));
+        limit = soi * (1 + 1e-6);
+        if (entry > limit && entry <= soi * (1 + 1e-3)) limit = entry * (1 + 1e-9);
+    }
     return conic_span(*c, anomaly_of(*c, position), limit);
 }
 
