@@ -13,6 +13,7 @@ namespace ksphmi {
 enum class Key {
     Unknown,
     T, R, F, Z, X, G, U, B,                 // SAS, RCS, SAS hold, throttle full / cut, gear, lights, brakes (held)
+    M,                                      // map view toggle
     Space, Backspace,                       // stage, abort
     Comma, Period, Slash,                   // time warp down / up / stop
     F5, F9,                                 // quicksave, quickload (held 1 s)
@@ -35,7 +36,7 @@ struct KeyEvent {
 struct Command {
     enum Kind {
         ToggleSas, ToggleRcs, Stage, ToggleGear, ToggleLights, SetBrakes, Abort, ActionGroup, SasMode,
-        ThrottleFull, ThrottleCut, WarpUp, WarpDown, WarpStop, Quicksave, Quickload,
+        ThrottleFull, ThrottleCut, WarpUp, WarpDown, WarpStop, Quicksave, Quickload, ToggleMap,
     };
     Kind kind;
     int value = 0;  ///< SetBrakes: 1 on / 0 off; ActionGroup: kRPC group 0-9 (0 = group 10); SasMode: kRPC SASMode

@@ -651,6 +651,7 @@ TEST(keyboard_maps_ksp_default_flight_keys) {
     CHECK(only(kb.down(key(Key::Period), 0), Command{Command::WarpUp}));
     CHECK(only(kb.down(key(Key::Slash), 0), Command{Command::WarpStop}));
     CHECK(only(kb.down(key(Key::F5), 0), Command{Command::Quicksave}));
+    CHECK(only(kb.down(key(Key::M), 0), Command{Command::ToggleMap}));
     // Held B = brakes while held; held F = SAS inverted while held
     CHECK(only(kb.down(key(Key::B), 0), Command{Command::SetBrakes, 1}));
     CHECK(only(kb.up(key(Key::B), 0), Command{Command::SetBrakes, 0}));
@@ -714,7 +715,7 @@ TEST(keyboard_commands_reach_krpc_like_the_game_keys) {
     std::vector<std::string> calls;
     std::map<std::string, std::string> last_args;  // procedure -> encoded arguments after the object
     bool sas = true, rcs = false, gear = true;
-    int warp_mode = 2, rails = 0, physics = 0, max_rails = 7;
+    int warp_mode = 2, rails = 0, physics = 0, max_rails = 7, camera_mode = 0;
     FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
         std::lock_guard<std::mutex> lock(m);
         calls.push_back(proc);
@@ -729,6 +730,9 @@ TEST(keyboard_commands_reach_krpc_like_the_game_keys) {
         if (proc == "Control_set_RCS") return rcs = pb::dec_bool(args.at(1)), FakeResult{""};
         if (proc == "Control_set_Gear") return gear = pb::dec_bool(args.at(1)), FakeResult{""};
         if (proc == "get_WarpMode") return {pb::enc_sint32(warp_mode)};
+        if (proc == "get_Camera") return {pb::enc_object(77)};
+        if (proc == "Camera_get_Mode") return {pb::enc_sint32(camera_mode)};
+        if (proc == "Camera_set_Mode") return camera_mode = pb::dec_sint32(args.at(1)), FakeResult{""};
         if (proc == "get_RailsWarpFactor") return {pb::enc_sint32(rails)};
         if (proc == "get_PhysicsWarpFactor") return {pb::enc_sint32(physics)};
         if (proc == "get_MaximumRailsWarpFactor") return {pb::enc_sint32(max_rails)};
@@ -771,6 +775,11 @@ TEST(keyboard_commands_reach_krpc_like_the_game_keys) {
     CHECK_EQ(send_command(c, {Command::WarpUp}, 7, "flight"), "time warp physics 1");
     CHECK_EQ(send_command(c, {Command::WarpUp}, 7, "flight"), "time warp physics 2");
     CHECK_EQ(send_command(c, {Command::WarpStop}, 7, "flight"), "time warp physics 0");
+    // M: map view and back, through kRPC's camera mode
+    CHECK_EQ(send_command(c, {Command::ToggleMap}, 7, "flight"), "map view");
+    CHECK_EQ(camera_mode, 6);
+    CHECK_EQ(send_command(c, {Command::ToggleMap}, 7, "flight"), "flight view");
+    CHECK_EQ(camera_mode, 0);
     // Held keys: SetAxes with six floats, NudgeThrottle at KSP's rate
     Held h;
     h.pitch = -1, h.z = 1, h.throttle = -1;

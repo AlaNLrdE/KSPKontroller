@@ -35,6 +35,7 @@ std::string command_name(const Command& c) {
         case Command::WarpStop: return "time warp stop";
         case Command::Quicksave: return "quicksave";
         case Command::Quickload: return "quickload";
+        case Command::ToggleMap: return "map view toggle";
     }
     return "?";
 }
@@ -72,6 +73,7 @@ KeyResult Keyboard::down(const KeyEvent& e, double now) {
         case Key::Period: r.commands.push_back({Command::WarpUp}); break;
         case Key::Slash: r.commands.push_back({Command::WarpStop}); break;
         case Key::F5: r.commands.push_back({Command::Quicksave}); break;
+        case Key::M: r.commands.push_back({Command::ToggleMap}); break;
         case Key::F9: f9_since_ = now, f9_fired_ = false; break;
         case Key::LeftCtrl: ctrl_since_ = now, ctrl_used_ = false; break;
         default: break;  // axes and Shift: read through held()
