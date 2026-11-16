@@ -1970,7 +1970,7 @@ TEST(vab_target_follows_the_delta_v_app_body) {
 
 TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {
     std::atomic<uint32_t> revision{5};
-    std::atomic<int> mode{0};  // 0 serve, 1 no service, 2 malformed text, 3 empty text
+    std::atomic<int> mode{0};  // 0 serve, 1 no service, 2 malformed text, 3 empty text, 4 dv=pending, 5 other ship pending
     std::atomic<int> reports{0};
     const std::string good = golden_ship_report();
     FakeServer server([&](const std::string& proc, const std::vector<std::string>&) -> FakeResult {
@@ -1980,6 +1980,11 @@ TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {
             ++reports;
             if (mode == 2) return {pb::enc_string("v=1 rev=1\nst=broken\n")};
             if (mode == 3) return {pb::enc_string("")};
+            if (mode == 4 || mode == 5) {  // KSP recomputing delta-v after an edit: no st= lines
+                std::string head = good.substr(0, good.find("\nst="));
+                if (mode == 5) head.replace(head.find("Kerbal%20X"), 10, "Other");
+                return {pb::enc_string(head + " dv=pending\n")};
+            }
             return {pb::enc_string(good)};
         }
         return {"", false, "no such procedure " + proc};
@@ -2023,6 +2028,17 @@ TEST(ship_report_poller_fetches_on_revision_change_and_survives_errors) {
     mode = 0;
     revision = 10;
     CHECK(poller.poll(c, 5.5) != nullptr);
+    // dv=pending for the same ship keeps the previous stages (the VAB list blanked at every edit); another ship
+    // or a fresh poller shows it pending
+    mode = 4;
+    revision = 11;
+    auto kept = poller.poll(c, 6);
+    CHECK(kept && !kept->delta_v_pending && kept->stages.size() == 3);
+    mode = 5;
+    revision = 12;
+    auto other = poller.poll(c, 6.5);
+    CHECK(other && other->delta_v_pending && other->stages.empty());
+    mode = 0;
     poller.reset();
     CHECK(poller.problem().empty());
 }
