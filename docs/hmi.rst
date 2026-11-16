@@ -205,6 +205,40 @@ current one. A node placed after an SOI change (another body), or any kRPC error
 kRPC``, or warns ``frame mismatch?`` when the state vectors disagree with kRPC's own periapsis.
 ``./ci sim --node 250,900`` adds a 250 m/s prograde node 900 s ahead in the simulator; ``--demo`` has one.
 
+Target, closest approach and encounters (KSP 1 kRPC only; the Redux source leaves these snapshot fields empty).
+When ``SpaceCenter.target_vessel`` or ``target_body`` orbits the same body as the active vessel (a moon of the
+current body counts: Ike while orbiting Duna; a vessel around another planet does not), ORBIT draws its orbit as
+a solid line in the target colour, built from ``Orbit.position_at`` / ``velocity_at`` at the current UT in the
+same non-rotating frame and fixed view axes, with the NavBall's target mark (a ring with four ticks) at its
+position and its name; a target body is also drawn as a small disc. The closest approach comes from
+``Orbit.next_closest_approach(target.orbit)`` on the post-maneuver orbit when a node exists (as KSP), else the
+current one: the ``ClosestApproach`` object's ``ut``, ``position`` and ``target_position`` in the same frame
+(an older kRPC without it falls back to ``Orbit.time_of_closest_approach`` and ``position_at``). As in the map
+view, two chevrons point at each other, the vessel's (blue, or orange on the planned orbit) from above and the
+target's from below, joined by a dotted line and labelled with the separation. This install's kRPC has no
+``time_of_closest_approach`` / ``distance_at_closest_approach``.
+
+An encounter is a sphere of influence entry into a moon of the current body: ``Orbit.time_to_soi_change`` (NaN
+without one) and ``Orbit.next_orbit`` of the current orbit, and of ``Node.orbit`` for the planned path. KSP's
+``position_at`` of a future patch around another body adds that body's *current* position, so the patch is not
+read from ``next_orbit``: the HMI reads the vessel's and the moon's states at the entry time from their orbits
+around the current body and builds the patch as a conic of the moon's gravitational parameter. The current or
+dashed planned orbit ends at the entry; the patch inside the sphere is drawn (solid, or dashed when planned) in
+the encounter colour around the moon's outline at the entry time, with KSP-like SOI entry/exit icons (a ring with
+a notch pointing in or out) and the encounter periapsis labelled ``Pe <altitude>`` (amber below the surface).
+With an encounter of the target, the closest approach markers are hidden, as in KSP. Skins set
+``Display::orbit_style`` (ksp1/ksp2: the map view's violet target and warm encounter colours; a CRT-styled ORBIT
+maps them to dim phosphor green). These values are read on the telemetry thread about once a second, and at once
+when the target or the node list changes; each failing part is dropped alone and logged once
+(``target orbit unavailable: ...``, ``closest approach unavailable: ...``, ``encounter unavailable: ...``).
+In the simulator the target body is the Mun (``target_enabled``), on a 12 Mm circular orbit, with closest
+approaches and Mun encounters computed from the coasting vessel or node orbit.
+
+The view fit has hysteresis, so optional content that comes and goes (a node, a target, an encounter) does not
+rescale ORBIT abruptly: the held extent grows at once to contain new content and shrinks only after the content
+has filled less than 60% of it for 2 s (snapshot time). A new body, vessel axes or panel size refits at once.
+The scale stays quantised in 0.5% steps; the geometry itself is never smoothed.
+
 On the Pi there is no desktop. The current service sets ``KSPHMI_OUTPUT=auto`` and
 ``SDL_VIDEODRIVER=kmsdrm``: it first tries an accelerated SDL renderer and falls back to Linux fbdev when
 that path cannot open. The GPU path needs the working Mesa EGL/GLES stack and DRM access. The old

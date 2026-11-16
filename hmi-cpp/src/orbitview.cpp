@@ -77,6 +77,56 @@ std::optional<ConicSpan> conic_span(const Conic& conic, double start, double lim
     return ConicSpan{from, reach, false};
 }
 
+bool span_contains(const ConicSpan& span, double anomaly) {
+    if (span.closed) return true;
+    if (!std::isfinite(anomaly)) return false;
+    double ahead = std::fmod(anomaly - span.from, 2 * PI);
+    if (ahead < 0) ahead += 2 * PI;
+    return span.from + ahead <= span.to;
+}
+
+ConicSpan span_until(const Conic& conic, const ConicSpan& span, double start, const Vec3& end) {
+    double stop = anomaly_of(conic, end);
+    double from = span.closed ? std::remainder(start, 2 * PI) : span.from;
+    double ahead = std::fmod(stop - from, 2 * PI);
+    if (!(ahead >= 0)) ahead = std::isfinite(ahead) ? ahead + 2 * PI : 0;
+    double to = from + ahead;
+    if (!span.closed) to = std::min(to, span.to);
+    return ConicSpan{from, to, false};
+}
+
+std::optional<Conic> Encounter::conic() const { return OrbitState{position, velocity, mu, {}}.conic(); }
+
+std::optional<ConicSpan> Encounter::span() const {
+    auto c = conic();
+    if (!c) return std::nullopt;
+    // The entry lies on the sphere itself, but kRPC's position at the SOI change can sit slightly outside it (Ike,
+    // 2026-11-16: 18 m beyond a 1,049,599 m sphere, which discarded the whole encounter). An entry up to 0.1 %
+    // outside widens the limit just to reach it, so the exit stays on the sphere.
+    double limit = 0;
+    if (soi > 0 && std::isfinite(soi)) {
+        const double entry = std::sqrt(dot(position, position));
+        limit = soi * (1 + 1e-6);
+        if (entry > limit && entry <= soi * (1 + 1e-3)) limit = entry * (1 + 1e-9);
+    }
+    return conic_span(*c, anomaly_of(*c, position), limit);
+}
+
+std::optional<Vec3> Encounter::exit() const {
+    auto c = conic();
+    auto s = span();
+    if (!c || !s || s->closed || !(soi > 0) || !std::isfinite(soi)) return std::nullopt;
+    auto v = c->position(s->to);
+    if (!v || std::sqrt(dot(*v, *v)) < soi * .999) return std::nullopt;  // stopped short of the sphere: asymptote
+    return v;
+}
+
+std::optional<double> Encounter::periapsis_altitude() const {
+    auto c = conic();
+    if (!c) return std::nullopt;
+    return c->periapsis() - radius;
+}
+
 std::vector<Point2> conic_track(const Conic& conic, const ConicSpan& span, const Axes& axes, int samples) {
     std::vector<Point2> points;
     samples = std::max(samples, 2);

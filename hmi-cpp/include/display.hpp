@@ -118,6 +118,16 @@ public:
     ApolloSkin* apollo() { return apollo_.get(); }
     GameSkin* game_skin() { return skin_=="ksp1"?ksp1_.get():skin_=="ksp2"?ksp2_.get():nullptr; }
     int maneuver_builds = 0;
+    /// Colours of the target orbit and marker and of the encounter patch in ORBIT; skins set their own (ksp1/ksp2:
+    /// the map view's), every skin draws the same KSP-like vector icons.
+    struct OrbitStyle {
+        Color target{240, 83, 213}, encounter{255, 214, 90};
+    };
+    OrbitStyle orbit_style;
+    /// Where the target mark, the vessel's closest approach chevron and the SOI entry icon were drawn (tests).
+    std::optional<Pt> last_target_marker, last_approach_marker, last_encounter_marker;
+    /// The ORBIT scale (pixels per metre) of the last inertial view, after hysteresis and quantisation.
+    double last_orbit_scale = 0;
 
 private:
     /// Dashed post-burn orbit in view-plane metres, rebuilt only when the node orbit or the quantised scale change.
@@ -127,8 +137,25 @@ private:
         double mu = 0, soi = 0, scale = 0, dash = 0;
         int w = 0, h = 0;
         std::vector<std::vector<Point2>> dashes;
+        double from = 0, to = 0;
+        bool closed = false;
     };
     ManeuverCache maneuver_cache_;
+    /// The ORBIT view extent (view-plane metres) held between frames, so optional content does not rescale it
+    /// abruptly: it grows at once and shrinks only after the content has filled less than 60 % for 2 s.
+    struct ViewFit {
+        bool valid = false;
+        std::string body;
+        double mu = 0;
+        Vec3 axis_x, axis_y;
+        int w = 0, h = 0;
+        double x0 = 0, x1 = 0, y0 = 0, y1 = 0, since = 0;
+        bool shrinking = false;
+    };
+    ViewFit view_fit_;
+    void encounter_patch(const Encounter& e, const std::function<Pt(const Vec3&)>& point, double scale, double reach,
+                         const Rect& rect, bool markers);
+    void target_marks(const Snapshot& s, const std::function<Pt(const Vec3&)>& point, double scale, double cx);
     void maneuver_orbit(const Snapshot& s, const Conic& next, const ConicSpan& span, double scale, double reach,
                         double cx, double cy, const Rect& rect, bool markers);
 
@@ -171,6 +198,7 @@ private:
     std::string config_skin_, skin_, chosen_skin_;
     bool vessel_heat_ = false;
     std::unique_ptr<OrbitArt> orbit_art_;
+    std::unique_ptr<OrbitArt> target_art_;  ///< the target body's own cached material
     std::unique_ptr<ApolloSkin> apollo_;
     std::unique_ptr<ApolloSkin> steampunk_;
     std::unique_ptr<GameSkin> ksp1_, ksp2_;
