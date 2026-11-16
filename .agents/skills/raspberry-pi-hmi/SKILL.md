@@ -60,6 +60,19 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `fbcon=map:`/`nodefer`: with DRM fbdev emulation the mode is set through fbcon's set_par; the splash re-applies
   it with `FBIOPUT_VSCREENINFO` + `FB_ACTIVATE_FORCE`. `./ci deploy_hmi` reruns the script (ssh -t, user types the
   sudo password) when its sha256 differs from `/etc/ksphmi-kiosk.applied`; it never reboots.
+- Boot intro video (2026-11-16, replaces the animated splash as the normal boot): `ksphmi-splash.service` now runs
+  `systemd/ksphmi-intro.sh` (POSIX sh): mpv (installed by setup-kiosk.sh) plays
+  `assets/intro/KSPKontroller_pi_Intro.mp4` once with HDMI audio (`alsa/hdmi:CARD=vc4hdmi0,DEV=0`; card1-HDMI-A-1)
+  and `--keep-open=always` holds its last frame. **mpv is DRM master while it shows that frame: SDL kmsdrm cannot
+  open the display until mpv exits**, so ksphmi (intro.cpp, before SDL video) waits for `eof-reached` on
+  `/run/ksphmi-intro/mpv.sock` (15 s cap), sends `quit` and waits for the unit's RuntimeDirectory to vanish.
+  The script writes `/run/ksphmi-intro/starting` while it waits for the monitor so an early HMI waits for the
+  socket instead of grabbing DRM first. Never order the unit after `dev-fb0.device`: with the 4K monitor detected
+  late the job timed out and the unit never ran (two boots); wait in the script for
+  `/sys/class/drm/card*-HDMI-A-*/status` = connected (20 s). Use `--vo=gpu --gpu-context=drm`: `--vo=drm` scales
+  on the CPU (1276x720 to 4096x2160). Without mpv/the video the script execs the old `ksphmi --splash`.
+  mpv's log (`--no-terminal`) is `~/ksphmi/intro-mpv.log`; overrides go in `~/ksphmi/intro.env`. Not yet tested
+  on a real boot when this was written.
 - Pi that boots to black and no ping: bisect `cmdline.txt` on the SD from Windows (FAT `bootfs` drive); keep the
   known-good line as a backup file next to it. Change one variable per boot; `systemd.mask=UNIT` in cmdline.txt
   disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means

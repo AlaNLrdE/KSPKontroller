@@ -1,0 +1,62 @@
+@startuml seq_hmi_intro
+title Pi boot: intro video, last frame held, hand-over to the HMI
+skinparam sequenceMessageAlign left
+participant "systemd (PID 1)" as Systemd
+participant "ksphmi-intro.sh\nksphmi-splash.service" as Script
+participant "mpv\nDRM master, HDMI audio" as Mpv
+participant "/run/ksphmi-intro\nstarting, mpv.sock" as Dir
+participant "ksphmi\nksphmi.service (user)" as HMI
+activate Systemd
+Systemd -> Dir : create RuntimeDirectory=ksphmi-intro
+activate Dir
+Dir --> Systemd : created
+deactivate Dir
+Systemd ->> Script : start (Type=simple, no Before=: boot and logins carry on)
+activate Script
+Script -> Dir : write "starting"
+activate Dir
+Dir --> Script : written
+deactivate Dir
+loop every 0.2 s, at most 20 s
+  Script -> Script : card*-HDMI-A-*/status == connected?
+end
+Script ->> Mpv : start (vo gpu, DRM context, keep-open=always,\ninput-ipc-server=mpv.sock)
+activate Mpv
+Mpv -> Dir : listen on mpv.sock
+activate Dir
+Dir --> Mpv : listening
+deactivate Dir
+Script -> Dir : socket exists: remove "starting"
+activate Dir
+Dir --> Script : removed
+deactivate Dir
+Mpv -> Mpv : play the video once with sound,\nthen pause on the last frame
+Systemd ->> HMI : user manager (lingering) starts ksphmi.service
+activate HMI
+HMI -> Dir : intro directory? wait for mpv.sock while "starting" (40 s)
+activate Dir
+Dir --> HMI : mpv.sock
+deactivate Dir
+loop every 0.2 s, at most 15 s
+  HMI -> Mpv : get_property eof-reached
+  activate Mpv
+  Mpv --> HMI : data false, then true on the last frame
+  deactivate Mpv
+end
+HMI ->> Mpv : quit
+Mpv --> Script : exit (DRM master released)
+deactivate Mpv
+Script --> Systemd : exit 0
+deactivate Script
+Systemd -> Dir : remove the RuntimeDirectory
+activate Dir
+Dir --> Systemd : removed
+deactivate Dir
+HMI -> Dir : gone? (at most 2 s)
+activate Dir
+Dir --> HMI : gone
+deactivate Dir
+HMI -> HMI : SDL video (kmsdrm) opens the display,\nfirst frame, writes ksphmi.ready
+deactivate HMI
+deactivate Systemd
+@enduml

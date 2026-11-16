@@ -705,17 +705,50 @@ The script is idempotent and keeps SSH, the network and the serial console. It:
 * adds ``disable_splash=1`` (no rainbow) and ``avoid_warnings=1`` (no under-voltage icon over the HMI) to
   ``config.txt`` (backup ``config.txt.ksphmi-backup``);
 * writes the fbcon ``cursor_blink`` tmpfiles rule and masks ``getty@tty1`` (no login prompt);
-* installs the udev rule ``/etc/udev/rules.d/99-ksphmi-fb.rules`` (makes ``dev-fb0.device`` visible to systemd,
-  but only for the DRM framebuffer ``ATTR{name}=="vc4drmfb"``: the firmware's ``simplefb`` is ``fb0`` from about
-  4.5 s and is replaced by ``vc4drmfb`` at about 6.4 s) and the **system** unit ``ksphmi-splash.service`` (from
-  ``hmi-cpp/systemd/``, with the user and home filled in): ``Type=simple``, ``DefaultDependencies=no``,
-  ``After=dev-fb0.device``, ``WantedBy=sysinit.target``, no ``Before=`` on the boot or the logins (the job is
-  dropped after ``JobTimeoutSec=30`` without a DRM framebuffer), ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``,
-  running ``~/ksphmi/cpp/build/ksphmi --splash`` as the HMI user in group ``video``;
+* installs ``mpv`` (``apt-get install -y --no-install-recommends mpv``, only when it is missing; without network
+  it warns and the boot shows the fallback loading screen until the script runs again). ``/etc/ksphmi-mpv.installed``
+  records that the script installed it, so ``--undo`` removes it again;
+* installs the udev rule ``/etc/udev/rules.d/99-ksphmi-fb.rules`` (tags only the DRM framebuffer
+  ``ATTR{name}=="vc4drmfb"``: the firmware's ``simplefb`` is ``fb0`` from about 4.5 s and is replaced by
+  ``vc4drmfb`` at about 6.4 s) and the **system** unit ``ksphmi-splash.service`` (from ``hmi-cpp/systemd/``, with
+  the user and home filled in): ``Type=simple``, ``DefaultDependencies=no``, ``After=local-fs.target``,
+  ``WantedBy=sysinit.target``, no ``Before=`` on the boot or the logins and no device dependency (with a monitor
+  detected late, ``dev-fb0.device`` timed out and the old unit never ran), ``RuntimeDirectory=ksphmi-intro``,
+  ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``, running ``~/ksphmi/cpp/systemd/ksphmi-intro.sh`` as the HMI user
+  with the groups ``video``, ``render`` and ``audio``;
 * enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci deploy_hmi`` does that).
 
 What the screen shows at boot: black while the firmware and kernel start (no rainbow, no logo, no text), then the
-animated loading screen as soon as the DRM ``/dev/fb0`` exists, until the HMI has drawn its first frame:
+intro video ``hmi-cpp/assets/intro/KSPKontroller_pi_Intro.mp4`` (10 s, 1276x720 H.264 with AAC sound) once, with
+its sound on the HDMI monitor, and its last frame until the HMI's first frame.
+
+``ksphmi-intro.sh`` writes ``/run/ksphmi-intro/starting``, waits up to 20 s for a connected HDMI connector
+(``/sys/class/drm/card*-HDMI-A-*/status``; a 4K monitor is often detected late), then starts mpv on the KMS device
+(``/dev/dri/by-path/platform-gpu-card``, else ``/dev/dri/card1``) with ``--vo=gpu --gpu-context=drm`` (V3D scales
+the video to the monitor's native mode; ``--vo=drm`` would scale on the CPU), ``--hwdec=auto-safe``,
+``--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0`` (``--audio-fallback-to-null=yes``: no sound card, still the
+video), ``--keep-open=always``, ``--no-terminal`` (its log goes to ``~/ksphmi/intro-mpv.log``) and
+``--input-ipc-server=/run/ksphmi-intro/mpv.sock``, and removes ``starting`` once the socket exists. Settings in
+``~/ksphmi/intro.env`` (read by the unit): ``KSPHMI_INTRO_VIDEO``, ``KSPHMI_INTRO_AUDIO``, ``KSPHMI_INTRO_DRM``,
+``KSPHMI_INTRO_VO``, ``KSPHMI_INTRO_LOG``.
+
+Hand-over from the video: mpv is DRM master while it holds the last frame, so SDL's kmsdrm cannot open the display
+until mpv quits. Before SDL video starts, ``ksphmi`` (Linux kiosk run only: not ``--splash``, ``--screenshot``,
+``--offscreen``, ``--bench``, ``--windowed`` or ``--desktop``) checks ``/run/ksphmi-intro`` (``intro.cpp``): it
+waits for ``mpv.sock`` while ``starting`` exists (40 s at most), asks ``eof-reached`` every 0.2 s until it is true
+(15 s at most, so the video is never cut unless something hangs), sends ``quit`` and waits up to 2 s for mpv's
+socket and the unit's directory to disappear. It logs ``boot intro finished, taking the display`` or a warning with
+the reason; any failure lets the HMI go on. The script exits when mpv does (or kills it when ``ksphmi.ready``
+appears, or after 10 minutes), and systemd removes the directory. Between mpv's exit and the HMI's first frame the
+screen is black for a moment (the console is silent).
+
+.. uml:: diagrams/seq_hmi_intro.puml
+   :caption: mpv plays the intro and holds its last frame; the HMI waits for the end, makes mpv quit, then opens
+      the display.
+
+Fallback loading screen: without mpv or the video, ``ksphmi-intro.sh`` waits up to 30 s for the DRM framebuffer
+(``/sys/class/graphics/fb0/name`` is ``vc4drmfb``) and runs ``ksphmi --splash``, the animated loading screen, until
+the HMI has drawn its first frame:
 
 * header: "KSPKontroller", "FLIGHT DISPLAY · RASPBERRY PI" and, top right, ``T+ mm:ss.s`` since power-on
   (``CLOCK_BOOTTIME``, so it includes the firmware and kernel time);
@@ -754,7 +787,8 @@ after its first frame and at each unblank (start, then every 30 s), so neither t
 survive behind its frames. ``./ci verify`` reports each missing piece in ``hmi: kiosk boot``.
 
 .. uml:: diagrams/seq_hmi_boot.puml
-   :caption: The boot splash animates until the HMI writes its ready file after the first presented frame.
+   :caption: The fallback boot splash (no mpv or no video) animates until the HMI writes its ready file after the
+      first presented frame.
 
 Do not cut power to shut down Linux; use ``sudo poweroff`` first to avoid filesystem damage.
 

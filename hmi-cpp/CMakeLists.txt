@@ -48,6 +48,7 @@ add_library(ksphmi_core STATIC
   src/config.cpp
   src/discovery.cpp
   src/fmt.cpp
+  src/intro.cpp
   src/editorpage.cpp
   src/gauges.cpp
   src/keyboard.cpp
@@ -102,6 +103,11 @@ add_executable(ksphmi_redux_tests tests/test_redux.cpp)
 target_link_libraries(ksphmi_redux_tests PRIVATE ksphmi_core)
 target_compile_definitions(ksphmi_redux_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME redux COMMAND ksphmi_redux_tests)
+
+# Boot intro hand-over against a fake mpv IPC socket (AF_UNIX: Linux only, a single skip test elsewhere).
+add_executable(ksphmi_intro_tests tests/test_intro.cpp)
+target_link_libraries(ksphmi_intro_tests PRIVATE ksphmi_core)
+add_test(NAME intro COMMAND ksphmi_intro_tests)
 
 add_executable(ksphmi_render_tests tests/test_render.cpp)
 target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)

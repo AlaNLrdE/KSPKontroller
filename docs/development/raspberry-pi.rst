@@ -58,6 +58,9 @@ Source map
    * - ``navball.*`` / ``gauges.*``
      - Navigation globe, marker projection, smoothing and gauge geometry.
      - Cache static work; distinguish orientation from speed reference frame.
+   * - ``intro.*``
+     - Boot intro hand-over: waits for mpv's ``eof-reached`` over ``/run/ksphmi-intro/mpv.sock``, sends ``quit``.
+     - Linux only, before SDL video; every wait is bounded and a failure only logs a warning.
    * - ``fbdev.*``, ``png.*``, ``splash.*``, ``bootstate.*``
      - Linux framebuffer transfer, PNG artifacts, the animated boot splash and its pure boot-stage logic
        (``boot_view``) with the probes and the ``ksphmi.ready`` hand-over file.
@@ -183,8 +186,11 @@ Outputs and service lifecycle
   Selecting Linux fbdev there raises an explicit error.
 
 The Pi user unit ``ksphmi.service`` executes ``~/ksphmi/cpp/build/ksphmi`` and restarts after process
-exit. A separate system splash service from ``setup-kiosk.sh`` animates the boot until the HMI writes its ready
-file after the first presented frame (see :doc:`../hmi`).
+exit. A separate system service from ``setup-kiosk.sh`` (``ksphmi-splash.service`` running
+``systemd/ksphmi-intro.sh``) plays the intro video with mpv on DRM and holds its last frame; before SDL video starts
+the HMI waits for the end of the video on mpv's IPC socket ``/run/ksphmi-intro/mpv.sock``, makes mpv quit (it is
+DRM master until then) and takes the display (``intro.*``). Without mpv or the video the same service animates the
+old loading screen until the HMI writes its ready file after the first presented frame (see :doc:`../hmi`).
 Lingering allows the user service to start at boot. Root-required kiosk changes are run by the user.
 Use ``ssh ksphmi`` (configured locally); do not embed the Pi's address or account in source/docs.
 

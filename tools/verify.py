@@ -651,6 +651,59 @@ def check_hmi_cpp(ctx):
            ", ".join(problems) if problems else "%d scene views, %d resources, LF rule" % (len(views), len(names)))
 
 
+INTRO_VIDEO = "assets/intro/KSPKontroller_pi_Intro.mp4"
+
+
+def check_hmi_intro(ctx):
+    """The Pi's boot intro: the video asset exists and is an MP4, setup-kiosk.sh installs mpv, the kiosk unit runs
+    ksphmi-intro.sh in RuntimeDirectory=ksphmi-intro, and the script and hmi-cpp (intro.hpp) agree on the mpv IPC
+    socket /run/ksphmi-intro/mpv.sock that the HMI uses to take the display over from mpv."""
+    problems = []
+    video = os.path.join(HMI_DIR, *INTRO_VIDEO.split("/"))
+    if not os.path.isfile(video):
+        problems.append("%s missing" % INTRO_VIDEO)
+    else:
+        with open(video, "rb") as f:
+            head = f.read(12)
+        if head[4:8] != b"ftyp":
+            problems.append("%s is not an MP4 (git LFS pointer or text conversion?)" % INTRO_VIDEO)
+    systemd = os.path.join(HMI_DIR, "systemd")
+    kiosk = read(os.path.join(systemd, "setup-kiosk.sh"))
+    unit = read(os.path.join(systemd, "ksphmi-splash.service"))
+    script_path = os.path.join(systemd, "ksphmi-intro.sh")
+    script = read(script_path) if os.path.isfile(script_path) else ""
+    header = read(os.path.join(HMI_DIR, "include", "intro.hpp"))
+    if "apt-get install -y --no-install-recommends mpv" not in kiosk:
+        problems.append("setup-kiosk.sh does not install mpv")
+    if "ksphmi-intro.sh" not in kiosk:
+        problems.append("setup-kiosk.sh does not mention ksphmi-intro.sh")
+    if not script:
+        problems.append("systemd/ksphmi-intro.sh missing")
+    if not re.search(r"^ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro\.sh$", unit, re.M):
+        problems.append("ksphmi-splash.service does not run ksphmi-intro.sh")
+    run_dir = re.search(r"^RuntimeDirectory=(\S+)$", unit, re.M)
+    hdr_dir = re.search(r'INTRO_DIR = "/run/([^"]+)"', header)
+    hdr_sock = re.search(r'INTRO_SOCKET = "([^"]+)"', header)
+    hdr_start = re.search(r'INTRO_STARTING = "([^"]+)"', header)
+    if not (run_dir and hdr_dir and run_dir.group(1) == hdr_dir.group(1)):
+        problems.append("RuntimeDirectory vs intro.hpp INTRO_DIR")
+    if not hdr_dir or '${RUNTIME_DIRECTORY:-/run/%s}' % hdr_dir.group(1) not in script:
+        problems.append("ksphmi-intro.sh default directory vs intro.hpp")
+    if not hdr_sock or 'sock="$dir/%s"' % hdr_sock.group(1) not in script:
+        problems.append("ksphmi-intro.sh socket name vs intro.hpp INTRO_SOCKET")
+    if not hdr_start or 'starting="$dir/%s"' % hdr_start.group(1) not in script:
+        problems.append("ksphmi-intro.sh starting marker vs intro.hpp INTRO_STARTING")
+    if "$app/%s" % INTRO_VIDEO not in script:
+        problems.append("ksphmi-intro.sh default video path")
+    if "--keep-open=always" not in script or "--input-ipc-server=\"$sock\"" not in script:
+        problems.append("mpv must hold the last frame and serve the IPC socket")
+    if not re.search(r"tar -cf - [^|]*\bassets\b", read(os.path.join(ROOT, "ci"))):
+        problems.append("./ci deploy_hmi does not copy assets/")
+    report("FAIL" if problems else "PASS", "hmi: boot intro",
+           ", ".join(problems) if problems else "video asset, mpv install, unit, socket /run/%s/%s agree" %
+           (hdr_dir.group(1), hdr_sock.group(1)))
+
+
 # Boot command line flags setup-kiosk.sh adds so that nothing but the splash and the HMI reaches the screen.
 KIOSK_CMDLINE = ("quiet", "logo.nologo", "vt.global_cursor_default=0", "consoleblank=0", "systemd.show_status=false")
 
@@ -675,6 +728,8 @@ def kiosk_problems(env):
         missing.append("getty@tty1 masked (is %s)" % (env.get("tty1") or "?"))
     if env.get("splashunit") != "enabled" or env.get("fbrule") != "yes":
         missing.append("ksphmi-splash.service enabled (is %s)" % (env.get("splashunit") or "absent"))
+    if env.get("mpv") == "no":
+        missing.append("mpv installed (boot intro video; the fallback loading screen shows instead)")
     return missing
 
 
@@ -717,6 +772,7 @@ def check_hmi(ctx):
              "&& echo yes || echo no)\"; "
              "echo \"splashunit=$(systemctl is-enabled ksphmi-splash.service 2>/dev/null || true)\"; "
              "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"; "
+             "echo \"mpv=$(command -v mpv >/dev/null && echo yes || echo no)\"; "
              "echo \"journal=$(test -f /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf && echo yes || echo no)\"; "
              "echo \"kioskwant=$(sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
              "echo \"kioskhave=$(cat /etc/ksphmi-kiosk.applied 2>/dev/null)\"")
@@ -765,7 +821,7 @@ def check_hmi(ctx):
     report("WARN" if missing else "PASS", "hmi: kiosk boot",
            "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi), "
            "then reboot" % ", ".join(missing)
-           if missing else "splash unit, quiet console, no firmware splash, login prompt masked")
+           if missing else "intro unit and mpv, quiet console, no firmware splash, login prompt masked")
     cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
     report("PASS" if cpp else "WARN", "hmi: C++ unit",
            "ksphmi.service runs ~/ksphmi/cpp/build/ksphmi" if cpp else
@@ -1194,7 +1250,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_git]
 
 
 def main():
