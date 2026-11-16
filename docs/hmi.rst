@@ -624,7 +624,8 @@ black/stainless NavBall bezel. The globe carries the same full markings as Class
 Steampunk (bearing columns with their pitch ladders, compass labels and parallels; the single local ladder
 with sparse meridians of the first version looked incomplete and fanned out with the nose straight up,
 user 2026-11-16), quaternion-driven attitude, volume lighting and live markers.
-Its side instruments are speed, heading, pitch, roll, throttle and G-force. SAS mode lamps
+Its side instruments are speed, heading, pitch, roll, throttle and G-force, plus the next
+maneuver node's remaining delta-v and time to node (empty without a node), as Classic and Steampunk show it. SAS mode lamps
 run along the bottom. Flight warnings use the header's priority caution window:
 stale data, surface/atmosphere periapsis, low power, escape, then fuel.
 

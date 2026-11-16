@@ -705,6 +705,12 @@ TEST(instrument_review_screenshots_on_request) {
     s.display->draw(pad, monotonic());
     CHECK(save_png(s.surface, prefix + "_zenith.png"));
     s.display->navball().hold.reset();
+    // A game-like maneuver node: kilometres per second, hours away, a long burn.
+    Snapshot node = demo(1200);
+    node.nav->node_dv = 1834.6, node.nav->node_remaining = 1834.6, node.nav->node_time = 3 * 3600 + 25 * 60 + 7;
+    node.nav->burn_seconds = 312;
+    s.display->draw(node, monotonic());
+    CHECK(save_png(s.surface, prefix + "_node.png"));
     }
 }
 
