@@ -258,3 +258,9 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 
 - Screenshot integration tests must let --seconds end the HMI normally: SIGTERM bypasses main exit and
   does not save --screenshot. Assert that each fresh capture exists before recording smoke.json as passed.
+
+- The Pi is shared with the KSP2 Redux port (C:\Users\alanl\wk\KSP2_decompilation). Its drop-in
+  ~/.config/systemd/user/ksphmi.service.d/60-redux.conf overrides ExecStart with a ~/ksphmi-redux build, so
+  `./ci deploy_hmi` then rebuilds ~/ksphmi/cpp but the screen keeps the Redux binary. Before trusting a deploy,
+  check `systemctl --user cat ksphmi.service`; never remove the drop-in without the user. Per-user settings
+  (skin etc.) go in ~/ksphmi/config.local.toml, which deploys never replace.
