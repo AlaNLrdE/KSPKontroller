@@ -76,6 +76,10 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   desynchronisation" in the log); `--profile=fast --hwdec=v4l2m2m-copy` ends 0.2 s apart. Judge sync from
   `audio EOF reached` vs `[vf] filter input EOF` in that log. To test renders without a reboot, stop
   `ksphmi.service` (user) first: it holds DRM master. Rebooting the Pi needs the user's sudo.
+- See what the Pi really shows: `ssh ksphmi 'pkill -USR1 -x ksphmi'`, then copy
+  `/run/user/1000/ksphmi-shot.png` (renderer read-back before present). For attitudes the demo never reaches
+  (nose straight up), `KSPHMI_SHOTS=DIR` on the render tests writes `<skin>_zenith.png`; the Flight Deck
+  NavBall's local ladder lost its heading at the pole (fan of 5 meridians, 2026-11-16).
 - Pi that boots to black and no ping: bisect `cmdline.txt` on the SD from Windows (FAT `bootfs` drive); keep the
   known-good line as a backup file next to it. Change one variable per boot; `systemd.mask=UNIT` in cmdline.txt
   disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means

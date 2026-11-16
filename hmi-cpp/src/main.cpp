@@ -36,6 +36,14 @@ namespace {
 const char* LOG = "ksphmi";
 volatile std::sig_atomic_t quit_signal = 0;
 void on_signal(int) { quit_signal = 1; }
+/// SIGUSR1: save the next frame exactly as the screen's renderer drew it (GPU included) to live_shot_path().
+volatile std::sig_atomic_t shot_signal = 0;
+void on_shot_signal(int) { shot_signal = 1; }
+
+std::string live_shot_path() {
+    const char* dir = std::getenv("XDG_RUNTIME_DIR");
+    return std::string(dir && *dir ? dir : "/tmp") + "/ksphmi-shot.png";
+}
 
 struct Args {
     std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor;
@@ -396,6 +404,9 @@ int run(int argc, char** argv) {
     }
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
+#ifdef SIGUSR1
+    std::signal(SIGUSR1, on_shot_signal);
+#endif
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
@@ -514,12 +525,18 @@ int run(int argc, char** argv) {
             else snap = std::make_shared<const Snapshot>(bench_source.sample(i + 1));
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick. Between samples
             // only the NavBall turns: a NavBall-only frame over the cached layer when there is one.
-            bool full = snap != last || snap->state != State::Flight || stale(*snap, tick);
+            const bool shot = shot_signal != 0;
+            bool full = shot || snap != last || snap->state != State::Flight || stale(*snap, tick);
             bool anim = !full && snap->state == State::Flight && display->navball().animating();
             if (full || anim) {
                 double t0 = monotonic();
                 if (!(anim && display->animate())) display->draw(*snap, t0), anim = false;
                 double t1 = monotonic(), c1 = thread_cpu();
+                if (shot) {  // before present: the back buffer is undefined after a page flip
+                    shot_signal = 0;
+                    if (out.screenshot(live_shot_path())) log::info(LOG, "live screenshot: " + live_shot_path());
+                    else log::warning(LOG, "live screenshot failed: " + std::string(SDL_GetError()));
+                }
                 out.present();
                 double t2 = monotonic(), c2 = thread_cpu();
                 draw_ms += (t1 - t0) * 1000, present_ms += (t2 - t1) * 1000, present_cpu_ms += (c2 - c1) * 1000, ++frames;
