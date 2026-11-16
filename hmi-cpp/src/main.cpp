@@ -32,16 +32,16 @@ volatile std::sig_atomic_t quit_signal = 0;
 void on_signal(int) { quit_signal = 1; }
 
 struct Args {
-    std::string config, address, size, screenshot, skin, layer_cache, splash_state;
-    bool demo = false, windowed = false, offscreen = false, splash = false, bench_anim = false;
+    std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor;
+    bool demo = false, windowed = false, desktop = false, offscreen = false, splash = false, bench_anim = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
 };
 
 void usage(FILE* out) {
     std::fprintf(out,
-                 "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed] [--size WxH]\n"
-                 "              [--skin classic|apollo]\n"
+                 "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed | --desktop] [--size WxH]\n"
+                 "              [--skin classic|apollo] [--monitor auto|N]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N [--bench-anim]] [--offscreen]\n"
                  "              [--layer-cache auto|on|off]\n"
                  "       ksphmi --splash [--screenshot FILE --size WxH [--splash-state STAGE]]\n\n"
@@ -51,6 +51,10 @@ void usage(FILE* out) {
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
                  "  --skin NAME        classic or apollo (overrides [display] skin)\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
+                 "  --desktop          on the PC that runs the game: full screen on the chosen monitor when it is\n"
+                 "                     not the primary one (display 0), else a window (./ci hmi)\n"
+                 "  --monitor M        auto (the last display when there are several) or a display index\n"
+                 "                     (overrides [display] monitor)\n"
                  "  --size WxH         window or screen size, for example 1920x1080\n"
                  "  --screenshot FILE  draw for --seconds, save the frame as PNG and exit (off-screen)\n"
                  "  --seconds S        how long --screenshot waits for data (default 1.5)\n"
@@ -87,6 +91,8 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--bench") value(v), a.bench = std::stoi(v);
         else if (k == "--demo") a.demo = true;
         else if (k == "--windowed") a.windowed = true;
+        else if (k == "--desktop") a.desktop = a.windowed = true;  // never the kiosk outputs or the boot hand-over
+        else if (k == "--monitor") value(a.monitor);
         else if (k == "--offscreen") a.offscreen = true;
         else if (k == "--bench-anim") a.bench_anim = true;
         else if (k == "--layer-cache") value(a.layer_cache);
@@ -177,15 +183,21 @@ private:
     bool open_sdl(const Config& cfg, const Args& args, int want_w, int want_h, bool need_gpu, std::string& why) {
         if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return why = std::string("SDL video: ") + SDL_GetError(), false;
         video_ = true;
-        bool fullscreen = cfg.display.fullscreen && !args.windowed;
+        const int displays = SDL_GetNumVideoDisplays();
+        const int monitor = monitor_index(cfg.display.monitor, displays);
+        // --desktop shares the PC with the game: take a secondary monitor whole, else stay a window.
+        bool fullscreen = args.desktop ? monitor != 0 : cfg.display.fullscreen && !args.windowed;
         Uint32 flags = 0;
         if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
         if (want_w <= 0 || want_h <= 0) {
             SDL_DisplayMode mode;
-            if (fullscreen && SDL_GetDesktopDisplayMode(0, &mode) == 0) want_w = mode.w, want_h = mode.h;
+            if (fullscreen && SDL_GetDesktopDisplayMode(monitor, &mode) == 0) want_w = mode.w, want_h = mode.h;
             else want_w = 1280, want_h = 800;
         }
-        window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, want_w, want_h, flags);
+        log::info(LOG, fmt::str("display %d of %d (monitor %s)%s", monitor, displays, cfg.display.monitor.c_str(),
+                                fullscreen ? ", full screen" : ", window"));
+        window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED_DISPLAY(monitor),
+                                   SDL_WINDOWPOS_CENTERED_DISPLAY(monitor), want_w, want_h, flags);
         if (!window_) return why = std::string("SDL window: ") + SDL_GetError(), false;
         renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
         if (!renderer_) {
@@ -273,6 +285,10 @@ int run(int argc, char** argv) {
     if (args.splash) return splash(args);
     Config cfg = load_config(args.config);
     if (!args.skin.empty()) cfg.display.skin = args.skin;
+    if (!args.monitor.empty()) {
+        if (!valid_monitor(args.monitor)) throw std::runtime_error("--monitor must be auto or a display index");
+        cfg.display.monitor = args.monitor;
+    }
     if (!args.address.empty()) cfg.krpc.address = args.address;  // one place: the source and the waiting screen
     int want_w = cfg.display.width, want_h = cfg.display.height;
     if (!args.size.empty()) {

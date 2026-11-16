@@ -225,12 +225,30 @@ void apply_toml(Config& c, const TomlValues& m) {
     c.display.fullscreen = to_bool(m, "display.fullscreen", c.display.fullscreen);
     c.display.width = to_int(m, "display.width", c.display.width);
     c.display.height = to_int(m, "display.height", c.display.height);
+    c.display.monitor = to_string(m, "display.monitor", c.display.monitor);
+    if (!valid_monitor(c.display.monitor))
+        throw std::runtime_error("display.monitor must be \"auto\" or a display index such as \"1\"");
     const double day_hours = to_double(m, "format.day_hours", c.format.day_hours);
     if (!std::isfinite(day_hours) || day_hours <= 0 || std::floor(day_hours) != day_hours ||
         day_hours > std::numeric_limits<int>::max())
         throw std::runtime_error("format.day_hours must be a positive integer within the int range");
     c.format.day_hours = static_cast<int>(day_hours);
     apply_vab(c, m);
+}
+
+bool valid_monitor(const std::string& setting) {
+    if (setting == "auto") return true;
+    if (setting.empty() || setting.size() > 2) return false;
+    for (char ch : setting)
+        if (ch < '0' || ch > '9') return false;
+    return true;
+}
+
+int monitor_index(const std::string& setting, int displays) {
+    if (displays <= 1 || !valid_monitor(setting)) return 0;
+    if (setting == "auto") return displays - 1;
+    int index = std::stoi(setting);
+    return index < displays ? index : 0;
 }
 
 std::string find_app_dir() {

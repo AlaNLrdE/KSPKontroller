@@ -518,6 +518,28 @@ TEST(config_integer_fields_reject_invalid_conversions) {
     rmdir(dir);
 }
 
+TEST(config_monitor_picks_the_secondary_display) {
+    CHECK_EQ(Config{}.display.monitor, std::string("auto"));
+    CHECK_EQ(monitor_index("auto", 0), 0);  // SDL error or no display
+    CHECK_EQ(monitor_index("auto", 1), 0);  // the Pi, or a PC with one monitor
+    CHECK_EQ(monitor_index("auto", 2), 1);  // the game keeps display 0
+    CHECK_EQ(monitor_index("auto", 3), 2);
+    CHECK_EQ(monitor_index("0", 2), 0);
+    CHECK_EQ(monitor_index("1", 3), 1);
+    CHECK_EQ(monitor_index("5", 2), 0);  // unplugged monitor: back to the primary one
+    for (const char* bad : {"", "-1", "1.5", "123", "second", "AUTO"}) CHECK(!valid_monitor(bad));
+    Config cfg;
+    apply_toml(cfg, parse_toml("[display]\nmonitor = \"1\""));
+    CHECK_EQ(cfg.display.monitor, std::string("1"));
+    bool rejected = false;
+    try {
+        apply_toml(cfg, parse_toml("[display]\nmonitor = \"left\""));
+    } catch (const std::runtime_error& e) {
+        rejected = std::string(e.what()).find("display.monitor must be") != std::string::npos;
+    }
+    CHECK(rejected);
+}
+
 TEST(config_day_hours_requires_a_positive_representable_integer) {
     for (const char* value : {"0", "-1", "0.5", "6.5", "inf", "-inf", "nan", "2147483648", "1e300"}) {
         Config cfg;

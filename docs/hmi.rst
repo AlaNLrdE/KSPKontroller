@@ -398,10 +398,21 @@ The binary finds it through
 under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
 ``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
-``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
---config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME --layer-cache auto|on|off``
-(``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
+``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --desktop --monitor auto|N --size WxH
+--screenshot FILE --seconds S --config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME
+--layer-cache auto|on|off`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).
+
+**Running the HMI on the game PC.** ``./ci hmi`` builds the HMI (inside WSL on Windows) and starts it with
+``--desktop``: ``[display] monitor`` (``auto`` by default, or a display index; ``--monitor``) picks the SDL
+display, and ``auto`` takes the last one when several are connected, so KSP1 or KSP2 keeps the primary
+monitor (display 0). A secondary monitor is used full screen; with a single monitor the HMI stays a
+window. WSL uses NAT networking here, so ``127.0.0.1`` is WSL itself: without ``--address`` or ``--demo``,
+``./ci hmi`` targets the Windows host (the default route's gateway) and exports it as
+``KSPHMI_REDUX_ADDRESS`` for the KSP2 Redux backend. kRPC listens on ``0.0.0.0`` (50000/50001, context
+UDP 50002) and the Redux endpoint binds UDP 50003 on all interfaces; Windows Firewall must allow inbound
+traffic from the WSL subnet. WSLg's multi-monitor support is limited: the log line
+``display N of M`` shows what SDL actually sees. On the Pi a single HDMI display keeps index 0.
 
 ``[display] skin`` picks the look: ``apollo`` (the default since 2026-11-14) or ``classic`` (the previous flat
 dark panels, kept for switching back). Apollo draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,

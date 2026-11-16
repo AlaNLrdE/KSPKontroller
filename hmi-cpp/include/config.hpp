@@ -31,6 +31,8 @@ struct Config {
         std::string layer_cache = "off";
         bool fullscreen = true;
         int width = 0, height = 0;
+        /// auto (the last display when there are several, so the game keeps the primary one) | display index
+        std::string monitor = "auto";
     } display;
     struct {
         int day_hours = 6;
@@ -60,6 +62,13 @@ void apply_toml(Config& cfg, const TomlValues& values);
 /// config.toml next to the application (see find_app_dir), then the local file, then the environment.
 /// With `path` (--config), only that file (plus the environment).
 Config load_config(const std::string& path = "");
+
+/// True for "auto" or a display index with at most two digits ([display] monitor, --monitor).
+bool valid_monitor(const std::string& setting);
+
+/// SDL display index for a [display] monitor setting with `displays` displays connected: "auto" picks the last
+/// one when there are several (0 otherwise); an index beyond the last display falls back to 0.
+int monitor_index(const std::string& setting, int displays);
 
 /// Directory holding config.toml: $KSPHMI_APP_DIR, else next to / above the executable, else the source tree.
 std::string find_app_dir();
