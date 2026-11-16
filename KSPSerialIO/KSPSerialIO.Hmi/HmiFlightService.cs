@@ -29,6 +29,16 @@ namespace KSPSerialIO.Hmi
             FlightInputHandler.state.mainThrottle = Mathf.Clamp01(value);
         }
 
+        /// <summary>The main throttle KSP applies to the active vessel (0..1), after the board, the keyboard and any
+        /// autopilot. kRPC's Control.Throttle reads kRPC's own pilot state instead: it stayed 0.0 while a live vessel
+        /// flew at full throttle (2026-11-16).</summary>
+        [KRPCProcedure]
+        public static float Throttle()
+        {
+            Vessel v = FlightGlobals.ActiveVessel;
+            return v != null ? v.ctrlState.mainThrottle : FlightInputHandler.state.mainThrottle;
+        }
+
         /// <summary>The VESSEL panel's side view (format v1): one convex outline per part. Fetch it when
         /// VesselState's revision differs from the shape held. Reads VesselViewCache only.</summary>
         [KRPCProcedure]

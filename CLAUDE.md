@@ -132,8 +132,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
   `target_speed_reference_frame`: `orbital_reference_frame` co-moves with the vessel and reads zero speed.
   Attitude uses the surface-frame quaternion; vessel axes are right, forward, down, surface axes up, north, east.
-- Classic/Steampunk NavBall markings use bold compass bearings only on the 0 and +/-45 degree pitch bands, and regular pitch
-  labels every 10 degrees. Lift horizon bearings 5 degrees into the blue hemisphere so their backgrounds
+- Every skin's NavBall (Apollo too, user 2026-11-16) uses the same markings: bold compass bearings only on the 0 and
+  +/-45 degree pitch bands, placed halfway between two meridian columns (never on a column: it crowds its line,
+  ticks and pitch numbers), and regular pitch labels every 10 degrees beside each column. Lift horizon bearings 5 degrees into the blue hemisphere so their backgrounds
   do not cover the brown ground. The fixed yellow boresight includes a center dot. Marker
   edge margins must account for the complete glyph size, so larger symbols cannot spill outside the globe.
 - NavBall volume lighting is a cached low-resolution alpha map, scaled once per size. Shade the globe and
@@ -144,8 +145,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - NavBall degree labels must not be hidden by screen-space rectangle collision tests: rolling changes rounded
   rectangles and causes flicker. Use continuous foreshortening and limb fading; pitch ladders have 10-degree
   major ticks and 5-degree minor ticks, with stroke widths scaled to display height.
-- Classic/Steampunk +/-45 degree NavBall parallels use thin, long horizontal segments interrupted at the compass-bearing
-  columns; keep these bands in addition to the local five-degree pitch ladder ticks.
+- The +/-45 degree NavBall parallels use thin, long horizontal segments interrupted where the compass bearings sit,
+  halfway between columns; keep these bands in addition to the local five-degree pitch ladder ticks.
 - HMI geometry uses the plain `Point2` coordinate type in `vec.hpp` instead of returning
   `std::pair<double, double>`: GCC on ARM emits historical C++14/C++17 ABI notes for the latter.
   Rebuild all HMI targets after coordinate type changes; do not disable `-Wpsabi` globally.
@@ -229,8 +230,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   does not implement an approved render. Steampunk bundles its generated source/runtime artwork and licensed
   typefaces under hmi-cpp/assets; keep them in deployment packages and review actual renderer captures.
 
-- Apollo Flight Deck uses proposal A materials/layout plus proposal B's local NavBall pitch ladder. Preserve
-  that profile and the quaternion/inertial physics separately from its generated material assets. NavBall
+- Apollo Flight Deck uses proposal A materials/layout plus proposal B's NavBall bezel, with the shared full
+  markings in every skin. Preserve that profile and the quaternion/inertial physics separately from its generated material assets. NavBall
   glyph caches must include font face, and cached redraw must restore the last frame's face; otherwise a
   Classic-to-Apollo switch changes cached animation pixels even when fresh full frames look correct.
 

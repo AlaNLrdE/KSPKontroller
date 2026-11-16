@@ -955,12 +955,12 @@ def check_vessel_view_contract(ctx):
     hmi_tests = read(os.path.join(HMI_DIR, "tests", "test_core.cpp"))
     server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
     data = os.path.join(HMI_DIR, "tests", "data")
-    procedures = ("SetAxes", "SetThrottle", "NudgeThrottle", "VesselShape", "VesselState")
+    procedures = ("SetAxes", "SetThrottle", "NudgeThrottle", "Throttle", "VesselShape", "VesselState")
     problems = []
     for what, ok in (
             ("service KSPHMIFlight in the Flight scene",
              re.search(r'KRPCService\(Name = "KSPHMIFlight", GameScene = GameScene\.Flight\)', service)),
-            ("plugin procedures " + "/".join(procedures), all("public static %s %s(" % ("string" if n.startswith("Vessel") else "void", n) in service for n in procedures)),
+            ("plugin procedures " + "/".join(procedures), all("public static %s %s(" % ("string" if n.startswith("Vessel") else "float" if n == "Throttle" else "void", n) in service for n in procedures)),
             ("HMI calls every KSPHMIFlight procedure", '"KSPHMIFlight"' in telemetry and all('"%s"' % n in telemetry for n in procedures)),
             ("kspsim serves every KSPHMIFlight procedure", 'name="KSPHMIFlight"' in server and all('"%s"' % n in server for n in procedures)),
             ("shared fixtures exist", all(os.path.isfile(os.path.join(data, f)) for f in ("vessel_shape_v1.txt", "vessel_state_v1.txt"))),

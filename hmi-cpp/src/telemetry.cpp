@@ -173,7 +173,7 @@ void optional_step(Step step, Failed failed) {
 /// Optional navball streams, owned separately so a missing target never interrupts orbital telemetry.
 class NavigationStreams {
 public:
-    NavigationStreams(Client& c, uint64_t vessel, double rate) : c_(c), vessel_(vessel), rate_(rate), common_(c), extra_(c) {
+    NavigationStreams(Client& c, uint64_t vessel, double rate) : c_(c), vessel_(vessel), rate_(rate), common_(c), extra_(c), plugin_(c) {
         frame_ = object(c, sc("Vessel_get_SurfaceReferenceFrame", {obj(vessel)}));
         uint64_t f = object(c, sc("Vessel_Flight", {obj(vessel), obj(frame_)}));
         uint64_t control = object(c, sc("Vessel_get_Control", {obj(vessel)}));
@@ -185,6 +185,9 @@ public:
             common_.add(name, sc(std::string("get_") + name), rate);
         for (const char* name : {"Mass", "AvailableThrust", "SpecificImpulse"})
             common_.add(name, sc(std::string("Vessel_get_") + name, {obj(vessel)}), rate);
+        // The throttle KSP applies, from KSPSerialIO.Hmi (0.19.7.3): kRPC's Control.Throttle reads kRPC's own pilot
+        // state and stays 0 while the player flies at full throttle. An older plugin keeps the kRPC value.
+        optional_step([&] { plugin_.add("Throttle", Call{"KSPHMIFlight", "Throttle", {}}, rate); }, [] {});
     }
 
     void invalidate() { key_valid_ = false; }
@@ -203,6 +206,8 @@ public:
         int sas_mode = pb::dec_sint32(c_.stream(common_.id("SASMode")).data);
         n.rcs = b("RCS");
         double throttle = f("Throttle");
+        if (plugin_.has("Throttle"))  // a value that does not decode drops the plugin stream: kRPC's value from then on
+            optional_step([&] { throttle = pb::dec_float(c_.stream(plugin_.id("Throttle")).data); }, [&] { plugin_.clear(); });
         auto nodes = pb::dec_items(c_.stream(common_.id("Nodes")).data);
         uint64_t dock = stream_object(c_, common_.id("TargetDockingPort"));
         uint64_t target_vessel = stream_object(c_, common_.id("TargetVessel"));
@@ -295,7 +300,7 @@ private:
     Client& c_;
     uint64_t vessel_, frame_ = 0;
     double rate_;
-    Group common_, extra_;
+    Group common_, extra_, plugin_;
     std::tuple<std::string, uint64_t, uint64_t> key_;
     bool key_valid_ = false;
     double retry_frame_at_ = 0;

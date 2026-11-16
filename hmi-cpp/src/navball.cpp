@@ -55,11 +55,11 @@ Navball::Navball() {
     for (int h = 0; h <= 360; h += 3) equator.points.push_back(globe(0, h));
     lines_.push_back(equator);
     // Stock-style broken parallels distinguish the +/-45 degree bands from the local five-degree ladder ticks.
-    // Gaps fall on meridians, leaving space for the bold compass bearings printed on these bands.
+    // Gaps fall halfway between meridians, leaving space for the bold compass bearings printed there.
     for (int pitch : {-45, 45})
         for (int heading = 0; heading < 360; heading += 45) {
             Line l{{}, 1};
-            for (int offset = 5; offset < 41; offset += 2) l.points.push_back(globe(pitch, heading + offset));
+            for (int offset = 28; offset < 63; offset += 2) l.points.push_back(globe(pitch, heading + offset));
             lines_.push_back(l);
         }
     // Local pitch ladders: long numbered ten-degree ticks and short five-degree ticks.
@@ -77,11 +77,23 @@ Navball::Navball() {
         for (int p = -90; p < 91; p += 2) l.points.push_back(globe(p, heading));
         lines_.push_back(l);
     }
-    // Separate heading and pitch labels: a meridian's number is a compass bearing, while the flanking numbers
-    // measure degrees above/below the horizon. Horizon bearings are lifted 5 degrees into the blue hemisphere so
-    // their backgrounds never straddle the brown ground, including when inverted.
+    // Like the stock NavBall, a broken meridian runs through each compass bearing, halfway between two columns:
+    // 3-degree dashes every 6 degrees, interrupted around the bearing labels on the horizon and +/-45 bands.
+    for (int heading = 0; heading < 360; heading += 45)
+        for (int p = -84; p < 84; p += 6) {
+            bool near_label = false;
+            for (int band : {5, 45, -45}) near_label = near_label || (p + 3 > band - 5 && p < band + 5);
+            if (near_label) continue;
+            Line l{{}, 1};
+            for (int q = p; q <= p + 3; ++q) l.points.push_back(globe(q, heading + 22.5));
+            lines_.push_back(l);
+        }
+    // Separate heading and pitch labels: the bold compass bearings sit halfway between two meridian columns (user,
+    // 2026-11-16: on the column they crowded its line, ticks and pitch numbers), while the numbers flanking each
+    // column measure degrees above/below the horizon. Horizon bearings are lifted 5 degrees into the blue
+    // hemisphere so their backgrounds never straddle the brown ground, including when inverted.
     for (int p : {5, 45, -45})
-        for (int h = 0; h < 360; h += 45) labels_.push_back({std::to_string(h), double(p), double(h), true});
+        for (int h = 0; h < 360; h += 45) labels_.push_back({std::to_string(h), double(p), h + 22.5, true});
     for (int p = -80; p < 81; p += 10) {
         if (p == 0) continue;
         for (int h = 0; h < 360; h += 45)
@@ -98,7 +110,7 @@ Navball::~Navball() {
 void Navball::build_labels(Canvas& c) {
     // Knock out the grid under the numerals, like the stock texture: each label is white text on its
     // hemisphere's colour, composed once into one atlas.
-    int px = std::max(8, static_cast<int>((flight_deck ? 3.0 : 2.3) * c.u));
+    int px = std::max(8, static_cast<int>(2.3 * c.u));
     if (label_atlas_ && label_px_ == px && renderer_ == c.renderer() && label_font_ == c.font_path()) return;
     if (label_atlas_) SDL_DestroyTexture(label_atlas_);
     label_atlas_ = nullptr;
@@ -343,38 +355,9 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         c.polyline(segment, false, stroke, INK);
     };
     std::vector<Pt> segment;
-    const double heading = degrees_of(std::atan2(axes.forward.z, axes.forward.y));
-    double ladder = heading;
-    if (flight_deck) {
-        // Proposal B uses one continuous local pitch ladder, rather than repeated compass-number columns. It runs
-        // along the meridian that looks vertical through the boresight: the nose's heading, blended with the
-        // vessel's up axis so it stays defined and screen-vertical near the poles (nose straight up on the pad:
-        // the nose alone has no heading there and the ladder pointed anywhere; user photos 2026-11-16).
-        const double sign = axes.forward.x < 0 ? -1.0 : 1.0;
-        const double ladder_y = axes.forward.y - sign * axes.up.y, ladder_z = axes.forward.z - sign * axes.up.z;
-        if (std::hypot(ladder_y, ladder_z) > 1e-6) ladder = degrees_of(std::atan2(ladder_z, ladder_y));
-        auto curve = [&](const std::vector<Vec3>& vectors, int width, Color color) {
-            std::vector<Pt> pts;
-            for (const auto& vector : vectors) {
-                Vec3 p = projected(vector, axes);
-                if (p.z > .02) pts.push_back(point(p));
-                else { if (pts.size() > 1) c.polyline(pts, false, std::max(1.0f, float(width*.13*u)), color); pts.clear(); }
-            }
-            if (pts.size() > 1) c.polyline(pts, false, std::max(1.0f, float(width*.13*u)), color);
-        };
-        // Sparse meridians every 30 degrees all the way round: near a pole the whole circle faces the viewer.
-        for (int offset = -150; offset <= 180; offset += 30) {
-            std::vector<Vec3> meridian;
-            for (int pitch=-90; pitch<=90; pitch+=3) meridian.push_back(globe(pitch,ladder+offset));
-            curve(meridian,1,Color{115,164,174});
-        }
-        for (int pitch=-80; pitch<=80; pitch+=5) {
-            const int span=pitch==0?90:pitch%10==0?17:10;
-            std::vector<Vec3> rung;
-            for (int offset=-span;offset<=span;offset+=1) rung.push_back(globe(pitch,ladder+offset));
-            curve(rung,pitch%10==0?2:1,INK);
-        }
-    } else {
+    // Every skin draws the same full markings (meridians, pitch ladders, bearings and labels). The Apollo
+    // Flight Deck once drew a single local ladder with sparse meridians: incomplete beside Classic and
+    // Steampunk, and a fan pointing anywhere with the nose straight up (user, 2026-11-16).
     for (const Line& line : lines_) {
         segment.clear();
         for (const Vec3& vector : line.points) {
@@ -388,17 +371,11 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         }
         stroke_line(segment, line.width);
     }
-    }
     build_labels(c);
     if (label_atlas_) {
         std::vector<SDL_Vertex> verts;
         std::vector<int> idx;
-        std::vector<Label> local_labels;
-        if (flight_deck) {
-            for (int pitch=-80;pitch<=80;pitch+=10) if (pitch)
-                for (int side : {-1,1}) local_labels.push_back({std::to_string(pitch),double(pitch),ladder+side*22,false});
-        }
-        for (const Label& l : flight_deck ? local_labels : labels_) {
+        for (const Label& l : labels_) {
             auto projection = label_projection(l.pitch, l.heading, axes);
             if (!projection) continue;
             auto it = sprites_.find(sprite_key(l.text, l.is_heading, l.pitch >= 0));

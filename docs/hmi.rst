@@ -628,8 +628,8 @@ altitude odometer, resource pictograms and a generated silver/graphite NavBall b
 ``ksp2`` (Ctrl+5) uses dark navy cards, blue-violet title bands, technical Chakra Petch
 lettering, cyan units, green active states and a segmented dark NavBall ring.
 Both retain the current orbital physics and show the shared body catalog in colour.
-KSP1 uses the complete stock-style degree grid; KSP2 keeps the pole-safe local pitch
-ladder and twelve meridians around the zenith.
+Both use the shared complete stock-style degree grid, with twelve meridians around
+the zenith and compass bearings between columns on broken meridians.
 
 The full scene families use their own chrome: flight metrics/resources/history/staging,
 link search and no-vessel state, all eight facility checklists, VAB construction, actions,
@@ -656,10 +656,12 @@ Apollo Flight Deck
 Apollo Flight Deck (approved 2026-11-16) implements proposal A's light painted aluminum
 mounting plates, steel fasteners, charcoal inset modules, smoked instrument windows,
 Barlow Condensed headings and green seven-segment readings, combined with proposal B's
-black/stainless NavBall bezel. The NavBall uses a single local five/ten-degree pitch
-ladder along the meridian that looks vertical through the boresight (the nose heading blended with the
-vessel's up axis, so it stays defined with the nose straight up), meridians every 30 degrees all round, quaternion-driven attitude, volume lighting and live markers.
-Its side instruments are speed, heading, pitch, roll, throttle and G-force. SAS mode lamps
+black/stainless NavBall bezel. The globe carries the same full markings as Classic and
+Steampunk (bearing columns with their pitch ladders, compass labels and parallels; the single local ladder
+with sparse meridians of the first version looked incomplete and fanned out with the nose straight up,
+user 2026-11-16), quaternion-driven attitude, volume lighting and live markers.
+Its side instruments are speed, heading, pitch, roll, throttle and G-force, plus the next
+maneuver node's remaining delta-v and time to node (empty without a node), as Classic and Steampunk show it. SAS mode lamps
 run along the bottom. Flight warnings use the header's priority caution window:
 stale data, surface/atmosphere periapsis, low power, escape, then fuel.
 

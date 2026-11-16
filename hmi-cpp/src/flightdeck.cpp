@@ -340,17 +340,19 @@ void FlightDeck::draw(Canvas& c, bool art, const Snapshot& s, double now) {
                  v.w * .17);
         }
     }
-    // NavBall B: steel/black annulus, six recessed side instruments, mode lamps below.
+    // NavBall B: steel/black annulus, eight recessed side instruments (the bottom pair is the maneuver node, as
+    // Classic and Steampunk show it; user 2026-11-16), mode lamps below. The rows share the height above the lamps.
     const Rect nav = layout.navball;
     const auto g = Navball::globe_geometry(c, nav, false, true);
     const double outer = g.r + 3.1 * u, side = std::max(5 * u, (nav.w - 2 * outer - 5 * u) / 2), lx = nav.x + 1.6 * u,
                  rx = nav.right() - side - 1.6 * u;
-    const char* read_labels[] = {"SPEED", "HEADING", "PITCH", "ROLL", "THROTTLE", "G-FORCE"};
-    const double read_h = 9 * u;
-    for (int i = 0; i < 6; ++i) {
-        const int j = i % 3;
-        const double x = i < 3 ? lx : rx;
-        const Rect r = Rect::f(x, nav.y + (7 + j * 13) * u, side, read_h);
+    const char* read_labels[] = {"SPEED", "HEADING", "PITCH", "NODE DV", "ROLL", "THROTTLE", "G-FORCE", "TIME TO NODE"};
+    const double rows_top = nav.y + 5 * u, rows_bottom = nav.bottom() - 8.5 * u;
+    const double pitch = (rows_bottom - rows_top) / 4, read_h = std::min(9 * u, pitch - 1.2 * u);
+    for (int i = 0; i < 8; ++i) {
+        const int j = i % 4;
+        const double x = i < 4 ? lx : rx;
+        const Rect r = Rect::f(x, rows_top + j * pitch, side, read_h);
         const Rect window = Rect::f(r.x + .8 * u, r.y + 3.6 * u, r.w - 1.6 * u, r.h - 4.3 * u);
         if (art) {
             sliced(c, assets->module, r, 1.3 * u);
@@ -372,18 +374,24 @@ void FlightDeck::draw(Canvas& c, bool art, const Snapshot& s, double now) {
                     n = number(t.pitch, 1);
                     unit = "deg";
                 }
-                if (i == 3) {
+                if (i == 3) {  // remaining delta-v of the next node (its total when the source has no progress)
+                    if (t.node_remaining || t.node_dv)
+                        n = number(std::max(0.0, t.node_remaining.value_or(t.node_dv.value_or(0))), 1);
+                    unit = "m/s";
+                }
+                if (i == 4) {
                     n = number(t.roll, 1);
                     unit = "deg";
                 }
-                if (i == 4) {
+                if (i == 5) {
                     n = number(t.throttle * 100);
                     unit = "%";
                 }
-                if (i == 5) {
+                if (i == 6) {
                     n = number(t.g_force, 2);
                     unit = "g";
                 }
+                if (i == 7 && t.node_time) n = fmt::duration(*t.node_time);
             }
             value(c, window, n, unit);
         }
