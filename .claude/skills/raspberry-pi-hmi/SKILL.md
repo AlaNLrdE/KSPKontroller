@@ -291,3 +291,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   after clicking the taskbar icon). If no WSLg window shows at all, `wsl --shutdown` (ask: it stops all
   WSL users) revived it. Check with a Windows screen capture (CopyFromScreen), not the HMI log.
   Unverified: Windows Firewall for inbound WSL traffic.
+- VESSEL panel looks wrong in game: dump `conn.ksphmi_flight.vessel_shape()` with the venv krpc client and
+  compare each hull's extents with `part.bounding_box(root.reference_frame)`. Plume FX meshes (Waterfall) sit
+  under the part model, stay enabled at zero throttle and stretched outlines tens of metres (fixed 0.19.7.1 by
+  skipping effect shaders); kRPC's own bounding boxes include them too, so they are not ground truth.
