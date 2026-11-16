@@ -51,8 +51,8 @@ void usage(FILE* out) {
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
                  "  --skin NAME        classic or apollo (overrides [display] skin)\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
-                 "  --desktop          on the PC that runs the game: full screen on the chosen monitor when it is\n"
-                 "                     not the primary one (display 0), else a window (./ci hmi)\n"
+                 "  --desktop          on the PC that runs the game: a window on the chosen monitor, never full\n"
+                 "                     screen (./ci hmi; WSLg draws nothing for full-screen windows)\n"
                  "  --monitor M        auto (the last display when there are several) or a display index\n"
                  "                     (overrides [display] monitor)\n"
                  "  --size WxH         window or screen size, for example 1920x1080\n"
@@ -185,8 +185,10 @@ private:
         video_ = true;
         const int displays = SDL_GetNumVideoDisplays();
         const int monitor = monitor_index(cfg.display.monitor, displays);
-        // --desktop shares the PC with the game: take a secondary monitor whole, else stay a window.
-        bool fullscreen = args.desktop ? monitor != 0 : cfg.display.fullscreen && !args.windowed;
+        // --desktop shares the PC with the game: always a plain window, on the chosen monitor. WSLg (2026-11-15,
+        // secondary monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows
+        // there; only a plain decorated window was visible.
+        bool fullscreen = !args.desktop && cfg.display.fullscreen && !args.windowed;
         Uint32 flags = 0;
         if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
         if (want_w <= 0 || want_h <= 0) {

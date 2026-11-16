@@ -267,5 +267,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 
 - `./ci hmi` on this PC: WSL runs with NAT networking, so 127.0.0.1 is WSL, not Windows. Without --address
   it targets the Windows host (default-route gateway) and exports KSPHMI_REDUX_ADDRESS. `--desktop` +
-  `[display] monitor = auto` goes full screen on the last SDL display; WSLg saw both monitors
-  (`display 1 of 2` in the log, 2026-11-15). Unverified: Windows Firewall for inbound WSL traffic.
+  `[display] monitor = auto` opens a plain window on the last SDL display. WSLg (secondary monitor at
+  175%) drew NOTHING for full-screen, borderless or maximized X11 windows there, and placed plain windows
+  offset; check with a Windows screen capture (System.Drawing CopyFromScreen), not the HMI log.
+  Unverified: Windows Firewall for inbound WSL traffic.

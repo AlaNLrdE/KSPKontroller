@@ -21,7 +21,7 @@
 #   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
 #                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
 #   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows in WSL
-#   ./ci hmi [ARGS]          Build it and run it on this PC: full screen on a secondary monitor, else a window;
+#   ./ci hmi [ARGS]          Build it and run it on this PC in a window on the secondary monitor (if any);
 #                            targets the game on this PC (Windows host from WSL); --demo: no KSP needed
 #   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board
 #   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
@@ -659,7 +659,7 @@ build_hmi() {
 }
 
 # Build, then run it on this PC (WSLg on Windows); ARGS as ksphmi --help, e.g. --demo.
-# --desktop: full screen on a secondary monitor when there is one ([display] monitor), else a window.
+# --desktop: a window on the [display] monitor (auto: the last one); never full screen (WSLg draws nothing).
 # Under WSL (NAT networking) 127.0.0.1 is WSL itself: without --address/--demo, target the Windows host, where
 # KSP1's kRPC (0.0.0.0:50000/50001, UDP 50002) and the KSP2 Redux endpoint (UDP 50003) listen.
 hmi() {
