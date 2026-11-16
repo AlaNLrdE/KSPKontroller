@@ -86,6 +86,47 @@ Rect orbit_panel(const Screen& s) { return flight_layout(*s.canvas).orbit; }
 
 Snapshot demo(double ut = 0) { return DemoSource().sample(ut); }
 
+/// The live game of 2026-11-16: a 79 km orbit of Duna, Ike targeted, a 284 m/s node 1819 s ahead raising Ap to
+/// 2.6 Mm and entering Ike's sphere of influence. `encounter` false: the same plan just misses Ike (closest
+/// approach markers instead of the encounter).
+Snapshot duna_ike(bool encounter) {
+    const double MU = 3.0136321e11, R = 320000, MI = 1.8568369e10, RI = 130000, SI = 1049598.5, RO = 3.2e6;
+    Snapshot s = demo(1200);
+    s.body = "Duna", s.body_radius = R, s.atmosphere_depth = 50000, s.apoapsis = s.periapsis = 79000;
+    s.encounters.clear();
+    const double r = R + 79000, v = std::sqrt(MU / r);
+    auto around = [](double angle, double radius) { return Vec3{std::cos(angle), 0, std::sin(angle)} * radius; };
+    auto ahead = [](double angle, double speed) { return Vec3{-std::sin(angle), 0, std::cos(angle)} * speed; };
+    const Axes axes{{1, 0, 0}, {0, 0, 1}};
+    s.orbit_state = OrbitState{around(0, r), ahead(0, v), MU, axes};
+    // The post-burn ellipse from the node: Pe 79,354 m, Ap 2,599,287 m.
+    const double node = 1819 * std::sqrt(MU / (r * r * r)), rp = R + 79354, ra = R + 2599287;
+    const double vp = std::sqrt(MU * 2 * ra / (rp * (rp + ra)));
+    s.maneuver_orbit = ManeuverOrbit{around(node, rp), ahead(node, vp), s.ut + 1819, 47921949};
+    // Ike where the planned path meets its sphere (true anomaly 2.66 on the ellipse), and where it is now.
+    const double e = (ra - rp) / (ra + rp), p = rp * (1 + e), nu = 2.6625, h = std::sqrt(MU * p);
+    const double re = p / (1 + e * std::cos(nu));
+    Vec3 entry = around(node + nu, re);
+    Vec3 velocity = (around(node + nu, 1) * (MU / h * e * std::sin(nu))) + ahead(node + nu, MU / h * (1 + e * std::cos(nu)));
+    const double psi = node + nu - std::acos((RO * RO + re * re - SI * SI) / (2 * RO * re));
+    const double vi = std::sqrt(MU / RO), n = std::sqrt(MU / (RO * RO * RO)), te = 6580.8;
+    TargetOrbit ike;
+    ike.name = "Ike", ike.body = true, ike.radius = RI;
+    ike.position = around(psi - n * te, RO), ike.velocity = ahead(psi - n * te, vi);
+    s.target_orbit = ike;
+    if (encounter) {
+        Encounter x;
+        x.body = "Ike", x.radius = RI, x.mu = MI, x.soi = SI, x.ut = s.ut + te, x.planned = true;
+        x.center = around(psi, RO), x.position = entry - x.center, x.velocity = velocity - ahead(psi, vi);
+        s.encounters.push_back(x);
+        s.approach.reset();
+    } else {  // the plan 0.4 rad earlier: Ike passes 1.6 Mm ahead of the apoapsis
+        Vec3 ap = around(node + PI, ra);
+        s.approach = ClosestApproach{s.ut + 1819 + 2 * 3600, true, ap, around(node + PI + .45, RO)};
+    }
+    return s;
+}
+
 }  // namespace
 
 TEST(out_of_range_clock_telemetry_renders_in_both_skins) {
@@ -343,6 +384,64 @@ TEST(navball_labels_fit_and_globe_never_leaks_into_other_panels) {
         broken.rotation = {0, 0, 0, 0};  // a zero quaternion must not take the screen down
         s.display->navball().draw(*s.canvas, panel, broken);
     }
+}
+
+TEST(target_approach_and_encounter_draw_inside_the_orbit_panel) {
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"})
+        for (const auto& size : SIZES) {
+            Screen s(size.first, size.second, skin);
+            for (bool encounter : {false, true}) {
+                Snapshot snap = duna_ike(encounter);
+                s.display->draw(snap, monotonic());
+                s.canvas->flush();
+                CHECK(s.display->last_target_marker.has_value());
+                CHECK(s.display->last_encounter_marker.has_value() == encounter);
+                CHECK(s.display->last_approach_marker.has_value() == !encounter);  // KSP shows one or the other
+                Rect panel = orbit_panel(s);
+                s.fill(FILL);
+                s.display->orbit(panel, snap);
+                s.canvas->flush();
+                CHECK(s.untouched_outside(panel, FILL_PIXEL));
+                for (const auto& marker : {s.display->last_target_marker, s.display->last_encounter_marker})
+                    if (marker) CHECK(panel.contains(Rect::f(marker->x, marker->y, 1, 1)));
+            }
+            // A target vessel around another body never reaches the snapshot (the source checks the parent), and
+            // broken values draw nothing rather than garbage.
+            Snapshot broken = duna_ike(true);
+            broken.target_orbit->position = {NAN, 0, 0};
+            broken.encounters.front().mu = 0;
+            broken.approach = ClosestApproach{0, false, {NAN, 0, 0}, {0, 0, 0}};
+            s.display->draw(broken, monotonic());
+            s.canvas->flush();
+            CHECK(!s.display->last_target_marker && !s.display->last_encounter_marker && !s.display->last_approach_marker);
+        }
+}
+
+TEST(orbit_scale_holds_while_optional_data_flickers) {
+    Screen s(1920, 1080, "classic");
+    Rect panel = orbit_panel(s);
+    Snapshot full = duna_ike(true), bare = duna_ike(true);
+    bare.maneuver_orbit.reset(), bare.target_orbit.reset(), bare.encounters.clear(), bare.approach.reset();
+    auto scale_at = [&](Snapshot snap, double t) {
+        snap.received = t;
+        s.display->orbit(panel, snap);
+        return s.display->last_orbit_scale;
+    };
+    const double wide = scale_at(full, 100);
+    double low = wide, high = wide;
+    for (int i = 1; i <= 40; ++i) {  // 4 s of a node / target that comes and goes at every sample
+        double k = scale_at(i % 2 ? bare : full, 100 + .1 * i);
+        low = std::min(low, k), high = std::max(high, k);
+    }
+    CHECK(high / low < 1.03);
+    double held = scale_at(bare, 104.5);
+    CHECK(held / wide < 1.03);  // the bare orbit alone, but only 0.5 s after the plan vanished
+    double later = scale_at(bare, 107);
+    CHECK(later > 2 * wide);  // gone for over 2 s: the view closes in on the current orbit
+    // Content that appears grows the view at once, so the target never draws outside it.
+    double grown = scale_at(full, 107.1);
+    CHECK_NEAR(grown, wide, wide * .03);
+    CHECK(s.display->last_target_marker.has_value());
 }
 
 TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {
@@ -749,6 +848,11 @@ TEST(instrument_review_screenshots_on_request) {
     sun.body = "Sun", sun.body_radius = 261600000, sun.atmosphere_depth = 0, sun.maneuver_orbit.reset();
     s.display->draw(sun, monotonic());
     CHECK(save_png(s.surface, prefix + "_sun.png"));
+    // Duna with Ike targeted (live game 2026-11-16): the closest approach markers, then the planned encounter.
+    s.display->draw(duna_ike(false), monotonic());
+    CHECK(save_png(s.surface, prefix + "_target.png"));
+    s.display->draw(duna_ike(true), monotonic());
+    CHECK(save_png(s.surface, prefix + "_encounter.png"));
     }
 }
 
