@@ -77,6 +77,17 @@ Navball::Navball() {
         for (int p = -90; p < 91; p += 2) l.points.push_back(globe(p, heading));
         lines_.push_back(l);
     }
+    // Like the stock NavBall, a broken meridian runs through each compass bearing, halfway between two columns:
+    // 3-degree dashes every 6 degrees, interrupted around the bearing labels on the horizon and +/-45 bands.
+    for (int heading = 0; heading < 360; heading += 45)
+        for (int p = -84; p < 84; p += 6) {
+            bool near_label = false;
+            for (int band : {5, 45, -45}) near_label = near_label || (p + 3 > band - 5 && p < band + 5);
+            if (near_label) continue;
+            Line l{{}, 1};
+            for (int q = p; q <= p + 3; ++q) l.points.push_back(globe(q, heading + 22.5));
+            lines_.push_back(l);
+        }
     // Separate heading and pitch labels: the bold compass bearings sit halfway between two meridian columns (user,
     // 2026-11-16: on the column they crowded its line, ticks and pitch numbers), while the numbers flanking each
     // column measure degrees above/below the horizon. Horizon bearings are lifted 5 degrees into the blue
