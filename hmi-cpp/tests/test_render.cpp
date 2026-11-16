@@ -737,6 +737,18 @@ TEST(instrument_review_screenshots_on_request) {
     node.nav->burn_seconds = 312;
     s.display->draw(node, monotonic());
     CHECK(save_png(s.surface, prefix + "_node.png"));
+    // Around the Sun (user, 2026-11-16): a 17 Gm orbit drew Kerbol as a 2-3 px dot; the disc keeps a visible size.
+    Snapshot sun = demo(1200);
+    if (sun.orbit_state) {
+        OrbitState o = *sun.orbit_state;
+        const double k = 1.686e10 / std::sqrt(dot(o.position, o.position)), mu = 1.1723328e18;
+        const double v = std::sqrt(mu / o.mu / k);
+        o.position = o.position * k, o.velocity = o.velocity * v, o.mu = mu;
+        sun.orbit_state = o;
+    }
+    sun.body = "Sun", sun.body_radius = 261600000, sun.atmosphere_depth = 0, sun.maneuver_orbit.reset();
+    s.display->draw(sun, monotonic());
+    CHECK(save_png(s.surface, prefix + "_sun.png"));
     }
 }
 
