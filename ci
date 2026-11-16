@@ -884,8 +884,11 @@ deploy_hmi() {
   pc_ip="$(hmi_pc_address)"
 
   log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
-  # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
-  (cd "$HMI_DIR" && tar -cf - CMakeLists.txt config.toml include src tests systemd assets) |
+  # cd + relative names: GNU tar reads a "C:/..." argument as a remote host. macOS bsdtar would add AppleDouble
+  # "._*" files and xattr headers: "mv cpp.new/*" leaves the dot files behind and "rmdir cpp.new" then fails.
+  local tar_opts=()
+  [ "$(uname -s)" = Darwin ] && tar_opts=(--no-xattrs --no-mac-metadata)
+  (cd "$HMI_DIR" && COPYFILE_DISABLE=1 tar ${tar_opts[@]+"${tar_opts[@]}"} -cf - CMakeLists.txt config.toml include src tests systemd assets) |
     hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -xf -
       find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
       mv cpp.new/* cpp/; rmdir cpp.new'

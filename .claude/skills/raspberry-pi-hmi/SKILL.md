@@ -24,6 +24,12 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 
 ## Deploy and check
 
+- Only one machine deploys at a time: Mac and PC both run `./ci deploy_hmi` against the same `~/ksphmi/cpp.new`
+  and build directory. Two runs at once (2026-11-16) mixed trees and objects (tests SegFault, `tar: Cannot mkdir`).
+  Announce the deploy on the mailbox and wait for the other agent's ACK first.
+- On macOS `deploy_hmi` packs with `COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata`: bsdtar's AppleDouble
+  `._*` files stayed in `cpp.new` after `mv cpp.new/*`, so `rmdir cpp.new` failed the copy.
+
 1. `./ci test_hmi` (native MSYS2 here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
    command), copy to `~/ksphmi/cpp`, `cmake` Release + `cmake --build -j4` + `ctest` **on the Pi** (a failure stops
    before the restart, the old binary keeps running), install the unit, restart. It requires `active` **and**
