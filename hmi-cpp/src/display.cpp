@@ -1175,23 +1175,55 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     if (s.atmosphere_depth > 0)
         c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), (orbit_crt ? orbit_ink(ATMOSPHERE) : OrbitArt::atmosphere_color(s.body)));
     const float orbit_width = static_cast<float>(std::max(1.5, .14 * u));  // as the dashed orbit
-    auto solid = [&](const Conic& c, double from, double to, Color color, float width, const Vec3& origin) {
+    // Like KSP's map view, an orbit line is brightest and widest just behind its body or vessel (the path it has
+    // just travelled) and fades and thins towards where it is going (user, 2026-11-16). `here` is the object's true
+    // anomaly; without one the line is drawn uniform. Drawn in 24 steps of opaque colour (no alpha blending).
+    auto solid = [&](const Conic& c, double from, double to, Color color, float width, const Vec3& origin,
+                     std::optional<double> here) {
+        auto shade = [&](double anomaly) {
+            if (!here) return 1.0;
+            double behind = std::fmod(*here - anomaly, 2 * PI);
+            if (behind < 0) behind += 2 * PI;
+            return 1.0 - behind / (2 * PI);  // 1 just behind the object, 0 just ahead of it
+        };
         std::vector<Pt> segment;
+        int step = -1;
+        auto flush = [&] {
+            if (segment.size() > 1) {
+                const double k = step < 0 ? 1.0 : (step + .5) / 24;
+                orbit_line(segment, false, static_cast<float>(width * (.55 + .65 * k)), mix(BG, color, .3 + .7 * k));
+            }
+        };
         for (int index = 0; index <= 240; ++index) {
-            auto vector = c.position(from + (to - from) * index / 240);
+            const double anomaly = from + (to - from) * index / 240;
+            auto vector = c.position(anomaly);
             if (vector && dot(*vector + origin, *vector + origin) <= (12 * reach) * (12 * reach)) {
-                segment.push_back(point(*vector + origin));
+                const int now = here ? std::min(23, static_cast<int>(shade(anomaly) * 24)) : -1;
+                Pt p = point(*vector + origin);
+                if (now != step && !segment.empty()) {
+                    flush();
+                    Pt last = segment.back();
+                    segment.clear();
+                    segment.push_back(last);  // keep the line continuous across shade steps
+                }
+                step = now;
+                segment.push_back(p);
             } else {
-                if (segment.size() > 1) orbit_line(segment, false, width, color);
+                flush();
                 segment.clear();
             }
         }
-        if (segment.size() > 1) orbit_line(segment, false, width, color);
+        flush();
     };
-    if (target) solid(*target, -PI, PI, orbit_style.target, orbit_width * .85f, Vec3{});
+    if (target) {
+        std::optional<double> at;
+        if (s.target_orbit) at = anomaly_of(*target, s.target_orbit->position);
+        solid(*target, -PI, PI, orbit_style.target, orbit_width * .85f, Vec3{}, at);
+    }
     if (conic) {
         double from = current_span ? current_span->from : -PI, to = current_span ? current_span->to : PI;
-        solid(*conic, from, to, orbit_body ? Color{155, 242, 139} : ACCENT, orbit_width, Vec3{});
+        solid(*conic, from, to, orbit_body ? Color{155, 242, 139} : ACCENT, orbit_width, Vec3{},
+              anomaly_of(*conic, state.position));
     }
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
