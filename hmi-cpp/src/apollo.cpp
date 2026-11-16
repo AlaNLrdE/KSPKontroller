@@ -607,7 +607,7 @@ public:
             c.circle(float(cx), float(cy), float(nut * 1.3), palette.BEZEL_HI);
             std::vector<Pt> hex;
             for (int i = 0; i < 6; ++i)
-                hex.push_back({float(cx + nut * std::cos(i * M_PI / 3)), float(cy + nut * std::sin(i * M_PI / 3))});
+                hex.push_back({float(cx + nut * std::cos(i * PI / 3)), float(cy + nut * std::sin(i * PI / 3))});
             c.polygon(hex, brass ? Color{196, 150, 72} : Color{168, 171, 172});
             c.circle(float(cx), float(cy), float(nut * .55), brass ? Color{120, 84, 36} : Color{92, 95, 97});
             return;
