@@ -1,4 +1,5 @@
 #include "display.hpp"
+#include "resource_ui.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -736,25 +737,30 @@ void Display::resources(const Rect& rect, const Snapshot& snap) {
     const double u = c_.u;
     panel(c_, rect);
     c_.text("RESOURCES", 2.4, LABEL, rect.x + 1.3 * u, rect.y + u);
-    c_.text("VESSEL TOTALS \xC2\xB7 KSP UNITS", 1.7, MUTED, rect.right() - 1.3 * u, rect.y + u, Anchor::TopRight);
+    const auto resource_names = hmi_resource_names(snap);
+    const auto resource_labels = hmi_resource_labels(snap, RESOURCE_LABELS.data());
+    const bool native = snap.systems && snap.systems->native_resources;
+    c_.text(native ? "VESSEL TOTALS \xC2\xB7 NATIVE UNITS" : "VESSEL TOTALS \xC2\xB7 KSP UNITS", 1.7, MUTED, rect.right() - 1.3 * u, rect.y + u, Anchor::TopRight);
     if (!snap.systems) {
         c_.text("Resource data unavailable", 2.4, MUTED, rect.centerx(), rect.centery(), Anchor::Center);
         return;
     }
     std::vector<std::pair<int, const Resource*>> visible;  // index in RESOURCE_NAMES, resource
-    for (int i = 0; i < static_cast<int>(RESOURCE_NAMES.size()); ++i) {
+    for (int i = 0; i < static_cast<int>(resource_names.size()); ++i) {
         const Resource* found = nullptr;
         for (const auto& r : snap.systems->resources)
-            if (r.name == RESOURCE_NAMES[i]) found = &r;  // last one wins, as a dict built from the tuple
+            if (r.name == resource_names[i]) found = &r;  // last one wins, as a dict built from the tuple
         if (found && (i < 4 || found->capacity.value_or(0) > 0)) visible.emplace_back(i, found);
     }
     if (visible.empty()) return;
     std::vector<int> names;
     for (const auto& v : visible) names.push_back(v.first);
-    if (!gauge_layout_ || !(gauge_layout_->rect == rect) || gauge_layout_->names != names) {
+    if (!gauge_layout_ || !(gauge_layout_->rect == rect) || gauge_layout_->names != names ||
+        gauge_layout_->labels != resource_labels) {
         GaugeLayout g;
         g.rect = rect;
         g.names = names;
+        g.labels = resource_labels;
         double text_h = (GAUGE_LABEL + GAUGE_AMOUNT + GAUGE_GAP) * u;
         auto l = gauges::layout(rect.x + .6 * u, rect.y + 4.2 * u, rect.w - 1.2 * u, rect.h - 4.6 * u,
                                 static_cast<int>(names.size()), text_h, .4 * u);
@@ -765,14 +771,14 @@ void Display::resources(const Rect& rect, const Snapshot& snap) {
             room = std::min(room, cell.cell_w - 2 * u);
         }
         int widest = 1;
-        for (int n : names) widest = std::max(widest, c_.text_width(c_.font(GAUGE_LABEL), RESOURCE_LABELS[n]));
+        for (int n : names) widest = std::max(widest, c_.text_width(c_.font(GAUGE_LABEL), resource_labels[n]));
         g.label_units = static_cast<float>(std::floor(GAUGE_LABEL * std::min(1.0, room / widest) * 20) / 20);
         gauge_layout_ = std::move(g);
     }
     const GaugeLayout& g = *gauge_layout_;
     for (size_t i = 0; i < visible.size(); ++i) {
         const auto& cell = g.cells[i];
-        gauge(*visible[i].second, RESOURCE_LABELS[visible[i].first], cell[0], cell[1], g.radius, cell[3] - 2 * u,
+        gauge(*visible[i].second, resource_labels[visible[i].first], cell[0], cell[1], g.radius, cell[3] - 2 * u,
               g.label_units);
     }
 }
@@ -908,7 +914,7 @@ void Display::staging(const Rect& rect, const Snapshot& snap) {
     std::string current = data && data->current_stage ? std::to_string(*data->current_stage) : "--";
     c_.text("CURRENT " + current, 2.4, ACCENT, rect.right() - 1.3 * u, rect.y + u, Anchor::TopRight);
     if (!data || data->stages.empty()) {
-        c_.text(!data ? "Stage data unavailable" : "No pending activation stages", 2.2, MUTED, rect.centerx(),
+        c_.text((!data || data->native_resources) ? "Stage data unavailable" : "No pending activation stages", 2.2, MUTED, rect.centerx(),
                 rect.y + 8 * u, Anchor::Center);
         return;
     }

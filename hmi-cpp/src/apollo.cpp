@@ -1,4 +1,5 @@
 #include "apollo.hpp"
+#include "resource_ui.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -569,8 +570,10 @@ ApolloSkin::Key ApolloSkin::key_for(const Snapshot& s) const {
     k.w = d_.w(), k.h = d_.h();
     if (s.state == State::Flight) {
         k.screen = FLIGHT;
-        for (int i = 0; i < static_cast<int>(RESOURCE_NAMES.size()); ++i) {
-            const Resource* r = find_resource(s, RESOURCE_NAMES[i]);
+        const auto resource_names = hmi_resource_names(s);
+        k.resource_names = resource_names;
+        for (int i = 0; i < static_cast<int>(resource_names.size()); ++i) {
+            const Resource* r = find_resource(s, resource_names[i].c_str());
             if (r && (i < 4 || r->capacity.value_or(0) > 0)) k.resources.push_back(i * 4 + resource_state(*r));
         }
         if (!s.systems) k.resources.push_back(-1);
@@ -1061,9 +1064,9 @@ void ApolloSkin::navball(Canvas& c, bool art, const Rect& rect, const Snapshot& 
                       seg::GREEN);
     Color g_color = n.g_force < 5 ? seg::GREEN : n.g_force < 10 ? seg::AMBER : seg::RED;
     instrument_digits(c, gee.x, gee.y, gee.l, fmt::str("%.1f", n.g_force), g_color);
-    if (n.node_remaining) {
-        instrument_digits(c, node_dv.x, node_dv.y, node_dv.l, fmt::str("%.1f", std::max(0.0, *n.node_remaining)),
-                          seg::GREEN);
+    if (n.node_remaining || n.node_dv) {  // a source without burn progress still knows the node delta-v
+        instrument_digits(c, node_dv.x, node_dv.y, node_dv.l,
+                          fmt::str("%.1f", std::max(0.0, n.node_remaining.value_or(n.node_dv.value_or(0)))), seg::GREEN);
         if (n.node_time)
             instrument_digits(c, t_node.x, t_node.y, t_node.l, hms(*n.node_time, day_hours_).text, seg::GREEN);
         if (n.burn_seconds)
@@ -1128,8 +1131,10 @@ void ApolloSkin::resources(Canvas& c, bool art, const Rect& rect, const Snapshot
         return;
     }
     std::vector<std::pair<int, const Resource*>> visible;
-    for (int i = 0; i < static_cast<int>(RESOURCE_NAMES.size()); ++i) {
-        const Resource* r = find_resource(s, RESOURCE_NAMES[i]);
+    const auto resource_names = hmi_resource_names(s);
+    const auto resource_labels = hmi_resource_labels(s, METER_LABELS);
+    for (int i = 0; i < static_cast<int>(resource_names.size()); ++i) {
+        const Resource* r = find_resource(s, resource_names[i].c_str());
         if (r && (i < 4 || r->capacity.value_or(0) > 0)) visible.emplace_back(i, r);
     }
     if (visible.empty()) return;
@@ -1171,7 +1176,7 @@ void ApolloSkin::resources(Canvas& c, bool art, const Rect& rect, const Snapshot
     }
     const double cw = (rect.w - 2 * u) / n;
     std::vector<std::string> names;
-    for (auto& v : visible) names.push_back(METER_LABELS[v.first]);
+    for (auto& v : visible) names.push_back(resource_labels[v.first]);
     const float lu = fit(c, names, 1.7f, cw - 1.2 * u);
     const seg::Layout pct = seg::layout("888", rnd(2.2 * u)), amount = seg::layout("888888", rnd(1.35 * u));
     for (int i = 0; i < n; ++i) {
@@ -1185,7 +1190,7 @@ void ApolloSkin::resources(Canvas& c, bool art, const Rect& rect, const Snapshot
         const float px = float(mx - pct.w / 2), py = float(rect.y + 17.3 * u);
         const float ax = float(mx - amount.w / 2), ay = float(py + pct.h + .35 * u);
         if (art) {
-            label(c, METER_LABELS[visible[i].first], lu, mx, rect.y + 1.8 * u, Anchor::MidTop);
+            label(c, resource_labels[visible[i].first], lu, mx, rect.y + 1.8 * u, Anchor::MidTop);
             c.rounded_rect(meter.inflate(.7 * u, .7 * u), rnd(.4 * u), Color{40, 42, 44});
             c.rounded_rect(meter.inflate(.3 * u, .3 * u), rnd(.3 * u), Color{22, 23, 24});
             c.rect(meter, palette.WELL);
@@ -1220,7 +1225,7 @@ void ApolloSkin::resources(Canvas& c, bool art, const Rect& rect, const Snapshot
             }
             continue;
         }
-        if (d_.on_gauge) d_.on_gauge(METER_LABELS[visible[i].first], meter);
+        if (d_.on_gauge) d_.on_gauge(resource_labels[visible[i].first], meter);
         auto f = r.fraction();
         if (f) {
             Color col = *f <= gauges::BAD_BELOW ? seg::RED : *f <= gauges::WARN_BELOW ? seg::AMBER : seg::GREEN;
@@ -1272,8 +1277,8 @@ void ApolloSkin::staging(Canvas& c, bool art, const Rect& rect, const Snapshot& 
     else
         instrument_digits(c, cx, cy, current, "--", seg::AMBER);
     if (!data || data->stages.empty()) {
-        label(c, !data ? "STAGE DATA UNAVAILABLE" : "NO PENDING STAGES", 1.6f, (dx + dv.w + cx) / 2, row0 + 1.5 * pitch,
-              Anchor::Center, palette.DIM_INK);
+        label(c, (!data || data->native_resources) ? "STAGE DATA UNAVAILABLE" : "NO PENDING STAGES", 1.6f,
+              (dx + dv.w + cx) / 2, row0 + 1.5 * pitch, Anchor::Center, palette.DIM_INK);
         return;
     }
     for (size_t index = 0; index < data->stages.size() && index < 4; ++index) {

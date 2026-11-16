@@ -46,9 +46,11 @@ private:
     struct Key {
         int w = 0, h = 0, screen = -1;
         std::string scene;
-        std::vector<int> resources;  // index in RESOURCE_NAMES * 4 + state
+        std::vector<std::string> resource_names;
+        std::vector<int> resources;  // index in the resource names * 4 + state
         bool operator==(const Key& o) const {
-            return w == o.w && h == o.h && screen == o.screen && scene == o.scene && resources == o.resources;
+            return w == o.w && h == o.h && screen == o.screen && scene == o.scene && resources == o.resources &&
+                   resource_names == o.resource_names;
         }
     };
     Key key_for(const Snapshot& s) const;

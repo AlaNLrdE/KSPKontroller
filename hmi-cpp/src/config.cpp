@@ -214,6 +214,8 @@ TomlValues parse_toml(const std::string& text) {
 
 void apply_toml(Config& c, const TomlValues& m) {
     c.source = to_string(m, "source", c.source);
+    if (c.source != "krpc" && c.source != "demo" && c.source != "redux" && c.source != "auto")
+        throw std::runtime_error("source must be \"krpc\", \"demo\", \"redux\" or \"auto\"");
     c.krpc.address = to_string(m, "krpc.address", c.krpc.address);
     c.krpc.rpc_port = to_int(m, "krpc.rpc_port", c.krpc.rpc_port);
     c.krpc.stream_port = to_int(m, "krpc.stream_port", c.krpc.stream_port);

@@ -13,7 +13,7 @@ namespace ksphmi {
 constexpr int MAX_DESTINATIONS = 12;
 
 struct Config {
-    std::string source = "krpc";  // krpc | demo
+    std::string source = "krpc";  // krpc | demo | redux | auto (Redux first, kRPC when Redux is silent)
     struct {
         std::string address = "localhost";
         int rpc_port = 50000, stream_port = 50001;

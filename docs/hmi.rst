@@ -500,6 +500,42 @@ cards when a procedure is missing. Implement them in this order, each merged bef
    what each stock level unlocks; capacity vs. complex level, next hire cost, applicants; lamps CREW LOST,
    CREW CAP, NO PILOT). Phase 2: kerbals close to the next level, XP pending recovery, suggested mission.
 
+KSP 2 Redux source
+------------------
+
+The same HMI also shows KSP 2 Redux, through the KSPKontroller plugin of the KSP2 Redux workbench (a separate
+repository; its ``docs/HMI-REDUX.md`` is the plugin side of this contract). It is not kRPC: the plugin answers
+UDP requests on port 50003 of the game PC, one datagram per request, each echoing the request's nonce.
+``source = "redux"`` (or ``KSPHMI_SOURCE=redux``, which older Pi drop-ins set) uses only Redux;
+``source = "auto"`` also runs the kRPC source and shows it whenever Redux has not answered for a second, so
+one binary serves both games. The PC address is ``krpc.address`` / ``KSPHMI_KRPC_ADDRESS`` unless
+``KSPHMI_REDUX_ADDRESS`` is set; there is no discovery. Code: ``hmi-cpp/src/redux_source.cpp``, tests
+``hmi-cpp/tests/test_redux.cpp`` (ctest ``redux``, loopback only).
+
+=============================== =====================================================================
+Request                         Reply
+=============================== =====================================================================
+``KSP2HMI1|KSP2HMI2 N``         snapshot; v2 adds NavBall axes/markers, throttle, SAS mode and native
+                                resource totals (names hex-encoded)
+``KSP2SHIP N``                  ``\n`` + the VAB ship report v1 (this page's format), or ``-``
+``KSP2VSHP N`` / ``KSP2VSTA N`` ``\n`` + VESSEL shape / state v1 (``tests/data/vessel_*_v1.txt``), or ``-``
+``KSP2KEY N name value``        ``queued``, ``disabled``, ``invalid`` or ``busy``
+``KSP2HOLD N p y r x y z t``    ``queued``, ``disabled`` or ``invalid``
+=============================== =====================================================================
+
+The game answers only while its snapshot is younger than 500 ms, and the HMI drains late datagrams before
+each request, so one delayed reply never shifts later nonces. The VAB report is asked for at 2 Hz in the VAB;
+the VESSEL state at 2 Hz in flight, and the shape only when the state's revision differs from the shape held.
+
+The remote keyboard sends each command once (``sas rcs stage gear lights brakes abort group sasmode
+throttle_full throttle_cut warp_up warp_down warp_stop quicksave quickload map``; ``group`` is 1-10, ``sasmode``
+the kRPC ``SASMode`` number) and never resends a lost one. Held keys go every tick while held, then once with
+zeros: six axes in FlightCtrlState signs and the throttle ramp direction (-1, 0, 1). The plugin applies them
+only with its opt-in ``HmiCommands`` setting (``disabled`` otherwise), on Unity's main thread, drops commands
+older than 1 s and releases held keys 0.5 s after the last one. In the VAB, T / R step the Pi's editor page as
+the board's SAS / RCS do. Redux has no public quickload: F9 is logged as not available. While Redux is silent,
+keys go to the kRPC fallback exactly as without Redux.
+
 Settings
 --------
 

@@ -567,6 +567,9 @@ void Navball::attitude_layer(Canvas& c, const Rect& rect, const Navigation& n) {
         if (n.burn_seconds && n.node_time)
             c.text("START IN " + fmt::duration(*n.node_time - *n.burn_seconds / 2), 1.8, INK, rect.centerx(),
                    rect.bottom() - 1.6 * u, Anchor::MidTop);
+    } else if (n.node_dv) {  // known node, no burn progress estimate
+        c.text("NODE " + fmt::speed(*n.node_dv) + "   T " + (n.node_time ? fmt::duration(*n.node_time) : "--"), 2.1,
+               GREEN, rect.centerx(), rect.bottom() - 3.8 * u, Anchor::MidTop);
     } else {
         c.text("NO MANEUVER NODE", 2.1, {108, 126, 141}, rect.centerx(), rect.bottom() - 3.8 * u, Anchor::MidTop);
     }

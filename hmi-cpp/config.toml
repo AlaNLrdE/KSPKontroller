@@ -2,6 +2,7 @@
 # and ./ci deploy_hmi sets the kRPC address to the PC it was run from (KSPHMI_KRPC_ADDRESS in ~/ksphmi/env).
 
 source = "krpc"          # krpc = the game through the kRPC mod; demo = a simulated orbit, no game needed
+                         # redux = KSP 2 Redux (UDP 50003); auto = Redux, else kRPC (docs/hmi.rst)
 
 [krpc]
 address = "localhost"    # PC running KSP with the kRPC server listening on its LAN address

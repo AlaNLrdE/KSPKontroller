@@ -58,6 +58,7 @@ add_library(ksphmi_core STATIC
   src/netinfo.cpp
   src/orbitview.cpp
   src/pb.cpp
+  src/redux_source.cpp
   src/scenes.cpp
   src/shipreport.cpp
   src/telemetry.cpp
@@ -96,6 +97,11 @@ enable_testing()
 add_executable(ksphmi_tests tests/test_core.cpp)
 target_link_libraries(ksphmi_tests PRIVATE ksphmi_core)
 add_test(NAME core COMMAND ksphmi_tests)
+
+add_executable(ksphmi_redux_tests tests/test_redux.cpp)
+target_link_libraries(ksphmi_redux_tests PRIVATE ksphmi_core)
+target_compile_definitions(ksphmi_redux_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME redux COMMAND ksphmi_redux_tests)
 
 add_executable(ksphmi_render_tests tests/test_render.cpp)
 target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)

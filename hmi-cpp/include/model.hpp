@@ -56,6 +56,8 @@ struct Stage {
 
 /// Vessel totals and the read-only activation-stage queue.
 struct Systems {
+    /// Native resource totals by the game's own names (KSP 2 Redux); false = the six KSP 1 slots.
+    bool native_resources = false;
     std::optional<int> current_stage;
     std::vector<Resource> resources;
     std::vector<Stage> stages;
