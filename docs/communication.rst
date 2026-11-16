@@ -210,6 +210,8 @@ accept ``--config PATH`` before the subcommand. Useful operations are::
    python tools/agent_mailbox.py status
    python tools/agent_mailbox.py send --to pc --text "READY: commit, changed paths, tests, request"
    python tools/agent_mailbox.py inbox
+   python tools/agent_mailbox.py pending
+   python tools/agent_mailbox.py done --seq 3
    python tools/agent_mailbox.py watch --once
 
 Run ``watch --once`` in the agent host's background-task facility: it blocks in an HTTP long poll,
@@ -217,6 +219,13 @@ prints the incoming message, and exits so the host can report task completion. R
 processing each delivery. No model calls occur while waiting. ``watch`` without ``--once`` keeps
 running and prints updates to stdout; it does not create model turns. Hosts without task-completion
 notifications must check background output or the local ``*.cursor.inbox.jsonl`` file when active.
+Notification delivery is not task completion. ``pending`` reads incoming messages after a separate
+``*.handled.json`` watermark, even when a background watcher already advanced its delivery cursor.
+Check it at the start and end of every agent turn and at progress checkpoints. After completing the
+work and sending its RESULT, run ``done --seq N``; it accepts only the oldest pending incoming message
+to prevent accidentally skipping work. An ACK alone must not mark a request handled. In the observed
+Codex host, task output was retained but was not injected automatically into the conversation;
+explicit pending checks are required while the agent is active.
 A closed chat cannot be awakened by this script. The Mac must stay awake and the server running;
 this command does not install an auto-start service or change firewall settings.
 

@@ -215,6 +215,26 @@ def receive(config, cursor_path, once=False, continuous=False):
             return
 
 
+def pending_messages(config, handled_path):
+    """Read unhandled incoming messages independently of the notification/delivery cursor."""
+    handled_path = Path(handled_path)
+    after = json.loads(handled_path.read_text())['through'] if handled_path.exists() else 0
+    result = []
+    while True:
+        events = request(config, '/events?' + urllib.parse.urlencode({'after': after, 'wait': 0}))['events']
+        result.extend(item for item in events if item['to'] == config['peer'])
+        if len(events) < 100:
+            return result
+        after = events[-1]['seq']
+
+
+def mark_handled(config, handled_path, seq):
+    pending = pending_messages(config, handled_path)
+    if not pending or pending[0]['seq'] != seq:
+        raise ValueError('complete only the oldest pending incoming message; inspect pending first')
+    write_json(handled_path, {'through': seq})
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='build/agent-mailbox/config.json')
@@ -235,6 +255,9 @@ def main(argv=None):
     send.add_argument('--id', default=None, help='Reuse this id when retrying an uncertain send')
     sub.add_parser('status')
     sub.add_parser('inbox')
+    sub.add_parser('pending', help='List unhandled messages even if watch/inbox already delivered them')
+    done = sub.add_parser('done', help='Mark the oldest pending message handled after its work/result is complete')
+    done.add_argument('--seq', type=int, required=True)
     watch = sub.add_parser('watch')
     watch.add_argument('--once', action='store_true', help='Exit when an incoming message arrives; re-arm after handling it')
     args = parser.parse_args(argv)
@@ -264,6 +287,14 @@ def main(argv=None):
         print('Stored message #{seq} ({id}); receipt is not an acknowledgement from the other agent'.format(**item))
     elif args.command == 'status':
         print(json.dumps(request(config, '/health')))
+    elif args.command == 'pending':
+        pending = pending_messages(config, config_path.with_suffix('.handled.json'))
+        print('MAILBOX: %d pending incoming message(s)' % len(pending))
+        for item in pending:
+            print('PENDING #{seq} {sender} [{time}]\n{text}'.format(**item), flush=True)
+    elif args.command == 'done':
+        mark_handled(config, config_path.with_suffix('.handled.json'), args.seq)
+        print('Marked message #%d handled' % args.seq)
     else:
         receive(config, config_path.with_suffix('.cursor.json'), once=getattr(args, 'once', False),
                 continuous=args.command == 'watch')

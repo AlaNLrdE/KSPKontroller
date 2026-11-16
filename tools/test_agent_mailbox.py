@@ -10,7 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from agent_mailbox import Journal, make_server, receive, request
+from agent_mailbox import Journal, make_server, receive, request, pending_messages, mark_handled
 
 
 class MailboxTest(unittest.TestCase):
@@ -85,6 +85,30 @@ class MailboxTest(unittest.TestCase):
             thread.join()
         self.assertEqual(len(self.journal.messages), 12)
         self.assertEqual([item['seq'] for item in Journal(self.journal.path).messages], list(range(1, 13)))
+
+    def test_delivered_messages_stay_pending_until_explicitly_handled(self):
+        first = self.send()
+        self.send(id='second', text='Another request')
+        handled = self.root / 'pc.handled.json'
+        with contextlib.redirect_stdout(io.StringIO()):
+            receive(self.config, self.root / 'pc.cursor.json')
+        self.assertEqual([m['seq'] for m in pending_messages(self.config, handled)], [1, 2])
+        with self.assertRaises(ValueError):
+            mark_handled(self.config, handled, 2)
+        mark_handled(self.config, handled, first['seq'])
+        self.assertEqual([m['seq'] for m in pending_messages(self.config, handled)], [2])
+        mark_handled(self.config, handled, 2)
+        self.assertEqual(pending_messages(self.config, handled), [])
+
+    def test_pending_pages_over_outgoing_messages_without_touching_delivery_state(self):
+        for i in range(102):
+            self.journal.append(dict(sender='pc', to='mac', text='Outgoing', id=str(i)))
+        self.send(id='incoming')
+        handled = self.root / 'pc.handled.json'
+        self.assertEqual([m['seq'] for m in pending_messages(self.config, handled)], [103])
+        self.assertFalse(handled.exists())
+        mark_handled(self.config, handled, 103)
+        self.assertEqual(pending_messages(self.config, handled), [])
 
     def test_partial_final_write_recovered_but_middle_corruption_rejected(self):
         self.send()

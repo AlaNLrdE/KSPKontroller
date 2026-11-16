@@ -138,6 +138,15 @@ void Display::set_skin(const std::string& name, const char* why) {
     skin_ = name;
 }
 
+/// ORBIT's central body on screen: true scale, but never a dot. Around the Sun an orbit of tens of Gm made Kerbol
+/// 2-3 px (user, 2026-11-16), so the disc gets at least 2.4u, capped at 45 % of the periapsis on screen so it never
+/// covers the orbit it is the focus of.
+double shown_body_radius(double true_px, double periapsis_px, double u) {
+    double floor = 2.4 * u;
+    if (std::isfinite(periapsis_px) && periapsis_px > 0) floor = std::min(floor, .45 * periapsis_px);
+    return std::max({2.0, true_px, floor});
+}
+
 FlightLayout flight_layout(const Canvas& c, bool flight_deck) {
     if (flight_deck) {
         const double u = c.u, gap = .9 * u, x = c.w * .5, width = c.w - x - 1.4 * u;
@@ -1025,8 +1034,9 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
         if (0 < r && r < limit) points.push_back(to_screen(r, nu));
     }
     if (points.size() > 1) orbit_line(points, elliptic, 1, orbit_body ? Color{155,242,139} : ACCENT);
-    if (orbit_body) orbit_body(fx, fy, std::max(2.0, radius * scale));
-    else orbit_art_->body(c_, s.body, fx, fy, std::max(2.0, radius*scale), orbit_crt);
+    const double shown = shown_body_radius(radius * scale, std::fabs(rp) * scale, u);
+    if (orbit_body) orbit_body(fx, fy, shown);
+    else orbit_art_->body(c_, s.body, fx, fy, shown, orbit_crt);
     if(orbit_body) orbit_text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
     else orbit_text(s.body, 1.8, VALUE, rect.right()-2*u, rect.y+6*u, Anchor::MidRight);
 
@@ -1129,8 +1139,10 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     }
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
-    if (orbit_body) orbit_body(cx, cy, std::max(2.0, radius * scale));
-    else orbit_art_->body(c_, s.body, cx, cy, std::max(2.0, radius*scale), orbit_crt);
+    const double periapsis = conic ? conic->periapsis() : std::sqrt(dot(state.position, state.position));
+    const double shown = shown_body_radius(radius * scale, periapsis * scale, u);
+    if (orbit_body) orbit_body(cx, cy, shown);
+    else orbit_art_->body(c_, s.body, cx, cy, shown, orbit_crt);
     if(orbit_body) orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
     else orbit_text(s.body, 1.8, VALUE, rect.right()-2*u, rect.y+6*u, Anchor::MidRight);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
