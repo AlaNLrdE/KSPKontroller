@@ -2381,6 +2381,23 @@ namespace KSPSerialIO
 
         private void AxisInput(FlightCtrlState s)
         {
+            BoardAxes(s);
+            // HMI keyboard (HmiKeyboard, KSPHMIFlight.SetAxes): a held key moves an axis only where the board
+            // leaves it neutral, so the joystick always wins. Works with the board unplugged too.
+            float now = Time.unscaledTime;
+            bool link = KSPSerialPort.LinkReady;
+            VesselControls b = KSPSerialPort.VControls;
+            s.pitch = HmiKeyboard.Merge(s.pitch, link && SettingsNStuff.PitchEnable != 0 && b.Pitch != 0, HmiKeyboard.Axis(HmiKeyboard.Pitch, now));
+            s.yaw = HmiKeyboard.Merge(s.yaw, link && SettingsNStuff.YawEnable != 0 && b.Yaw != 0, HmiKeyboard.Axis(HmiKeyboard.Yaw, now));
+            s.roll = HmiKeyboard.Merge(s.roll, link && SettingsNStuff.RollEnable != 0 && b.Roll != 0, HmiKeyboard.Axis(HmiKeyboard.Roll, now));
+            s.X = HmiKeyboard.Merge(s.X, link && SettingsNStuff.TXEnable != 0 && b.TX != 0, HmiKeyboard.Axis(HmiKeyboard.X, now));
+            s.Y = HmiKeyboard.Merge(s.Y, link && SettingsNStuff.TYEnable != 0 && b.TY != 0, HmiKeyboard.Axis(HmiKeyboard.Y, now));
+            s.Z = HmiKeyboard.Merge(s.Z, link && SettingsNStuff.TZEnable != 0 && b.TZ != 0, HmiKeyboard.Axis(HmiKeyboard.Z, now));
+        }
+
+        /// <summary>The board's axes, each by its SettingsNStuff mode (0-4).</summary>
+        private void BoardAxes(FlightCtrlState s)
+        {
             if (!KSPSerialPort.LinkReady) return;   // link down: leave the stock controls alone
             switch (SettingsNStuff.ThrottleEnable)
             {

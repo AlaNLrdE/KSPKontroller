@@ -743,11 +743,23 @@ class ShipReportTest(unittest.TestCase):
                     conn.ksphmi.revision()
                 self.assertIn("not available in game scene", str(err.exception))
                 control = conn.space_center.active_vessel.control  # in flight T / R toggle the vessel's SAS / RCS
-                for flag in ("sas", "rcs"):
+                for flag in ("sas", "rcs", "gear", "lights", "brakes"):
                     before = getattr(control, flag)
                     setattr(control, flag, not before)
                     self.assertEqual(getattr(control, flag), not before)
                     self.assertEqual(sim.game[flag], not before)
+                control.toggle_action_group(0)  # key 0 = custom group 10
+                self.assertTrue(sim.game_groups >> 10 & 1)
+                control.sas_mode = conn.space_center.SASMode.prograde
+                self.assertEqual(sim.sas_mode, 2)
+                # KSPHMIFlight: held keys and the one-shot throttle keys (Z / X / Shift / Ctrl)
+                flight = conn.ksphmi_flight
+                flight.set_axes(-1, 0, 2, 0, 0, 0.5)
+                self.assertEqual(sim.keyboard_axes, (-1.0, 0.0, 1.0, 0.0, 0.0, 0.5))
+                flight.set_throttle(1)
+                self.assertEqual(sim.manual.throttle, 1.0)
+                flight.nudge_throttle(-0.25)
+                self.assertAlmostEqual(sim.manual.throttle, 0.75, places=5)
                 sim.set_scene("sph")
                 self.assertEqual(conn.ksphmi.revision(), rev + 4)
                 conn.ksphmi.press("SAS")  # the SPH ignores presses, like KSPSerialIO.Hmi

@@ -1,5 +1,12 @@
 # Changelog
 
+* **0.19.6.0**: 20261116
+  HMI keyboard as a remote KSP keyboard. New kRPC service `KSPHMIFlight` (flight scene) in `KSPSerialIO.Hmi.dll`:
+  `SetAxes` stores the held W/S A/D Q/E J/L I/K H/N keys in `HmiKeyboard` (0.5 s expiry), which `AxisInput`
+  applies only where the board's joystick is neutral; `SetThrottle` / `NudgeThrottle` change
+  `FlightInputHandler.state.mainThrottle` once, like Z / X / Shift / Ctrl. The other keys use stock kRPC.
+  No serial packet or firmware change.
+
 * **0.19.5.1**: 20261115
   HMI keyboard: `KSPHMI.Press("SAS"|"RCS")` feeds the board's `EditorNavigation`, so T/R on the Pi or a
   desktop HMI step the VAB editor screens like the board's SAS/RCS. In flight the HMI toggles SAS/RCS through

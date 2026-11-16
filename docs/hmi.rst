@@ -41,14 +41,64 @@ The two application roles are:
   runs, the canvas and every size-dependent cache are rebuilt for the new size. ``--size`` only sizes
   off-screen frames (``--screenshot``, ``--bench``, ``--offscreen``) and ``--windowed`` exists only for the
   virtual-desktop test harnesses (``tools/hmi-container``).
-* **keyboard** (any platform with a keyboard on the HMI: Pi, PC, Mac, Linux). Esc or ``q`` quits. ``T`` is the
-  board's SAS button and ``R`` its RCS button: in flight they toggle the vessel's SAS / RCS through kRPC
-  ``Control.SAS`` / ``Control.RCS`` (the board's edge toggle); in the VAB they call ``KSPHMI.Press("SAS"|"RCS")``,
-  which goes through the same ``EditorNavigation`` as a board press (SAS next editor screen, RCS previous).
-  Other scenes ignore them. The display thread only queues a press (at most 8); the telemetry thread sends it
-  on its own kRPC connection and logs ``key: ...`` or why it was not applied. ``1`` selects the classic
-  skin and ``2`` the apollo skin until the HMI exits, over the context reply and ``[display] skin``.
-  Key auto-repeat is not a new press.
+* **keyboard** (``src/keyboard.cpp``): the HMI's keyboard is a remote KSP keyboard with the game's default
+  flight bindings, on any platform (Pi, PC, Mac, Linux). See :ref:`hmi-keyboard`.
+
+.. _hmi-keyboard:
+
+Remote keyboard
+---------------
+
+Keys follow KSP's default flight bindings (read from ``GameSettings`` in ``Assembly-CSharp.dll``), letters and
+digits by the character on the user's layout, ``, . /`` also by physical position:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Key
+     - Action (flight unless noted)
+   * - ``T`` / ``R``
+     - SAS / RCS toggle (kRPC ``Control``). In the VAB: ``KSPHMI.Press``, the board's editor navigation (SAS next
+       screen, RCS previous)
+   * - ``F`` (held)
+     - SAS inverted while held (toggle on press and release)
+   * - ``Z`` / ``X``
+     - throttle full / cut (``KSPHMIFlight.SetThrottle``)
+   * - Left Shift / Left Ctrl (held)
+     - throttle up / down at KSP's rate, 50 % per second (``KSPHMIFlight.NudgeThrottle``); Ctrl starts after
+       0.25 s and never for a Ctrl+digit chord
+   * - ``W S`` / ``A D`` / ``Q E`` (held)
+     - pitch / yaw / roll
+   * - ``H N`` / ``I K`` / ``J L`` (held)
+     - translate forward-back / down-up / left-right
+   * - Space, Backspace
+     - stage (``Control.ActivateNextStage``), abort
+   * - ``G`` / ``U`` / ``B`` (held)
+     - gear toggle / lights toggle / brakes while held
+   * - ``1`` ... ``0``
+     - custom action groups 1 ... 10
+   * - Alt (Option) + ``1`` ... ``0``
+     - SAS mode in the HMI's SAS MODE order: HOLD, PRO, RET, N+, N-, R+, R-, TGT, ANTI, NODE
+   * - ``,`` / ``.`` / ``/``
+     - time warp down / up / to 1x: physics warp while it is active or rails warp is not allowed, rails
+       otherwise (kRPC's rails setter also cuts the throttle, so physics warp is stopped through its own factor)
+   * - F5 / F9 (held 1 s)
+     - quicksave / quickload
+   * - Ctrl+1 / Ctrl+2
+     - classic / apollo skin until the HMI exits, over the context reply and ``[display] skin``
+   * - Esc
+     - quit the HMI (``q`` is roll left; on macOS Cmd+Q also quits)
+
+Auto-repeat is never a new press. Losing window focus releases every held key. The display thread only queues
+commands (at most 16) and publishes the held-key state; the telemetry thread sends them on its own kRPC
+connection and logs ``key: ...`` or why a key was not applied. Held axes are repeated with
+``KSPHMIFlight.SetAxes`` every telemetry tick and once with zeros on release; the plugin drops values older
+than 0.5 s and applies them only where the board's joystick is neutral, so the joystick always wins (see
+:doc:`plugin`). kRPC's own ``Control`` axes and throttle are not used: kRPC applies them in its fly-by-wire
+callback, where that priority cannot be enforced, and its throttle stays latched while the client is
+connected. Outside flight only ``T`` / ``R`` in the VAB do anything. An older ``KSPSerialIO.Hmi.dll`` lacks
+``KSPHMIFlight`` (0.19.6.0) or ``KSPHMI.Press`` (0.19.5.1): those keys are logged as not applied.
 
 The kRPC wire protocol (protocol version 1, the same as the krpc 0.7 clients) is encoded by hand in
 ``src/pb.cpp`` / ``src/krpc.cpp`` instead of libprotobuf: a few hundred lines, no ``protoc`` step, no library

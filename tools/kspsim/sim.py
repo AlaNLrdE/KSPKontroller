@@ -51,6 +51,7 @@ class Simulator:
         # sent before (VControlsOld), so a toggle pressed in the game is kept until the board's bit changes.
         self.game = {f: False for f in GAME_FLAGS}
         self.game_groups = 0            # custom action groups, bit n = group n (1-10)
+        self.keyboard_axes = (0.0,) * 6  # KSPHMIFlight.SetAxes: pitch, yaw, roll, X, Y, Z (recorded, not flown)
         self._sas_mode = 1              # autopilot mode + 1 (1 stability assist .. 10 maneuver), sent while SAS is on
         self._sas_state = (False, 1)    # (SAS on, mode) last logged
         self._sas_since = 0.0           # UT of the last SAS change, for the "on target" log line

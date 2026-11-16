@@ -18,6 +18,7 @@
 #include "display.hpp"
 #include "fbdev.hpp"
 #include "fmt.hpp"
+#include "keyboard.hpp"
 #include "log.hpp"
 #include "png.hpp"
 #include "splash.hpp"
@@ -235,6 +236,32 @@ private:
     std::string kind_;
 };
 
+/// SDL key event -> Key. Letters and digits by key code (the character on the user's layout, as KSP's own key
+/// bindings read them); , . / also by physical position, since some layouts need Shift for them.
+KeyEvent key_event(const SDL_KeyboardEvent& k) {
+    KeyEvent e;
+    e.ctrl = (k.keysym.mod & KMOD_CTRL) != 0;
+    e.alt = (k.keysym.mod & KMOD_ALT) != 0;
+    const SDL_Keycode s = k.keysym.sym;
+    const SDL_Scancode sc = k.keysym.scancode;
+    if (s >= SDLK_0 && s <= SDLK_9) return e.key = Key::Digit, e.digit = int(s - SDLK_0), e;
+    if (s >= SDLK_KP_1 && s <= SDLK_KP_9) return e.key = Key::Digit, e.digit = int(s - SDLK_KP_1) + 1, e;
+    if (s == SDLK_KP_0) return e.key = Key::Digit, e.digit = 0, e;
+    if (s == SDLK_COMMA || sc == SDL_SCANCODE_COMMA) return e.key = Key::Comma, e;
+    if (s == SDLK_PERIOD || sc == SDL_SCANCODE_PERIOD) return e.key = Key::Period, e;
+    if (s == SDLK_SLASH || sc == SDL_SCANCODE_SLASH) return e.key = Key::Slash, e;
+    static const std::pair<SDL_Keycode, Key> keys[] = {
+        {SDLK_ESCAPE, Key::Escape}, {SDLK_t, Key::T}, {SDLK_r, Key::R}, {SDLK_f, Key::F}, {SDLK_z, Key::Z},
+        {SDLK_x, Key::X}, {SDLK_g, Key::G}, {SDLK_u, Key::U}, {SDLK_b, Key::B}, {SDLK_SPACE, Key::Space},
+        {SDLK_BACKSPACE, Key::Backspace}, {SDLK_F5, Key::F5}, {SDLK_F9, Key::F9}, {SDLK_w, Key::W},
+        {SDLK_s, Key::S}, {SDLK_a, Key::A}, {SDLK_d, Key::D}, {SDLK_q, Key::Q}, {SDLK_e, Key::E}, {SDLK_h, Key::H},
+        {SDLK_n, Key::N}, {SDLK_i, Key::I}, {SDLK_k, Key::K}, {SDLK_j, Key::J}, {SDLK_l, Key::L},
+        {SDLK_LSHIFT, Key::LeftShift}, {SDLK_LCTRL, Key::LeftCtrl}};
+    for (const auto& [code, key] : keys)
+        if (s == code) return e.key = key, e;
+    return e;
+}
+
 std::unique_ptr<Source> make_source(const Config& cfg, const Args& args) {
     if (args.demo || cfg.source == "demo") return std::make_unique<DemoSource>(cfg.demo.speed, cfg.krpc.rate_hz);
     KrpcSource::Options o;
@@ -323,7 +350,8 @@ int run(int argc, char** argv) {
         // Canvas and Display are sized for the screen: rebuilt when the window or display changes size.
         std::unique_ptr<Canvas> canvas;
         std::unique_ptr<Display> display;
-        std::string key_skin;  // 1 / 2 on the keyboard; survives a rebuild for a new screen size
+        std::string key_skin;  // Ctrl+1 / Ctrl+2 on the keyboard; survives a rebuild for a new screen size
+        Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
         auto build_view = [&] {
             display.reset();
             canvas.reset();
@@ -357,29 +385,40 @@ int run(int argc, char** argv) {
             if (args.bench_anim) last = bench_snap;
             out.present();
         }
+        // Apply what a key asked for: game commands to the source (its own thread sends them), skin, quit.
+        auto apply_keys = [&](const KeyResult& r) {
+            if (r.quit) quit_signal = 1;
+            if (source)
+                for (const Command& c : r.commands) source->command(c);
+            if (!r.skin.empty()) {
+                key_skin = r.skin;
+                display->choose_skin(key_skin);
+                last = nullptr;  // redraw now in the chosen skin
+            }
+        };
         for (int i = 0; !quit_signal; ++i) {
             double tick = monotonic();
             if (out.video()) {
                 SDL_Event ev;
                 bool resized = false, reset = false;
                 while (SDL_PollEvent(&ev)) {
-                    // Keys: Esc / q quit; T = SAS and R = RCS as if pressed on the board (flight toggles, VAB
-                    // editor screens); 1 = classic skin, 2 = apollo. Auto-repeat is not a new press.
-                    const SDL_Keycode key = ev.type == SDL_KEYDOWN && !ev.key.repeat ? ev.key.keysym.sym : SDLK_UNKNOWN;
-                    if (ev.type == SDL_QUIT || key == SDLK_ESCAPE || key == SDLK_q)
+                    // Keys (keyboard.hpp): KSP's default flight keys go to the game, Ctrl+1 / Ctrl+2 pick the
+                    // skin, Esc quits. Auto-repeat is not a new press.
+                    if (ev.type == SDL_QUIT)
                         quit_signal = 1;
-                    else if ((key == SDLK_t || key == SDLK_r) && source)
-                        source->press(key == SDLK_t ? Button::Sas : Button::Rcs);
-                    else if (key == SDLK_1 || key == SDLK_2 || key == SDLK_KP_1 || key == SDLK_KP_2) {
-                        key_skin = key == SDLK_1 || key == SDLK_KP_1 ? "classic" : "apollo";
-                        display->choose_skin(key_skin);
-                        last = nullptr;  // redraw now in the chosen skin
-                    }
+                    else if (ev.type == SDL_KEYDOWN && !ev.key.repeat)
+                        apply_keys(keyboard.down(key_event(ev.key), tick));
+                    else if (ev.type == SDL_KEYUP)
+                        apply_keys(keyboard.up(key_event(ev.key), tick));
+                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                        apply_keys(keyboard.release_all());  // no key-up events follow: never leave keys held
                     else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
                         resized = true;
                     else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
                         reset = true;  // cached textures are gone: rebuild them even at the same size
                 }
+                apply_keys(keyboard.tick(tick));
+                if (source) source->hold(keyboard.held(tick));
                 const bool changed = (resized || reset) && out.refresh_size();
                 if (changed || reset) {
                     build_view();

@@ -14,21 +14,27 @@
 #include <thread>
 #include <vector>
 
+#include "keyboard.hpp"
 #include "krpc.hpp"
 #include "model.hpp"
 
 namespace ksphmi {
 
-/// The board buttons the HMI keyboard can press (T = SAS, R = RCS), forwarded as if they came from the board.
-enum class Button { Sas, Rcs };
-/// "SAS" or "RCS": the KSPHMI.Press argument and the log name.
-const char* button_name(Button b);
+/// KSP's own Shift / Ctrl throttle rate: the whole range in two seconds (FlightInputHandler).
+constexpr double KEY_THROTTLE_RATE = 0.5;
 
-/// Send one press to the game the way KSPSerialIO applies a board press. In flight (vessel != 0) it toggles the
-/// vessel's SAS / RCS (Control.SAS / Control.RCS, the board's edge toggle). In the VAB it calls KSPHMI.Press, which
-/// feeds the same EditorNavigation as the board (SAS next screen, RCS previous). In any other scene nothing is
-/// sent. Returns what happened, for the log. RpcError and ConnectionError propagate.
-std::string send_press(krpc::Client& c, Button b, uint64_t vessel, const std::string& scene);
+/// Send one keyboard command the way the game's own key acts. In flight (vessel != 0): SAS, RCS, gear, lights,
+/// brakes, abort, staging, action groups and SAS modes through kRPC Control (one-shot changes, like the keys and
+/// the board's edge toggles); throttle full / cut through KSPHMIFlight.SetThrottle (KSPSerialIO.Hmi.dll: a
+/// one-shot change, so the PC's own Shift / Ctrl keep working); time warp and quicksave / quickload through
+/// SpaceCenter. In the VAB only SAS / RCS, through KSPHMI.Press, the board's editor navigation (SAS next screen,
+/// RCS previous). Any other scene ignores keys. Returns what happened, for the log. Errors propagate.
+std::string send_command(krpc::Client& c, const Command& cmd, uint64_t vessel, const std::string& scene);
+
+/// The held keys, in flight: KSPHMIFlight.SetAxes with the six axes when `axes` (every tick while one is held, then
+/// once with zeros; the plugin drops values older than 0.5 s and the board's joystick wins over them) and
+/// KSPHMIFlight.NudgeThrottle(direction * KEY_THROTTLE_RATE * dt) while Shift / Ctrl are held.
+void send_held(krpc::Client& c, const Held& h, double throttle_dt, bool axes);
 
 class Source {
 public:
@@ -37,9 +43,11 @@ public:
     void stop();
     std::shared_ptr<const Snapshot> latest() const;
     const char* name() const { return name_; }
-    /// A keyboard press from the display thread. Never blocks: a source with a game link queues it for its own
+    /// A keyboard command from the display thread. Never blocks: a source with a game link queues it for its own
     /// thread, the others only log it.
-    virtual void press(Button b);
+    virtual void command(const Command& c);
+    /// The held keys now (display thread, on every change). Ignored without a game link.
+    virtual void hold(const Held&) {}
 
 protected:
     explicit Source(const char* name);
@@ -106,7 +114,8 @@ public:
     explicit KrpcSource(Options options);
     ~KrpcSource() override;
     std::string address() const;
-    void press(Button b) override;
+    void command(const Command& c) override;
+    void hold(const Held& h) override;
 
 protected:
     void run() override;
@@ -117,8 +126,9 @@ protected:
     virtual void session(krpc::Client& conn);
     virtual std::string discover_server();
     void follow(krpc::Client& conn, uint64_t vessel);
-    /// Send the queued keyboard presses (telemetry thread). An RpcError is logged and drops that press only.
-    void send_presses(krpc::Client& conn, uint64_t vessel, const std::string& scene);
+    /// Send the queued keyboard commands and the held keys (telemetry thread). An RpcError is logged and drops
+    /// that command only; a failing held-key call is logged once per distinct error.
+    void send_inputs(krpc::Client& conn, uint64_t vessel, const std::string& scene);
 
     Options options_;
     double period_;
@@ -131,8 +141,12 @@ private:
     std::string context_skin_;
     double context_at_ = -1e9;
     ShipReportPoller ship_;
-    std::mutex press_mutex_;
-    std::vector<Button> presses_;  ///< keyboard presses waiting for the telemetry thread
+    std::mutex input_mutex_;
+    std::vector<Command> commands_;  ///< keyboard commands waiting for the telemetry thread (input_mutex_)
+    Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)
+    Held sent_;                      ///< held keys last sent (telemetry thread)
+    double nudged_at_ = -1;          ///< last NudgeThrottle, -1 while no throttle key is held
+    std::string held_problem_;       ///< last held-key error logged
 };
 
 constexpr double KERBIN_MU = 3.5316e12;
