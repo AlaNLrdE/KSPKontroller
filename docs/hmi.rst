@@ -620,9 +620,10 @@ family and size. See ``assets/steampunk/README.md`` for provenance and demo capt
 Apollo Flight Deck (approved 2026-11-16) implements proposal A's light painted aluminum
 mounting plates, steel fasteners, charcoal inset modules, smoked instrument windows,
 Barlow Condensed headings and green seven-segment readings, combined with proposal B's
-black/stainless NavBall bezel. The NavBall uses a single local five/ten-degree pitch
-ladder along the meridian that looks vertical through the boresight (the nose heading blended with the
-vessel's up axis, so it stays defined with the nose straight up), meridians every 30 degrees all round, quaternion-driven attitude, volume lighting and live markers.
+black/stainless NavBall bezel. The globe carries the same full markings as Classic and
+Steampunk (bearing columns with their pitch ladders, compass labels and parallels; the single local ladder
+with sparse meridians of the first version looked incomplete and fanned out with the nose straight up,
+user 2026-11-16), quaternion-driven attitude, volume lighting and live markers.
 Its side instruments are speed, heading, pitch, roll, throttle and G-force. SAS mode lamps
 run along the bottom. Flight warnings use the header's priority caution window:
 stale data, surface/atmosphere periapsis, low power, escape, then fuel.
