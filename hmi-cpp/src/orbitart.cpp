@@ -1,10 +1,13 @@
 #include "orbitart.hpp"
-#include "config.hpp"
-#include "vec.hpp"
+
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+
+#include "config.hpp"
+#include "vec.hpp"
 
 namespace ksphmi {
 OrbitArt::~OrbitArt() {
@@ -12,12 +15,47 @@ OrbitArt::~OrbitArt() {
     SDL_DestroyTexture(phosphor_);
     SDL_DestroyTexture(glass_);
 }
-SDL_Texture* OrbitArt::planet(Canvas& c, bool crt) {
+const std::vector<std::string>& OrbitArt::stock_bodies() {
+    static const std::vector<std::string> names = {"Sun",    "Moho", "Eve", "Gilly", "Kerbin", "Mun",
+                                                   "Minmus", "Duna", "Ike", "Dres",  "Jool",   "Laythe",
+                                                   "Vall",   "Tylo", "Bop", "Pol",   "Eeloo"};
+    return names;
+}
+std::string OrbitArt::material_key(const std::string& name) {
+    if (name.empty() || name.size() > 80) return "";
+    std::string key;
+    for (unsigned char ch : name) {
+        if (ch > 127 || !(std::isalnum(ch) || ch == ' ' || ch == '_' || ch == '-')) return "";
+        key += ch == ' ' ? '_' : char(std::tolower(ch));
+    }
+    if (key == "kerbol") key = "sun";
+    if (key == "the_mun") key = "mun";
+    return key;
+}
+Color OrbitArt::atmosphere_color(const std::string& name) {
+    const auto key = material_key(name);
+    if (key == "duna") return {76, 42, 28};
+    if (key == "eve") return {48, 29, 67};
+    if (key == "jool") return {31, 62, 24};
+    return {24, 48, 78};
+}
+SDL_Texture* OrbitArt::planet(Canvas& c, const std::string& name, bool crt) {
+    const std::string key = material_key(name);
+    if (key.empty()) return nullptr;
     SDL_Texture*& cached = crt ? phosphor_ : color_;
-    if (cached) return cached;
-    const std::string path = find_app_dir() + "/assets/steampunk/kerbin.bmp";
+    std::string& cached_name = crt ? phosphor_name_ : color_name_;
+    if (cached_name == key) return cached;
+    const std::string path = find_app_dir() + "/assets/bodies/" + key + ".bmp";
     SDL_Surface* source = SDL_LoadBMP(path.c_str());
-    if (!source) throw std::runtime_error("planet material " + path + ": " + SDL_GetError());
+    if (!source) {
+        for (const auto& stock : stock_bodies())
+            if (material_key(stock) == key) throw std::runtime_error("planet material " + path + ": " + SDL_GetError());
+        // Custom systems can provide their own safely named asset; never substitute Kerbin for an unknown body.
+        SDL_DestroyTexture(cached);
+        cached = nullptr;
+        cached_name = key;
+        return nullptr;
+    }
     SDL_Surface* surface = SDL_ConvertSurfaceFormat(source, SDL_PIXELFORMAT_ARGB8888, 0);
     SDL_FreeSurface(source);
     if (!surface) throw std::runtime_error(SDL_GetError());
@@ -35,16 +73,18 @@ SDL_Texture* OrbitArt::planet(Canvas& c, bool crt) {
             }
         }
     }
-    cached = SDL_CreateTextureFromSurface(c.renderer(), surface);
+    SDL_Texture* replacement = SDL_CreateTextureFromSurface(c.renderer(), surface);
     SDL_FreeSurface(surface);
-    if (!cached) throw std::runtime_error(SDL_GetError());
+    if (!replacement) throw std::runtime_error(SDL_GetError());
+    SDL_DestroyTexture(cached);
+    cached = replacement;
+    cached_name = key;
     SDL_SetTextureBlendMode(cached, SDL_BLENDMODE_NONE);
     return cached;
 }
 void OrbitArt::body(Canvas& c, const std::string& name, double x, double y, double radius, bool crt) {
     if (!std::isfinite(x + y + radius) || radius <= 0) return;
-    if (name == "Kerbin") {
-        SDL_Texture* texture = planet(c, crt);
+    if (SDL_Texture* texture = planet(c, name, crt)) {
         constexpr int n = 96;
         std::vector<SDL_Vertex> vertices{{{float(x), float(y)}, {255, 255, 255, 255}, {.5f, .5f}}};
         std::vector<int> indices;
@@ -58,7 +98,7 @@ void OrbitArt::body(Canvas& c, const std::string& name, double x, double y, doub
         }
         c.triangles(texture, vertices.data(), int(vertices.size()), indices.data(), int(indices.size()));
     } else {
-        // Only Kerbin uses its illustrated geography. Other worlds keep body-specific shaded materials.
+        // A modded/unknown body without supplied artwork gets a neutral shaded sphere, never Kerbin geography.
         Color base = crt                                 ? Color{47, 193, 76}
                      : name == "Duna"                    ? Color{171, 81, 48}
                      : name == "Eve"                     ? Color{118, 84, 156}

@@ -13,10 +13,10 @@ not screenshots, orbital measurements or telemetry fixtures.
   Nine-sliced around metric cards, side instruments, ORBIT and VESSEL wells.
 - `navball-bezel.png`: Mission Control style black/stainless annulus with engraved tick marks.
   A triangle strip maps only its annulus around the quaternion-driven globe.
-- The colour planet source now lives at `../steampunk/kerbin.png` / `kerbin.bmp`, as requested
-  on 2026-11-16. Apollo uses a cached green-phosphor conversion of that illustrated surface.
-  `OrbitArt` converts the luminance once; normal frames sample a green texture, not a colour
-  planet with a translucent green rectangle over it. Other bodies use green shaded spheres.
+- Planet sources and runtime BMPs now live in the shared `../bodies/` catalog, covering
+  all 17 original-system bodies. Apollo selects the current snapshot's body and caches
+  its green-phosphor conversion. `OrbitArt` converts luminance only when the body changes;
+  normal frames sample the green texture rather than overlaying a green rectangle.
   The artwork is illustrative, not cartographic game terrain or a live cloud/lighting sensor.
 - `*.bmp`: lossless opaque runtime conversions, loaded with SDL2 itself. On macOS regenerate
   each using `sips -s format bmp source.png --out runtime.bmp`.

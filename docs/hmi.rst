@@ -632,16 +632,27 @@ waiting, facility and editor screens. Select it with Ctrl+2 or ``--skin apollo``
 
 ORBIT retains the inertial view axes, live Cartesian ship position, physically scaled
 body radius, conics and maneuver dashes of the shared renderer. Apollo supplies a separate
-surface-material callback. The full-colour illustrated planet view belongs to Steampunk
-(theme 3); its source PNG and runtime BMP live under ``assets/steampunk``. Apollo draws the
+surface-material callback. All three themes select detailed artwork by the snapshot's
+body name from the shared ``assets/bodies`` catalog. Classic and Steampunk show the
+colour material; Apollo draws the
 whole ORBIT screen as a green phosphor CRT, including the planet, atmosphere, orbital and
 maneuver curves, markers and annotations. The maneuver retains dashes and a dimmer green
 intensity. Green vector under-strokes supply glow; a size-cached scanline/vignette mask
 suggests the tube face. The green planet texture is converted once from source luminance,
 with no image readback or per-pixel colour conversion in the telemetry loop.
 
-Other bodies receive shaded spheres rather than Kerbin geography. The illustrated artwork
-is not a cartographic terrain map or a live cloud/lighting sensor. Body name, Ap/Pe altitude,
+The catalog covers all 17 original-system bodies, including the Sun, planets and moons.
+``Sun`` / ``Kerbol`` and ``Mun`` / ``The Mun`` share their corresponding material. The
+cache includes the body key and CRT mode, so changing sphere of influence switches the
+image without retaining the previous world. Each cache holds only the most recent body
+per colour mode to bound Pi memory use.
+
+Custom systems can supply ``assets/bodies/<key>.bmp`` (lowercase ASCII name; spaces
+become underscores). An unknown body without supplied artwork uses a neutral shaded
+sphere, never Kerbin geography; path separators and traversal names are rejected. Stock
+assets missing from a package produce a clear error. Source PNGs, 512px runtime BMPs,
+production prompts and generation notes live in ``assets/bodies``. These are illustrations,
+not exact cartographic terrain maps or a live cloud/lighting sensor. Body name, Ap/Pe altitude,
 semi-major axis, eccentricity and inclination come from the current snapshot. Material
 callbacks, the CRT palette and clipping restore the caller's state on every exit.
 
