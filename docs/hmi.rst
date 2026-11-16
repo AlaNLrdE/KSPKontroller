@@ -364,6 +364,44 @@ and the Mac's 2940x1846; every control placed, no overlaps, hit test) and
 ``--demo --flight-scene cockpit`` shows the demo vessel's panel. ``tools/kspsim`` serves every procedure above
 (``KrpcTest.test_cockpit_panel_procedures``).
 
+
+.. _hmi-mechjeb:
+
+MechJeb scene (approved, in progress)
+-------------------------------------
+
+Approved 2026-11-16 (design with mockups, in Spanish: `Escena MechJeb
+<https://claude.ai/artifact/Bz6w131YJtZfeRaCCtNcKG>`_): a third flight scene in the ``Ctrl+"+"`` / ``Ctrl+"-"``
+cycle (Instruments, Cockpit panel, MechJeb). It opens on a menu of MechJeb modules; a click on **Ascent Guidance**
+opens its page, which mirrors that module's options and has a **< MECHJEB** button back to the menu. The page shown
+is kept when the scene is left. Decisions: our own kRPC service (no KRPC.MechJeb), ENGAGE needs ARM first (the
+cockpit panel's 5 s window), values are edited with an on-screen numeric keypad (the physical keyboard types into
+it too) or − / + steps. Phase 2 modules, in order: Maneuver Planner + Node Executor, Landing Guidance, Rendezvous,
+Docking, Translatron, Spaceplane, Smart A.S.S. last.
+
+**Service.** ``KSPSerialIO.Hmi.dll`` reads and changes MechJeb by reflection (``MuMech.MechJebCore`` of the active
+vessel), so MechJeb stays an optional mod: without it the scene says so and shows no values. Procedures of
+``KSPHMIFlight`` (flight scene, Unity's thread):
+
+* ``uint MechJebRevision()``: increments when the report text changes (refreshed twice a second).
+* ``string MechJebReport()``: the report below.
+* ``string MechJebSet(string key, string value)``: ``ok``, ``unknown key``, ``read only``, ``invalid value`` or
+  ``unavailable`` (no MechJeb / no core). Keys and units are the report's.
+* ``string MechJebAction(string action)``: ``ascent.engage``, ``ascent.disengage``, ``ascent.launch_rendezvous``,
+  ``ascent.launch_target_plane``, ``ascent.abort_timed_launch``, ``all.disengage``; same replies.
+
+**Report format v1** (fixture ``hmi-cpp/tests/data/mechjeb_report_v1.txt``, shared by the plugin's format tests,
+the HMI parser and kspsim). The first line is ``v=1 rev=N mj=STATE`` plus ``version=X`` when installed; ``mj`` is
+``ok``, ``missing`` (MechJeb not installed), ``nocore`` (no MechJeb part or core on the vessel) or
+``error:TEXT``. Every other line is one ``key=value``; a key the installed MechJeb lacks is omitted and its control
+stays unknown, never zero. Values are numbers in SI units (metres, m/s, degrees, pascals, fractions 0-1, flags 0/1)
+or percent-encoded text. Read-only: ``ascent.enabled``, ``ascent.status``, ``ascent.launch_mode`` (``normal``,
+``rendezvous``, ``target_plane``, ``unknown``) and the ``ascent.classic.auto_turn_*_altitude/velocity`` results.
+Groups: ``ascent.*`` (target orbit, ``path`` 0 Classic / 1 GravityTurn / 2 PVG, roll, AoA, corrective steering,
+finish options), ``ascent.classic.*``, ``ascent.gt.*``, ``ascent.pvg.*``, ``thrust.*`` (MechJeb's thrust
+controller, shared by every autopilot) and ``staging.autostage_limit``. Unknown keys are ignored by readers, so
+later modules add lines without a new version.
+
 VESSEL panel
 ------------
 
