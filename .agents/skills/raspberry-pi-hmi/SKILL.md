@@ -24,7 +24,7 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 
 ## Deploy and check
 
-1. `./ci test_hmi` (WSL here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
+1. `./ci test_hmi` (native MSYS2 here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
    command), copy to `~/ksphmi/cpp`, `cmake` Release + `cmake --build -j4` + `ctest` **on the Pi** (a failure stops
    before the restart, the old binary keeps running), install the unit, restart. It requires `active` **and**
    `NRestarts=0` after 8 s: `Restart=always` makes a crash loop look `active` at a glance.
@@ -65,7 +65,7 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means
   the HDMI cable/monitor was not detected, not a software fault. `/dev/fb0` first appears as `simplefb` (~4.5 s)
   and is replaced by `vc4drmfb` (~6.5 s).
-- Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (in WSL; the
+- Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (the
   path is relative to the repo), then look at the PNG.
 - Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per
   size, state and resource into a cached texture. Per frame draw only the dynamic needle polygon, the hub and
@@ -174,9 +174,22 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   a null vessel and reconnected in a loop (seen live 2026-11-14). Handle null as NOT IN FLIGHT; kspsim answers
   null too. Any behaviour seen only in the real game goes into `tools/kspsim/krpcserver.py` and a test.
 
-## Building on this PC (WSL)
+## Building on this PC (native MSYS2, WSL fallback)
 
-- This Windows PC has no C++ compiler; WSL Ubuntu 24.04 has g++/cmake but no sudo. `./ci build_hmi` / `hmi` /
+- Native Windows build (2026-11-15): MSYS2 UCRT64 at `C:\msys64` (`winget install MSYS2.MSYS2`, then
+  `pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,SDL2_ttf}`). When
+  `C:/msys64/ucrt64/bin/g++.exe` exists, `./ci build_hmi` / `hmi` / `test_hmi` prepend that bin dir to PATH
+  (compilers + SDL2.dll at run time) and build with Ninja into `build/hmi-cpp-win`. Native ctest ~21 s
+  (WSL on /mnt/c: minutes). `test_hmi --sim` still runs the kspsim part in WSL.
+- pacman installed `sdl2-compat` (SDL2 API on SDL3) for SDL2 here; everything passed with it (render tests,
+  direct3d11 renderer). Port gotchas: `sdl2.pc` adds `-lSDL2main -mwindows` (GUI subsystem, no console,
+  WinMain) - CMake strips both and defines SDL_MAIN_HANDLED. MinGW's `format(printf)` checks the Microsoft
+  dialect and warns on `%zu`: use `gnu_printf` under `__MINGW32__`. No `localtime_r` (use `localtime_s`).
+  Winsock: SOCKET is unsigned (compare with `net::NO_SOCKET`, never `< 0`), WSAStartup before
+  getaddrinfo/gethostname, SO_RCVTIMEO is DWORD ms, disable SIO_UDP_CONNRESET on UDP sockets or an ICMP
+  unreachable fails the next recvfrom. All socket calls go through `net.hpp`/`net.cpp`. A refused
+  127.0.0.1 connect takes ~2 s on Windows (SYN retries), not instant as on Linux.
+- No MSYS2: WSL Ubuntu 24.04 has g++/cmake but no sudo. `./ci build_hmi` / `hmi` /
   `test_hmi` re-run themselves in WSL and unpack SDL2/SDL2_ttf with `apt-get download` + `dpkg -x` into
   `build/hmi-cpp-deps` (PKG_CONFIG_SYSROOT_DIR, `-rpath-link`, LD_LIBRARY_PATH, KSPHMI_FONT). SDL2_ttf.pc names
   harfbuzz/glib include dirs: CMake refuses imported targets whose include dirs do not exist, so ci creates them.
@@ -265,7 +278,11 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   check `systemctl --user cat ksphmi.service`; never remove the drop-in without the user. Per-user settings
   (skin etc.) go in ~/ksphmi/config.local.toml, which deploys never replace.
 
-- `./ci hmi` on this PC: WSL runs with NAT networking, so 127.0.0.1 is WSL, not Windows. Without --address
+- `./ci hmi` natively: game on 127.0.0.1; `--desktop` fills a secondary monitor with
+  SDL_WINDOW_FULLSCREEN_DESKTOP (plain window when there is only one display). Unverified on the real
+  two-monitor setup (only one display was connected when ported).
+- `./ci hmi` in WSL (fallback; ci sets KSPHMI_WSLG=1, which keeps the plain anchored window):
+  WSL runs with NAT networking, so 127.0.0.1 is WSL, not Windows. Without --address
   it targets the Windows host (default-route gateway) and exports KSPHMI_REDUX_ADDRESS. `--desktop` +
   `[display] monitor = auto` opens a plain window on the last SDL display. WSLg (secondary monitor at
   175%) drew NOTHING for full-screen, borderless or maximized X11 windows there. Its display bounds are

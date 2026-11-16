@@ -20,10 +20,11 @@
 #   ./ci test_arduino [PORT] Compile, upload and test the board over serial (NO_UPLOAD=1 skips the upload)
 #   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
 #                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
-#   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows in WSL
-#   ./ci hmi [ARGS]          Build it and run it on this PC in a window on the secondary monitor (if any);
-#                            targets the game on this PC (Windows host from WSL); --demo: no KSP needed
-#   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board
+#   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows natively
+#                            with MSYS2 UCRT64 into build/hmi-cpp-win (WSL only when MSYS2 is missing)
+#   ./ci hmi [ARGS]          Build it and run it on this PC, full screen on the secondary monitor (if any, else a
+#                            window); targets the game on this PC; --demo: no KSP needed
+#   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board (WSL/Linux)
 #   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
 #   ./ci hmi_desktop        Open both HMI and simulator windows in a browser desktop at localhost:6080
 #   ./ci test_hmi_desktop   Exercise the real simulator GUI controls and their connection to the C++ HMI
@@ -583,8 +584,11 @@ test_sim() {
 }
 
 # ------------------------------------------------------------------ Raspberry Pi HMI (hmi-cpp/, C++)
-# Built with CMake: on the Pi by ./ci deploy_hmi, on this PC inside WSL (no C++ toolchain on Windows).
+# Built with CMake: on the Pi by ./ci deploy_hmi; on Windows natively with MSYS2 UCRT64 (gcc, Ninja, SDL2 from
+# pacman) into build/hmi-cpp-win, or inside WSL into build/hmi-cpp when MSYS2 is not installed.
 HMI_DIR="$ROOT/hmi-cpp"
+MSYS2_UCRT64="${MSYS2_UCRT64:-/c/msys64/ucrt64}"
+HMI_MSYS2_INSTALL="winget install MSYS2.MSYS2, then in the MSYS2 UCRT64 shell: pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,SDL2_ttf}"
 HMI_TITLE_BAR="${HMI_TITLE_BAR:-32}"  # WSLg window title bar height, Windows logical pixels
 HMI_HOST="${HMI_HOST:-ksphmi}"
 HMI_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
@@ -615,14 +619,39 @@ hmi_ssh_tty() {
   "$(hmi_ssh_client)" -tt -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
 }
 
-# Windows has no C++ toolchain here: run the same ./ci target inside WSL when it is installed.
+# Native Windows build: MSYS2's UCRT64 gcc, CMake, Ninja, pkgconf, SDL2 and SDL2_ttf.
+hmi_native_windows() { is_windows && [ -x "$MSYS2_UCRT64/bin/g++.exe" ]; }
+
+# Fallback without MSYS2: run the same ./ci target inside WSL when it is installed.
 hmi_in_wsl() {
   local dir
-  command -v wsl.exe >/dev/null || die "no C++ toolchain on Windows and no WSL: build on the Pi (./ci deploy_hmi)"
+  command -v wsl.exe >/dev/null ||
+    die "no C++ toolchain on Windows and no WSL. Install MSYS2: $HMI_MSYS2_INSTALL"
   dir="$(cygpath -m "$ROOT")"
   dir="/mnt/$(printf '%s' "${dir:0:1}" | tr 'A-Z' 'a-z')${dir:2}"
-  log "No C++ toolchain on Windows: running ./ci $* in WSL"
+  if hmi_native_windows; then
+    log "Running ./ci $* in WSL (Linux only)"
+  else
+    log "No MSYS2 UCRT64 toolchain at $MSYS2_UCRT64: running ./ci $* in WSL"
+    log "For the native Windows build: $HMI_MSYS2_INSTALL"
+  fi
   MSYS_NO_PATHCONV=1 wsl.exe -- bash -lc "cd '$dir' && ./ci $*"
+}
+
+# MSYS2 first on PATH: its gcc, cmake, ninja, pkg-config and the DLLs ksphmi.exe and the tests load (SDL2.dll, ...).
+hmi_win_env() {
+  local free="$BUILD/hmi-cpp-deps/root/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+  export PATH="$MSYS2_UCRT64/bin:$PATH"
+  # The Pi's font when an earlier WSL build unpacked it; otherwise ksphmi uses C:/Windows/Fonts/arialbd.ttf.
+  if [ -z "${KSPHMI_FONT:-}" ] && [ -f "$free" ]; then export KSPHMI_FONT="$(cygpath -m "$free")"; fi
+  unset KSPHMI_WSLG
+}
+
+build_hmi_windows() {
+  hmi_win_env
+  log "Building the HMI natively (MSYS2 UCRT64) into build/hmi-cpp-win"
+  cmake -S "$(cygpath -m "$HMI_DIR")" -B "$(cygpath -m "$BUILD/hmi-cpp-win")" -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
+  cmake --build "$(cygpath -m "$BUILD/hmi-cpp-win")"
 }
 
 hmi_env() {
@@ -652,6 +681,7 @@ hmi_env() {
 }
 
 build_hmi() {
+  if hmi_native_windows; then build_hmi_windows; return; fi
   if is_windows; then hmi_in_wsl build_hmi; return; fi
   hmi_env
   log "Building the HMI into build/hmi-cpp"
@@ -659,11 +689,17 @@ build_hmi() {
   cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || echo 2)"
 }
 
-# Build, then run it on this PC (WSLg on Windows); ARGS as ksphmi --help, e.g. --demo.
-# --desktop: a window on the [display] monitor (auto: the last one); never full screen (WSLg draws nothing).
-# Under WSL (NAT networking) 127.0.0.1 is WSL itself: without --address/--demo, target the Windows host, where
-# KSP1's kRPC (0.0.0.0:50000/50001, UDP 50002) and the KSP2 Redux endpoint (UDP 50003) listen.
+# Build, then run it on this PC; ARGS as ksphmi --help, e.g. --demo. --desktop: the [display] monitor (auto: the
+# last one). Natively on Windows (MSYS2) a secondary monitor is filled (full-screen desktop) and the game is
+# 127.0.0.1. Under WSLg (fallback) full screen draws nothing: a plain window sized to the secondary monitor's
+# work area (KSPHMI_WSLG=1), and since WSL's NAT makes 127.0.0.1 WSL itself, without --address/--demo it targets
+# the Windows host, where KSP1's kRPC (0.0.0.0:50000/50001, UDP 50002) and the KSP2 Redux endpoint (UDP 50003) listen.
 hmi() {
+  if hmi_native_windows; then
+    build_hmi_windows
+    "$BUILD/hmi-cpp-win/ksphmi.exe" --desktop "$@"
+    return
+  fi
   if is_windows; then
     local fit=()
     # WSLg sizes windows in Windows logical units: fill the secondary monitor's work area minus the title bar.
@@ -678,6 +714,7 @@ hmi() {
   fi
   build_hmi
   local extra=() host
+  if grep -qi microsoft /proc/version 2>/dev/null; then export KSPHMI_WSLG=1; fi
   if grep -qi microsoft /proc/version 2>/dev/null && ! printf '%s\n' "$@" | grep -qx -e --address -e --demo; then
     host=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
     [ -n "$host" ] || die "no default route in WSL: pass --address HOST"
@@ -760,6 +797,14 @@ test_hmi_container() {
 }
 
 test_hmi() {
+  if hmi_native_windows; then
+    build_hmi_windows
+    log "HMI tests (native Windows)"
+    (cd "$BUILD/hmi-cpp-win" && ctest --output-on-failure)
+    # hmi_sim runs kspsim with Linux's python3 and the Linux build: only inside WSL.
+    if [ "${1:-}" = "--sim" ]; then hmi_in_wsl test_hmi --sim; fi
+    return
+  fi
   if is_windows; then hmi_in_wsl test_hmi "$@"; return; fi
   build_hmi
   log "HMI unit, layout and kiosk tests (ctest)"

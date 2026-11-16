@@ -58,6 +58,11 @@ std::string find_font() {
                           "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                           "/System/Library/Fonts/Supplemental/Arial Bold.ttf"})
         if (file_exists(p)) return p;
+#if defined(_WIN32)
+    // MSYS2 ships no FreeSans: Windows' own Arial Bold (./ci points KSPHMI_FONT at FreeSansBold when it has one).
+    for (const char* p : {"C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/segoeuib.ttf"})
+        if (file_exists(p)) return p;
+#endif
     return "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf";
 }
 

@@ -38,7 +38,7 @@ Verification matrix
      - Three-project deployment ordering, Pi preflight failures, HMI build failure, ``NO_TEST``, clean reference paths and WDT metadata overrides that preserve source bytes and compiler arguments.
      - Actual compilation, SSH availability, service restart or flashing. All such operations are stubbed.
    * - ``./ci test_hmi``
-     - Native/WSL C++ toolchain, SDL, fonts
+     - Native C++ toolchain (MSYS2 UCRT64 on Windows, else WSL), SDL, fonts
      - Core, off-screen render and kiosk transformation tests.
      - Real framebuffer or boot behavior.
    * - ``./ci test_hmi --sim``

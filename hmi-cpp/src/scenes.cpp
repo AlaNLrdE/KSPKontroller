@@ -1,8 +1,6 @@
 #include "scenes.hpp"
 
-#include <arpa/inet.h>
 #include <cctype>
-#include <sys/socket.h>
 
 #include "net.hpp"
 
@@ -80,14 +78,14 @@ std::string parse_context(const std::string& reply) { return parse_context_reply
 Context read_context_reply(const std::string& address, int port) {
     auto addr = net::resolve_ipv4(address, port);
     if (!addr) return {};
-    net::Fd sock(socket(AF_INET, SOCK_DGRAM, 0));
+    net::Fd sock(net::open_socket(SOCK_DGRAM));
     if (!sock) return {};
     net::set_timeout(sock.get(), 0.15);
     if (connect(sock.get(), reinterpret_cast<const sockaddr*>(&*addr), sizeof *addr) != 0) return {};
     static const char request[] = "KSPHMI/1";
     if (send(sock.get(), request, sizeof request - 1, 0) < 0) return {};
     char buf[256];
-    ssize_t n = recv(sock.get(), buf, sizeof buf, 0);
+    long n = net::recv_some(sock.get(), buf, sizeof buf);
     if (n <= 0) return {};
     return parse_context_reply(std::string(buf, static_cast<size_t>(n)));
 }

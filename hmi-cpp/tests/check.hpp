@@ -1,14 +1,69 @@
 // A tiny test harness: TEST(name) { CHECK(...); } and RUN_TESTS() in main.
 #pragma once
 
+#if defined(_WIN32)
+#include <direct.h>
+#include <io.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <sstream>
 #include <string>
 #include <vector>
 
 namespace check {
+
+/// A new empty directory under the system temp directory ("" on failure): mkdtemp on POSIX, %TEMP% on Windows.
+inline std::string make_temp_dir(const std::string& prefix) {
+#if defined(_WIN32)
+    char base[MAX_PATH + 1] = {0};
+    DWORD n = GetTempPathA(sizeof base, base);
+    if (n == 0 || n >= sizeof base) return "";
+    for (char& c : base)
+        if (c == '\\') c = '/';
+    std::string pattern = std::string(base) + prefix + "-XXXXXX";
+    std::vector<char> name(pattern.begin(), pattern.end());
+    name.push_back('\0');
+    if (_mktemp_s(name.data(), name.size()) != 0 || _mkdir(name.data()) != 0) return "";
+    return name.data();
+#else
+    std::string pattern = "/tmp/" + prefix + "-XXXXXX";
+    std::vector<char> name(pattern.begin(), pattern.end());
+    name.push_back('\0');
+    return mkdtemp(name.data()) ? name.data() : "";
+#endif
+}
+
+inline void remove_dir(const std::string& dir) {
+#if defined(_WIN32)
+    _rmdir(dir.c_str());
+#else
+    rmdir(dir.c_str());
+#endif
+}
+
+inline void set_env(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+inline void unset_env(const char* name) {
+#if defined(_WIN32)
+    _putenv_s(name, "");  // removes the variable
+#else
+    unsetenv(name);
+#endif
+}
 
 struct Test {
     const char* name;

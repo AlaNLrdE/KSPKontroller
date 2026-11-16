@@ -348,8 +348,8 @@ not every editor dialog sends ``onEditorShipModified``; the revision advances on
 ``./ci sim --scene vab --editor-mode actions`` also exposes mode/group controls in its window. Its serial link
 sends the same neutral heartbeat in the editor and routes SAS/RCS to mode changes without changing flight state.
 ``KSPHMI_SHOTS=DIR ./ci test_hmi`` writes ``classic_editor_*.png`` and ``apollo_editor_*.png`` from the real
-renderers with simulator fixture data. On Windows set that environment inside WSL (the Windows wrapper does
-not automatically forward arbitrary environment variables).
+renderers with simulator fixture data. The native Windows build (MSYS2) sees the variable directly; with the
+WSL fallback set it inside WSL (the Windows wrapper does not forward arbitrary environment variables).
 
 Facility screens roadmap
 ------------------------
@@ -403,20 +403,26 @@ under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local
 --layer-cache auto|on|off`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).
 
-**Running the HMI on the game PC.** ``./ci hmi`` builds the HMI (inside WSL on Windows) and starts it with
-``--desktop``: ``[display] monitor`` (``auto`` by default, or a display index; ``--monitor``) picks the SDL
-display, and ``auto`` takes the last one when several are connected, so KSP1 or KSP2 keeps the primary
-monitor (display 0). ``--desktop`` always opens a plain window there: WSLg (2026-11-15, secondary
-monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows. WSLg reports
-that monitor in physical pixels while Windows places windows in logical units, so the window is anchored at
-the display origin and ``./ci hmi`` on Windows passes the monitor's logical work area minus the title bar
-(``HMI_TITLE_BAR``, 32) as ``--size``. A new WSLg window may open behind the active Windows window: click
-its taskbar icon. WSL uses NAT networking here, so ``127.0.0.1`` is WSL itself: without ``--address`` or ``--demo``,
-``./ci hmi`` targets the Windows host (the default route's gateway) and exports it as
-``KSPHMI_REDUX_ADDRESS`` for the KSP2 Redux backend. kRPC listens on ``0.0.0.0`` (50000/50001, context
-UDP 50002) and the Redux endpoint binds UDP 50003 on all interfaces; Windows Firewall must allow inbound
-traffic from the WSL subnet. WSLg's multi-monitor support is limited: the log line
-``display N of M`` shows what SDL actually sees. On the Pi a single HDMI display keeps index 0.
+**Running the HMI on the game PC.** ``./ci hmi`` builds the HMI and starts it with ``--desktop``:
+``[display] monitor`` (``auto`` by default, or a display index; ``--monitor``) picks the SDL display, and
+``auto`` takes the last one when several are connected, so KSP1 or KSP2 keeps the primary monitor
+(display 0). On Windows the HMI is built natively with MSYS2 UCRT64 (see "Building on this PC"): a
+secondary monitor is filled with an ``SDL_WINDOW_FULLSCREEN_DESKTOP`` window (no video mode change; the
+game keeps its own screen), a single monitor gets a plain window, and the game's kRPC server is
+``127.0.0.1``. The log line ``display N of M (monitor ...), full-screen desktop`` shows the choice.
+
+Without MSYS2, ``./ci hmi`` falls back to WSL and sets ``KSPHMI_WSLG=1``: there ``--desktop`` always
+opens a plain window, because WSLg (2026-11-15, secondary monitor at 175% scale) showed nothing for
+full-screen, borderless or maximized X11 windows. WSLg reports that monitor in physical pixels while
+Windows places windows in logical units, so the window is anchored at the display origin and ``./ci hmi``
+passes the monitor's logical work area minus the title bar (``HMI_TITLE_BAR``, 32) as ``--size``. A new
+WSLg window may open behind the active Windows window: click its taskbar icon. WSL uses NAT networking
+here, so ``127.0.0.1`` is WSL itself: without ``--address`` or ``--demo``, ``./ci hmi`` targets the Windows
+host (the default route's gateway) and exports it as ``KSPHMI_REDUX_ADDRESS`` for the KSP2 Redux backend.
+kRPC listens on ``0.0.0.0`` (50000/50001, context UDP 50002) and the Redux endpoint binds UDP 50003 on all
+interfaces; Windows Firewall must allow inbound traffic from the WSL subnet. WSLg's multi-monitor support
+is limited: the log line ``display N of M`` shows what SDL actually sees. On the Pi a single HDMI display
+keeps index 0.
 
 ``[display] skin`` picks the look: ``apollo`` (the default since 2026-11-14) or ``classic`` (the previous flat
 dark panels, kept for switching back). Apollo draws the same zones as a 1960s spacecraft panel: grey panel with painted labels and group lines,
@@ -673,12 +679,35 @@ output work. For the simulator and HMI together in the browser, use ``./ci hmi_d
 Building on this PC
 -------------------
 
-Windows has no C++ toolchain here: ``./ci build_hmi``, ``./ci hmi`` and ``./ci test_hmi`` re-run themselves inside
-WSL. Without root there, the SDL2 packages are unpacked into ``build/hmi-cpp-deps`` with ``apt-get download``
+On Windows the HMI builds natively with MSYS2's UCRT64 toolchain. Install it once (PowerShell, then the
+MSYS2 UCRT64 shell)::
+
+   winget install MSYS2.MSYS2
+   pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,SDL2_ttf}
+
+When ``C:/msys64/ucrt64/bin/g++.exe`` exists (``MSYS2_UCRT64`` overrides the prefix), ``./ci build_hmi``,
+``./ci hmi`` and ``./ci test_hmi`` put ``C:/msys64/ucrt64/bin`` first on ``PATH`` (its compilers and the DLLs
+``ksphmi.exe`` loads) and build with CMake and Ninja into ``build/hmi-cpp-win``. pacman may install
+``sdl2-compat`` (the SDL2 API on SDL3) for ``SDL2``; the HMI uses only the SDL2 API and works on either.
+MSYS2 ships no FreeSans: ``ksphmi`` falls back to ``C:/Windows/Fonts/arialbd.ttf`` unless ``KSPHMI_FONT`` is set,
+and ``./ci`` sets it to the Pi's FreeSansBold when a WSL build has unpacked it into ``build/hmi-cpp-deps``.
+
+The port keeps one source tree. ``net.hpp`` / ``net.cpp`` wrap the socket differences (Winsock started once,
+``closesocket``, ``select`` for waits, millisecond ``SO_RCVTIMEO``, no ``SIO_UDP_CONNRESET`` errors on the
+discovery socket); ``netinfo.cpp`` enumerates adapters with ``GetAdaptersAddresses``; the executable
+directory comes from ``GetModuleFileNameW``. The Pi-only parts compile as stubs: ``--splash`` without
+``--screenshot`` and the framebuffer fail with a clear message, output ``fbdev`` and ``auto`` draw through SDL,
+the boot probes report no systemd and the ready file goes to ``%TEMP%``. CMake links ``ws2_32`` and ``iphlpapi``,
+defines ``SDL_MAIN_HANDLED`` and strips ``SDL2main`` and ``-mwindows`` from ``sdl2.pc`` so ``ksphmi.exe`` and
+the tests stay console programs with their own ``main``.
+
+Without MSYS2 the same targets re-run themselves inside WSL (``./ci`` prints the install commands above).
+Without root there, the SDL2 packages are unpacked into ``build/hmi-cpp-deps`` with ``apt-get download``
 (Ubuntu 24.04 names). ``./ci test_hmi --sim`` also starts ``tools/kspsim --no-board --headless`` on
 127.0.0.1:50300 and checks that the HMI follows the simulated vessel and saves a frame to
 ``build/hmi-cpp-sim/flight.png`` (needs ``python3`` with ``krpc`` and ``protobuf``; set ``KSPSIM_PYTHON`` to
-choose the interpreter).
+choose the interpreter). That end-to-end run is Linux only: on Windows ``./ci test_hmi --sim`` runs the native
+tests and then ``./ci test_hmi --sim`` inside WSL.
 
 Tests (``hmi-cpp/tests``, ctest): ``core`` (formatting, Kepler solver, demo source, attitude quaternions and
 burn time, label projection and limb fade, front-hemisphere clipping, inertial orbit geometry (RCS cannot move
@@ -716,7 +745,7 @@ Commands
 ==========================  ===========================================================================
 ``./ci hmi --demo``         Build the HMI and run it on the PC in a window with the simulated orbit
 ``./ci hmi``                Same against KSP on this PC (``--address`` for another one)
-``./ci build_hmi``          Build into ``build/hmi-cpp`` (on Windows inside WSL)
+``./ci build_hmi``          Build into ``build/hmi-cpp`` (``build/hmi-cpp-win`` with MSYS2 on Windows)
 ``./ci test_hmi [--sim]``   Build and run ctest; ``--sim`` adds the run against ``tools/kspsim``
 ``./ci deploy_hmi``         Copy ``hmi-cpp`` to ``~/ksphmi/cpp``, build and test it on the Pi, install and
                             restart the ``ksphmi`` user service, print its log
@@ -727,4 +756,5 @@ Commands
 
 ``build_hmi_cpp`` and ``test_hmi_cpp`` are old names of ``build_hmi`` and ``test_hmi`` and still work.
 ``ksphmi --demo --size 2520x1680 --screenshot out.png`` renders a frame without any window, which is how
-screen changes are reviewed (inside WSL, with the environment ``./ci`` sets up: ``hmi_env`` in ``ci``).
+screen changes are reviewed (``build/hmi-cpp-win/ksphmi.exe`` with ``C:/msys64/ucrt64/bin`` on ``PATH``
+on Windows; inside WSL with the environment ``./ci`` sets up: ``hmi_env`` in ``ci``).

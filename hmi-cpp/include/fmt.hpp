@@ -5,7 +5,12 @@
 
 namespace ksphmi::fmt {
 
+// MinGW's plain "printf" checks Microsoft's format dialect (no %zu); its C++ runtime formats the C99 one.
+#if defined(__MINGW32__)
+std::string str(const char* format, ...) __attribute__((format(gnu_printf, 1, 2)));
+#else
 std::string str(const char* format, ...) __attribute__((format(printf, 1, 2)));
+#endif
 
 /// Metres as m / km / Mm / Gm: "950 m", "80.0 km", "12.40 Mm". "--" when not finite.
 std::string distance(double m);

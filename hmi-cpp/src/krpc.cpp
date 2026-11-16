@@ -1,12 +1,9 @@
 #include "krpc.hpp"
 
-#include <arpa/inet.h>
-#include <fcntl.h>
+#if !defined(_WIN32)
 #include <netinet/tcp.h>
-#include <poll.h>
-#include <sys/socket.h>
+#endif
 
-#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -22,8 +19,6 @@ namespace {
 constexpr double NO_DEADLINE = INFINITY;
 constexpr double STREAM_IDLE_LIMIT = 3.0;
 
-std::string errno_text(int e) { return std::strerror(e); }
-
 int wait_ms(double deadline, double slice) {
     double left = deadline - monotonic();
     if (left <= 0) return 0;
@@ -33,76 +28,79 @@ int wait_ms(double deadline, double slice) {
 net::Fd connect_tcp(const std::string& address, int port, double timeout, double deadline) {
     auto addr = net::resolve_ipv4(address, port);
     if (!addr) throw ConnectionError("cannot resolve '" + address + "'");
-    net::Fd fd(socket(AF_INET, SOCK_STREAM, 0));
-    if (!fd) throw ConnectionError(errno_text(errno));
-    int flags = fcntl(fd.get(), F_GETFL, 0);
-    fcntl(fd.get(), F_SETFL, flags | O_NONBLOCK);
+    net::Fd fd(net::open_socket(SOCK_STREAM));
+    if (!fd) throw ConnectionError(net::error_text(net::last_error()));
+    net::set_nonblocking(fd.get(), true);
     if (connect(fd.get(), reinterpret_cast<const sockaddr*>(&*addr), sizeof *addr) != 0) {
-        if (errno != EINPROGRESS) throw ConnectionError(errno_text(errno));
+        const int e = net::last_error();
+        if (!net::connect_pending(e)) throw ConnectionError(net::error_text(e));
         double until = std::min(deadline, monotonic() + timeout);
-        pollfd p{fd.get(), POLLOUT, 0};
         int r;
-        do r = poll(&p, 1, wait_ms(until, 3600));
-        while (r < 0 && errno == EINTR);
+        do r = net::wait(fd.get(), true, wait_ms(until, 3600));
+        while (r < 0 && net::interrupted(net::last_error()));
         if (r == 0) throw TimeoutError("timed out");
         int err = 0;
         socklen_t len = sizeof err;
-        getsockopt(fd.get(), SOL_SOCKET, SO_ERROR, &err, &len);
-        if (err) throw ConnectionError(errno_text(err));
+        getsockopt(fd.get(), SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&err), &len);
+        if (err) throw ConnectionError(net::error_text(err));
     }
-    fcntl(fd.get(), F_SETFL, flags);
+    net::set_nonblocking(fd.get(), false);
     int yes = 1;
-    setsockopt(fd.get(), IPPROTO_TCP, TCP_NODELAY, &yes, sizeof yes);
+    setsockopt(fd.get(), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&yes), sizeof yes);
     return fd;
 }
 
-void send_all(int fd, const std::string& data, double deadline) {
+void send_all(net::socket_t fd, const std::string& data, double deadline) {
     size_t sent = 0;
     while (sent < data.size()) {
-        pollfd p{fd, POLLOUT, 0};
-        int r = poll(&p, 1, wait_ms(deadline, 3600));
+        int r = net::wait(fd, true, wait_ms(deadline, 3600));
         if (r == 0) throw TimeoutError("timed out sending to kRPC");
         if (r < 0) {
-            if (errno == EINTR) continue;
-            throw ConnectionError(errno_text(errno));
+            const int e = net::last_error();
+            if (net::interrupted(e)) continue;
+            throw ConnectionError(net::error_text(e));
         }
-        ssize_t n = send(fd, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+        long n = net::send_some(fd, data.data() + sent, data.size() - sent);
         if (n < 0) {
-            if (errno == EINTR || errno == EAGAIN) continue;
-            throw ConnectionError(errno_text(errno));
+            const int e = net::last_error();
+            if (net::interrupted(e) || net::would_block(e)) continue;
+            throw ConnectionError(net::error_text(e));
         }
         sent += static_cast<size_t>(n);
     }
 }
 
-void send_message(int fd, const std::string& message, double deadline) {
+void send_message(net::socket_t fd, const std::string& message, double deadline) {
     send_all(fd, pb::varint(message.size()) + message, deadline);
 }
 
 // Reads exactly n bytes. Wakes up regularly to honour `closing`.
-std::string recv_exact(int fd, size_t n, double deadline, const std::atomic<bool>& closing, const char* timeout_text) {
+std::string recv_exact(net::socket_t fd, size_t n, double deadline, const std::atomic<bool>& closing, const char* timeout_text) {
     std::string out;
     out.resize(n);
     size_t got = 0;
     while (got < n) {
         if (closing) throw ConnectionError("connection closed");
         if (monotonic() >= deadline) throw TimeoutError(timeout_text);
-        pollfd p{fd, POLLIN, 0};
-        int r = poll(&p, 1, wait_ms(deadline, 0.25));
-        if (r < 0 && errno != EINTR) throw ConnectionError(errno_text(errno));
+        int r = net::wait(fd, false, wait_ms(deadline, 0.25));
+        if (r < 0) {
+            const int e = net::last_error();
+            if (!net::interrupted(e)) throw ConnectionError(net::error_text(e));
+        }
         if (r <= 0) continue;
-        ssize_t k = recv(fd, &out[got], n - got, 0);
+        long k = net::recv_some(fd, &out[got], n - got);
         if (k == 0) throw ConnectionError("connection closed by the server");
         if (k < 0) {
-            if (errno == EINTR || errno == EAGAIN) continue;
-            throw ConnectionError(errno_text(errno));
+            const int e = net::last_error();
+            if (net::interrupted(e) || net::would_block(e)) continue;
+            throw ConnectionError(net::error_text(e));
         }
         got += static_cast<size_t>(k);
     }
     return out;
 }
 
-std::string recv_message(int fd, double deadline, const std::atomic<bool>& closing,
+std::string recv_message(net::socket_t fd, double deadline, const std::atomic<bool>& closing,
                          const char* timeout_text = "timed out waiting for kRPC") {
     std::string prefix;
     for (;;) {
@@ -204,8 +202,8 @@ Client::~Client() {
 
 void Client::close() noexcept {
     closing_ = true;
-    if (rpc_) shutdown(rpc_.get(), SHUT_RDWR);
-    if (stream_) shutdown(stream_.get(), SHUT_RDWR);
+    if (rpc_) net::shutdown_both(rpc_.get());
+    if (stream_) net::shutdown_both(stream_.get());
     updated_.notify_all();
 }
 

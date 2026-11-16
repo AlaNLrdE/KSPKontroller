@@ -94,7 +94,8 @@ private:
 /// Decode UTF-8 into code points (invalid bytes become U+FFFD).
 std::vector<uint32_t> utf8_decode(const std::string& s);
 
-/// Path of the TTF font: $KSPHMI_FONT, else FreeSansBold (fonts-freefont-ttf), else DejaVu Sans Bold.
+/// Path of the TTF font: $KSPHMI_FONT, else FreeSansBold (fonts-freefont-ttf), else DejaVu Sans Bold (on Windows,
+/// else Arial Bold from C:/Windows/Fonts).
 std::string find_font();
 
 class Canvas {

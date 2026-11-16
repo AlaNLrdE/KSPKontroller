@@ -32,8 +32,9 @@ Source map
    * - ``config.hpp`` / ``config.cpp``
      - Supported TOML-like settings, application-directory lookup and environment overrides.
      - This is a small project parser, not a full TOML implementation.
-   * - ``net.hpp``, ``netinfo.*``, ``discovery.cpp``, ``scenes.*``
-     - Socket RAII, IPv4 lookup, interface information, broadcast discovery and UDP context.
+   * - ``net.*``, ``netinfo.*``, ``discovery.cpp``, ``scenes.*``
+     - Socket RAII and the POSIX/Winsock helpers, IPv4 lookup, interface information, broadcast discovery
+       and UDP context.
      - Source socket waits stay off the render thread. ``NetInfo`` uses a worker for DNS/interface lookup;
        ``line()`` reads cached text only, and destruction signals shared worker state without joining DNS.
    * - ``pb.*`` / ``krpc.*``
@@ -175,8 +176,8 @@ Build and test on a supported host:
    ./ci test_hmi_container
    ./ci hmi_desktop
 
-Windows native targets run through WSL. Docker targets use their own Linux environment; Windows
-Docker usage has not been validated in this session. Stop a desktop before automated tests sharing
+On Windows these targets build natively with MSYS2 UCRT64 (WSL only when MSYS2 is missing). Docker
+targets use their own Linux environment; Windows Docker usage has not been validated in this session. Stop a desktop before automated tests sharing
 its architecture's build directory. The complete verification matrix is in :doc:`../testing`.
 
 Adding a displayed value

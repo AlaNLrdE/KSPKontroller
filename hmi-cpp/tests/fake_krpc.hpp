@@ -2,11 +2,6 @@
 // Procedures are answered by a handler; tools/kspsim covers the full SpaceCenter behaviour end to end.
 #pragma once
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -16,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "net.hpp"
 #include "pb.hpp"
 
 struct FakeResult {
@@ -37,15 +33,15 @@ public:
 
     ~FakeServer() {
         stop_ = true;
-        for (int fd : {rpc_listener_, stream_listener_, rpc_client_.load(), stream_client_.load()})
-            if (fd >= 0) shutdown(fd, SHUT_RDWR), close(fd);
+        for (Socket fd : {rpc_listener_, stream_listener_, rpc_client_.load(), stream_client_.load()})
+            if (fd != ksphmi::net::NO_SOCKET) ksphmi::net::shutdown_both(fd), ksphmi::net::close_socket(fd);
         for (auto& t : threads_) t.join();
     }
 
     /// Disconnect only the stream transport; keep RPC available for liveness probes.
     void disconnect_stream() {
-        int fd = stream_client_.load();
-        if (fd >= 0) shutdown(fd, SHUT_RDWR);
+        Socket fd = stream_client_.load();
+        if (fd != ksphmi::net::NO_SOCKET) ksphmi::net::shutdown_both(fd);
     }
 
     int rpc_port = 0, stream_port = 0;
@@ -55,10 +51,12 @@ public:
     std::atomic<bool> pause_streams{false};  ///< keep both sockets open while withholding stream updates
 
 private:
-    static int listen_any(int& port) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
+    using Socket = ksphmi::net::socket_t;
+
+    static Socket listen_any(int& port) {
+        Socket fd = ksphmi::net::open_socket(SOCK_STREAM);
         int yes = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&yes), sizeof yes);
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -70,18 +68,18 @@ private:
         return fd;
     }
 
-    static bool recv_exact(int fd, std::string& out, size_t n) {
+    static bool recv_exact(Socket fd, std::string& out, size_t n) {
         out.resize(n);
         size_t got = 0;
         while (got < n) {
-            ssize_t k = recv(fd, &out[got], n - got, 0);
+            long k = ksphmi::net::recv_some(fd, &out[got], n - got);
             if (k <= 0) return false;
             got += static_cast<size_t>(k);
         }
         return true;
     }
 
-    static bool recv_message(int fd, std::string& out) {
+    static bool recv_message(Socket fd, std::string& out) {
         std::string prefix, byte;
         do {
             if (!recv_exact(fd, byte, 1)) return false;
@@ -91,9 +89,9 @@ private:
         return recv_exact(fd, out, ksphmi::pb::read_varint(prefix, used));
     }
 
-    static void send_message(int fd, const std::string& m) {
+    static void send_message(Socket fd, const std::string& m) {
         std::string data = ksphmi::pb::varint(m.size()) + m;
-        send(fd, data.data(), data.size(), MSG_NOSIGNAL);
+        ksphmi::net::send_some(fd, data.data(), data.size());
     }
 
     static std::string ok_response(const std::string& identifier) {
@@ -165,8 +163,8 @@ private:
     }
 
     void serve_rpc() {
-        int c = accept(rpc_listener_, nullptr, nullptr);
-        if (c < 0) return;
+        Socket c = accept(rpc_listener_, nullptr, nullptr);
+        if (c == ksphmi::net::NO_SOCKET) return;
         rpc_client_ = c;
         std::string m;
         if (!recv_message(c, m)) return;
@@ -182,8 +180,8 @@ private:
     }
 
     void serve_stream() {
-        int c = accept(stream_listener_, nullptr, nullptr);
-        if (c < 0) return;
+        Socket c = accept(stream_listener_, nullptr, nullptr);
+        if (c == ksphmi::net::NO_SOCKET) return;
         stream_client_ = c;
         std::string m;
         if (!recv_message(c, m)) return;
@@ -224,8 +222,8 @@ private:
     }
 
     Handler handler_;
-    int rpc_listener_ = -1, stream_listener_ = -1;
-    std::atomic<int> rpc_client_{-1}, stream_client_{-1};
+    Socket rpc_listener_ = ksphmi::net::NO_SOCKET, stream_listener_ = ksphmi::net::NO_SOCKET;
+    std::atomic<Socket> rpc_client_{ksphmi::net::NO_SOCKET}, stream_client_{ksphmi::net::NO_SOCKET};
     std::atomic<bool> stop_{false};
     std::mutex mutex_;
     std::map<uint64_t, Parsed> streams_;
