@@ -1064,6 +1064,7 @@ void KrpcSource::run() {
 
 void KrpcSource::session(Client& conn) {
     ship_.reset();
+    std::string lost;  // the last "vessel lost" reason, logged once
     while (!stopping()) {
         uint64_t vessel = 0;
         std::string why = "no active vessel";
@@ -1072,6 +1073,21 @@ void KrpcSource::session(Client& conn) {
         } catch (const RpcError& e) {  // not in the flight scene (some scenes raise)
             vessel = 0;
             why = short_error(e);
+        }
+        if (vessel) {
+            try {
+                follow(conn, vessel);
+                lost.clear();
+                continue;
+            } catch (const RpcError& e) {
+                // The vessel was destroyed or the scene changed while we read it. After flight -> VAB, kRPC kept
+                // returning the old vessel for minutes ("the game is between states"): retrying at once looped
+                // ~13 times a second and never showed the VAB (user, 2026-11-16). Treat it as no vessel this round.
+                why = short_error(e);
+                if (why != lost) log::info(LOG, "vessel lost: " + why);
+                lost = why;
+                vessel = 0;
+            }
         }
         if (!vessel) {  // kRPC 0.7 at the Space Center / Tracking Station returns null instead of raising
             Snapshot s;
@@ -1091,12 +1107,6 @@ void KrpcSource::session(Client& conn) {
             s.received = monotonic();
             publish(s);
             wait(vab ? 0.5 : 1.0);
-            continue;
-        }
-        try {
-            follow(conn, vessel);
-        } catch (const RpcError& e) {  // the vessel was destroyed / the scene changed while we read it
-            log::info(LOG, "vessel lost: " + short_error(e));
         }
     }
 }
