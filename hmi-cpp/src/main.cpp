@@ -187,7 +187,11 @@ private:
         const int monitor = monitor_index(cfg.display.monitor, displays);
         // --desktop shares the PC with the game: always a plain window, on the chosen monitor. WSLg (2026-11-15,
         // secondary monitor at 175% scale) showed nothing for full-screen, borderless or maximized X11 windows
-        // there; only a plain decorated window was visible.
+        // there; only a plain decorated window was visible. Its display bounds are physical pixels while Windows
+        // places the window in logical units, so centering misses: anchor a secondary monitor's window at the
+        // display origin (exact) and let ./ci hmi pass that monitor's logical work area as --size.
+        SDL_Rect bounds{};
+        const bool anchor = args.desktop && monitor != 0 && SDL_GetDisplayBounds(monitor, &bounds) == 0;
         bool fullscreen = !args.desktop && cfg.display.fullscreen && !args.windowed;
         Uint32 flags = 0;
         if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -198,8 +202,9 @@ private:
         }
         log::info(LOG, fmt::str("display %d of %d (monitor %s)%s", monitor, displays, cfg.display.monitor.c_str(),
                                 fullscreen ? ", full screen" : ", window"));
-        window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED_DISPLAY(monitor),
-                                   SDL_WINDOWPOS_CENTERED_DISPLAY(monitor), want_w, want_h, flags);
+        const int x = anchor ? bounds.x : SDL_WINDOWPOS_CENTERED_DISPLAY(monitor);
+        const int y = anchor ? bounds.y : SDL_WINDOWPOS_CENTERED_DISPLAY(monitor);
+        window_ = SDL_CreateWindow("KSP HMI", x, y, want_w, want_h, flags);
         if (!window_) return why = std::string("SDL window: ") + SDL_GetError(), false;
         renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
         if (!renderer_) {

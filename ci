@@ -585,6 +585,7 @@ test_sim() {
 # ------------------------------------------------------------------ Raspberry Pi HMI (hmi-cpp/, C++)
 # Built with CMake: on the Pi by ./ci deploy_hmi, on this PC inside WSL (no C++ toolchain on Windows).
 HMI_DIR="$ROOT/hmi-cpp"
+HMI_TITLE_BAR="${HMI_TITLE_BAR:-32}"  # WSLg window title bar height, Windows logical pixels
 HMI_HOST="${HMI_HOST:-ksphmi}"
 HMI_APT_PACKAGES="build-essential cmake pkg-config libsdl2-dev libsdl2-ttf-dev fonts-freefont-ttf"
 # Fallback for a Linux box without root (this PC's WSL): the same libraries unpacked into build/hmi-cpp-deps.
@@ -663,7 +664,18 @@ build_hmi() {
 # Under WSL (NAT networking) 127.0.0.1 is WSL itself: without --address/--demo, target the Windows host, where
 # KSP1's kRPC (0.0.0.0:50000/50001, UDP 50002) and the KSP2 Redux endpoint (UDP 50003) listen.
 hmi() {
-  if is_windows; then hmi_in_wsl hmi "$@"; return; fi
+  if is_windows; then
+    local fit=()
+    # WSLg sizes windows in Windows logical units: fill the secondary monitor's work area minus the title bar.
+    if ! printf '%s\n' "$@" | grep -qx -e --size -e --monitor; then
+      local area
+      area=$(powershell.exe -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms;
+        \$s = [System.Windows.Forms.Screen]::AllScreens | Where-Object { -not \$_.Primary } | Select-Object -Last 1;
+        if (\$s) { '{0}x{1}' -f \$s.WorkingArea.Width, (\$s.WorkingArea.Height - $HMI_TITLE_BAR) }" 2>/dev/null | tr -d '\r')
+      [[ "$area" =~ ^[0-9]+x[0-9]+$ ]] && fit=(--size "$area") && log "secondary monitor work area: $area"
+    fi
+    hmi_in_wsl hmi "${fit[@]}" "$@"; return
+  fi
   build_hmi
   local extra=() host
   if grep -qi microsoft /proc/version 2>/dev/null && ! printf '%s\n' "$@" | grep -qx -e --address -e --demo; then
