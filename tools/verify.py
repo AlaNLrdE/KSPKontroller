@@ -651,13 +651,22 @@ def kiosk_problems(env):
 
 def check_hmi(ctx):
     """Local C++ test build is current, then (if the Pi answers over SSH) its service state and the kRPC address."""
-    # ctest needs a Linux toolchain (WSL here): only check that ./ci test_hmi ran after the last source change.
-    tests = [os.path.join(ROOT, "build", "hmi-cpp", n) for n in ("ksphmi_tests", "ksphmi_render_tests")]
+    # Only check that ./ci test_hmi ran after the last source change: the native Windows build (MSYS2,
+    # build/hmi-cpp-win) or the Linux/WSL one (build/hmi-cpp), whichever is newer.
+    builds = [[os.path.join(ROOT, "build", "hmi-cpp-win", n + ".exe") for n in ("ksphmi_tests", "ksphmi_render_tests")],
+              [os.path.join(ROOT, "build", "hmi-cpp", n) for n in ("ksphmi_tests", "ksphmi_render_tests")]]
+    built = [b for b in builds if all(os.path.isfile(t) for t in b)]
+
+    def tested(b):  # ctest's log when it ran (binaries a change did not relink stay old), else the binaries
+        last = os.path.join(os.path.dirname(b[0]), "Testing", "Temporary", "LastTest.log")
+        stamp = min(os.path.getmtime(t) for t in b)
+        return max(stamp, os.path.getmtime(last)) if os.path.isfile(last) else stamp
+
     sources = [os.path.join(d, f) for d, _, files in os.walk(HMI_DIR) for f in files]
     newest = max((os.path.getmtime(f) for f in sources), default=0)
-    if not all(os.path.isfile(t) for t in tests):
+    if not built:
         report("WARN", "hmi: C++ tests", "never built here: ./ci test_hmi")
-    elif min(os.path.getmtime(t) for t in tests) < newest:
+    elif max(tested(b) for b in built) < newest:
         report("WARN", "hmi: C++ tests", "hmi-cpp changed since the last build: ./ci test_hmi")
     else:
         report("PASS", "hmi: C++ tests", "test binaries newer than hmi-cpp/ (./ci test_hmi)")
