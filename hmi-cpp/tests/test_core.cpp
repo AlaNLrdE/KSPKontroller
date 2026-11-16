@@ -286,6 +286,72 @@ TEST(conic_span_stops_at_the_sphere_of_influence) {
     for (const auto& p : conic_track(hyperbola, *soi, axes, 200)) CHECK(std::hypot(p.first, p.second) <= 5e6 + 1);
 }
 
+TEST(span_until_ends_at_the_entry_in_the_direction_of_motion) {
+    const double r = 1e6, v = std::sqrt(KERBIN_MU / r);
+    OrbitState state{{r, 0, 0}, {0, 0, v}, KERBIN_MU, {}};
+    auto circle = state.conic();
+    CHECK(circle.has_value());
+    if (!circle) return;
+    double start = anomaly_of(*circle, state.position);
+    // A quarter turn ahead: the vessel moves towards +z.
+    ConicSpan quarter = span_until(*circle, ConicSpan{-PI, PI, true}, start, Vec3{0, 0, r});
+    CHECK(!quarter.closed);
+    CHECK_NEAR(quarter.to - quarter.from, PI / 2, 1e-9);
+    CHECK(span_contains(quarter, start + .1) && span_contains(quarter, start + 2 * PI + .1));
+    CHECK(!span_contains(quarter, start - .1) && !span_contains(quarter, start + 2));
+    CHECK(span_contains(ConicSpan{-PI, PI, true}, 123.0));
+    // Three quarters: the end behind the start is reached going forwards, never backwards.
+    ConicSpan most = span_until(*circle, ConicSpan{-PI, PI, true}, start, Vec3{0, 0, -r});
+    CHECK_NEAR(most.to - most.from, 3 * PI / 2, 1e-9);
+    // An open span keeps its start and stops at whichever comes first.
+    Conic flat{1e6, .5, {1, 0, 0}, {0, 0, 1}};
+    ConicSpan open{-1, 1, false};
+    CHECK_NEAR(span_until(flat, open, -1, *flat.position(.5)).to, .5, 1e-12);
+    CHECK_NEAR(span_until(flat, open, -1, *flat.position(2)).to, 1, 1e-12);
+    CHECK_NEAR(span_until(flat, open, -1, *flat.position(2)).from, -1, 1e-12);
+}
+
+namespace {
+/// A flyby of Ike as the live game showed it (2026-11-16): hyperbolic, periapsis `rp`, entering at the sphere.
+Encounter ike_flyby(double rp, double e) {
+    Encounter x;
+    x.body = "Ike", x.radius = 130000, x.mu = 1.8568369e10, x.soi = 1049598.5;
+    const double p = rp * (1 + e), nu = -std::acos((p / x.soi - 1) / e), h = std::sqrt(x.mu * p);
+    const double vr = x.mu / h * e * std::sin(nu), vt = x.mu / h * (1 + e * std::cos(nu));
+    const Vec3 P{1, 0, 0}, T{0, 0, 1};
+    x.position = (P * std::cos(nu) + T * std::sin(nu)) * x.soi;
+    x.velocity = (P * std::cos(nu) + T * std::sin(nu)) * vr + (T * std::cos(nu) - P * std::sin(nu)) * vt;
+    x.center = {3.2e6, 0, 0};
+    return x;
+}
+}  // namespace
+
+TEST(encounter_patch_enters_and_leaves_the_sphere_of_influence) {
+    Encounter flyby = ike_flyby(130000 + 27781, 1.195);
+    auto conic = flyby.conic();
+    auto span = flyby.span();
+    CHECK(conic && span && !span->closed);
+    if (!conic || !span) return;
+    CHECK_NEAR(conic->eccentricity, 1.195, 1e-6);
+    CHECK_NEAR(flyby.periapsis_altitude().value_or(0), 27781, 1e-3);
+    CHECK(span_contains(*span, 0));  // the periapsis lies between entry and exit
+    CHECK_NEAR(span->from, anomaly_of(*conic, flyby.position), 1e-12);
+    auto out = flyby.exit();
+    CHECK(out.has_value());
+    if (out) CHECK_NEAR(std::sqrt(dot(*out, *out)), flyby.soi, 3);
+    CHECK_NEAR(flyby.entry().x, 3.2e6 + flyby.position.x, 1e-6);
+    // Captured (after a capture burn, well inside the sphere): the whole ellipse and no exit.
+    Encounter captured = flyby;
+    captured.position = {.5 * captured.soi, 0, 0}, captured.velocity = {0, 0, std::sqrt(captured.mu / (.5 * captured.soi))};
+    CHECK(captured.span() && captured.span()->closed);
+    CHECK(!captured.exit());
+    // Impact: a periapsis below the surface reads negative.
+    CHECK(ike_flyby(100000, 1.3).periapsis_altitude().value_or(1) < 0);
+    Encounter broken = flyby;
+    broken.mu = 0;
+    CHECK(!broken.conic() && !broken.span() && !broken.exit());
+}
+
 TEST(dashes_keep_their_length_along_corners) {
     auto length = [](const std::vector<Point2>& d) {
         double l = 0;
@@ -1290,6 +1356,102 @@ TEST(maneuver_orbit_is_read_once_per_node_change_and_fails_alone) {
     snap = src.latest();
     src.stop();
     CHECK(snap->state == State::Flight && snap->nav.has_value() && !snap->maneuver_orbit);
+    CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // the vessel session never restarted
+}
+
+namespace {
+/// The pad vessel with the Mun as its target body and a Mun encounter ahead on the current orbit (object 2).
+struct TargetServer : PadServer {
+    std::atomic<bool> broken_approach{false};
+    void counted(const std::string& proc) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++counts[proc];
+    }
+    FakeResult target(const std::string& proc, const std::vector<std::string>& args) {
+        auto id = [&](size_t i) { return args.size() > i ? pb::dec_object(args[i]) : 0; };
+        const uint64_t MUN = 30, MUN_ORBIT = 31, NEXT = 41, APPROACH = 50;
+        if (proc == "get_TargetBody") return {pb::enc_object(MUN)};
+        if (proc == "CelestialBody_get_Orbit") return id(0) == MUN ? FakeResult{pb::enc_object(MUN_ORBIT)} : FakeResult{"", true};
+        if (proc == "Orbit_get_Body") return {pb::enc_object(id(0) == NEXT ? MUN : 3)};
+        if (id(0) == MUN) {
+            if (proc == "CelestialBody_get_Name") return {pb::enc_string("Mun")};
+            if (proc == "CelestialBody_get_EquatorialRadius") return {pb::enc_double(200000)};
+            if (proc == "CelestialBody_get_GravitationalParameter") return {pb::enc_double(6.5138398e10)};
+            if (proc == "CelestialBody_get_SphereOfInfluence") return {pb::enc_double(2429559)};
+        }
+        if (proc == "CelestialBody_get_SphereOfInfluence") return {pb::enc_double(KERBIN_SOI)};
+        if (proc == "Orbit_get_TimeToSOIChange") return {pb::enc_double(id(0) == 2 ? 600 : NAN)};
+        if (proc == "Orbit_get_NextOrbit") return id(0) == 2 ? FakeResult{pb::enc_object(NEXT)} : FakeResult{"", true};
+        if (proc == "Orbit_PositionAt" || proc == "Orbit_VelocityAt") {
+            counted(proc);
+            double ut = pb::dec_double(args.at(1));
+            bool position = proc == "Orbit_PositionAt";
+            if (id(0) == MUN_ORBIT) return {pb::enc_tuple(position ? std::vector<double>{12e6, 0, ut} : std::vector<double>{0, 0, 543})};
+            return {pb::enc_tuple(position ? std::vector<double>{11e6, 0, ut} : std::vector<double>{0, 0, 900})};
+        }
+        if (proc == "Orbit_NextClosestApproach" || proc == "Orbit_TimeOfClosestApproach") {
+            counted(proc);
+            if (broken_approach) return {"", false, "No closest approach"};
+            return {pb::enc_object(APPROACH)};
+        }
+        if (proc == "ClosestApproach_get_UT") return {pb::enc_double(1234)};
+        if (proc == "ClosestApproach_Position") return {pb::enc_tuple({1e6, 0, 0})};
+        if (proc == "ClosestApproach_TargetPosition") return {pb::enc_tuple({1e6, 0, 5000})};
+        return answer(proc);
+    }
+};
+}  // namespace
+
+TEST(target_orbit_approach_and_encounter_are_read_at_low_rate_and_fail_alone) {
+    TargetServer pad;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) { return pad.target(proc, args); });
+    KrpcSource::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    o.discovery = false;
+    o.retry_seconds = .1;
+    KrpcSource src(o);
+    src.start();
+    auto wait_for = [&](auto ready) {
+        double end = monotonic() + 5;
+        while (monotonic() < end && !ready()) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return ready();
+    };
+    CHECK(wait_for([&] { auto s = src.latest(); return s->target_orbit && s->approach && !s->encounters.empty(); }));
+    int before = pad.count("Orbit_NextClosestApproach");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // ~15 samples at 10 Hz
+    auto snap = src.latest();
+    CHECK(pad.count("Orbit_NextClosestApproach") - before <= 3);  // about once a second, not every sample
+    CHECK(snap->target_orbit.has_value());
+    if (snap->target_orbit) {
+        CHECK_EQ(snap->target_orbit->name, std::string("Mun"));
+        CHECK(snap->target_orbit->body);
+        CHECK_NEAR(snap->target_orbit->radius, 200000, 1e-9);
+        CHECK_NEAR(snap->target_orbit->position.x, 12e6, 1e-9);
+        CHECK_NEAR(snap->target_orbit->position.z, 1000, 1e-9);  // at the current UT
+    }
+    if (snap->approach) {
+        CHECK_NEAR(snap->approach->ut, 1234, 1e-9);
+        CHECK_NEAR(snap->approach->distance(), 5000, 1e-6);
+        CHECK(!snap->approach->planned);
+    }
+    CHECK_EQ(snap->encounters.size(), size_t(1));
+    if (!snap->encounters.empty()) {
+        const Encounter& e = snap->encounters.front();
+        CHECK_EQ(e.body, std::string("Mun"));
+        CHECK(!e.planned);
+        CHECK_NEAR(e.ut, 1600, 1e-9);                  // UT + time to the SOI change
+        CHECK_NEAR(e.center.z, 1600, 1e-9);            // the Mun at the entry time
+        CHECK_NEAR(e.position.x, 11e6 - 12e6, 1e-9);   // vessel minus Mun
+        CHECK_NEAR(e.velocity.z, 900 - 543, 1e-9);
+        CHECK_NEAR(e.soi, 2429559, 1e-9);
+    }
+    pad.broken_approach = true;  // only the closest approach disappears
+    CHECK(wait_for([&] { return !src.latest()->approach.has_value(); }));
+    snap = src.latest();
+    src.stop();
+    CHECK(snap->state == State::Flight && snap->target_orbit.has_value() && !snap->encounters.empty());
     CHECK_EQ(pad.count("Vessel_get_Orbit"), 1);  // the vessel session never restarted
 }
 

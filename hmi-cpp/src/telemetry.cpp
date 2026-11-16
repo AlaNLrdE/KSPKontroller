@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
 #include <tuple>
 
 #include "fmt.hpp"
@@ -400,6 +401,159 @@ private:
     bool key_valid_ = false, checked_ = false;
     double refresh_at_ = 0, retry_at_ = 0;
     std::optional<ManeuverOrbit> result_;
+};
+
+// ------------------------------------------------------------------------------------------- target and encounters
+/// The target's orbit, the closest approach to it and moon sphere of influence entries, for ORBIT (KSP's map view).
+/// Only the target identities and the node list are streamed (2 Hz); everything else is read about once a second
+/// (at once when the target or the node changes), all in the body's non-rotating frame of the current orbit.
+/// Each part is optional on its own: a server error drops only that value until the next refresh, logged once.
+class TargetStreams {
+public:
+    struct Result {
+        std::optional<TargetOrbit> target;
+        std::optional<ClosestApproach> approach;
+        std::vector<Encounter> encounters;
+    };
+
+    TargetStreams(Client& c, uint64_t vessel, uint64_t orbit, uint64_t body, uint64_t frame)
+        : c_(c), orbit_(orbit), body_(body), frame_(frame), streams_(c) {
+        uint64_t control = object(c, sc("Vessel_get_Control", {obj(vessel)}));
+        streams_.add("nodes", sc("Control_get_Nodes", {obj(control)}), 2);
+        streams_.add("vessel", sc("get_TargetVessel"), 2);
+        streams_.add("body", sc("get_TargetBody"), 2);
+    }
+
+    const Result& sample(double ut) {
+        auto nodes = pb::dec_items(c_.stream(streams_.id("nodes")).data);
+        uint64_t node = nodes.empty() ? 0 : pb::dec_object(nodes.front());
+        auto key = std::make_tuple(stream_object(c_, streams_.id("vessel")), stream_object(c_, streams_.id("body")), node);
+        double now = monotonic();
+        if (key == key_ && now < refresh_at_) return result_;
+        key_ = key;
+        refresh_at_ = now + 1.0;
+        result_ = Result{};
+        auto [vessel, body, n] = key;
+        uint64_t target = 0;  // the target's orbit object
+        part("target orbit", [&] { target = read_target(vessel, body, ut); });
+        uint64_t path = orbit_;  // KSP plans approaches on the post-maneuver orbit
+        if (n) part("maneuver path", [&] {
+            uint64_t o = object(c_, sc("Node_get_Orbit", {obj(n)}));
+            path = o && object(c_, sc("Orbit_get_Body", {obj(o)})) == body_ ? o : 0;
+        });
+        if (target && path) part("closest approach", [&] { read_approach(path, target, n != 0); });
+        part("encounter", [&] { read_encounter(orbit_, false, ut); });
+        if (n && path && path != orbit_) part("planned encounter", [&] { read_encounter(path, true, ut); });
+        return result_;
+    }
+
+private:
+    struct BodyInfo {
+        std::string name;
+        double radius = 0, mu = 0, soi = 0;
+        uint64_t orbit = 0, parent = 0;
+    };
+
+    template <typename Step>
+    void part(const char* what, Step step) {
+        try {
+            step();
+            failed_.erase(what);
+        } catch (const krpc::ConnectionError&) {
+            throw;
+        } catch (const std::exception& e) {
+            if (failed_.insert(what).second) log::warning(LOG, std::string(what) + " unavailable: " + short_error(e));
+        }
+    }
+
+    const BodyInfo& body_info(uint64_t id) {
+        auto it = bodies_.find(id);
+        if (it != bodies_.end()) return it->second;
+        BodyInfo b;
+        b.name = get_string(c_, sc("CelestialBody_get_Name", {obj(id)}));
+        b.radius = get_double(c_, sc("CelestialBody_get_EquatorialRadius", {obj(id)}));
+        b.mu = get_double(c_, sc("CelestialBody_get_GravitationalParameter", {obj(id)}));
+        b.soi = get_double(c_, sc("CelestialBody_get_SphereOfInfluence", {obj(id)}));
+        b.orbit = object(c_, sc("CelestialBody_get_Orbit", {obj(id)}));  // null for the Sun
+        b.parent = b.orbit ? object(c_, sc("Orbit_get_Body", {obj(b.orbit)})) : 0;
+        return bodies_.emplace(id, std::move(b)).first->second;
+    }
+
+    std::pair<Vec3, Vec3> state_at(uint64_t orbit, double ut) {
+        std::vector<std::string> args{obj(orbit), pb::enc_double(ut), obj(frame_)};
+        return {vec3(c_.invoke(sc("Orbit_PositionAt", args)).data), vec3(c_.invoke(sc("Orbit_VelocityAt", args)).data)};
+    }
+
+    /// Only a target that orbits the same body shares the frame: a vessel around another planet is not drawn.
+    uint64_t read_target(uint64_t vessel, uint64_t body, double ut) {
+        TargetOrbit t;
+        uint64_t orbit = 0;
+        if (vessel) {
+            if (vessel != name_id_) target_name_ = get_string(c_, sc("Vessel_get_Name", {obj(vessel)})), name_id_ = vessel;
+            t.name = target_name_;
+            orbit = object(c_, sc("Vessel_get_Orbit", {obj(vessel)}));
+            if (!orbit || object(c_, sc("Orbit_get_Body", {obj(orbit)})) != body_) return 0;
+        } else if (body && body != body_) {
+            const BodyInfo& b = body_info(body);
+            if (b.parent != body_) return 0;
+            t.name = b.name, t.body = true, t.radius = b.radius, orbit = b.orbit;
+        } else {
+            return 0;
+        }
+        auto [position, velocity] = state_at(orbit, ut);
+        if (!position.finite() || !velocity.finite()) return 0;
+        t.position = position, t.velocity = velocity;
+        result_.target = t;
+        return orbit;
+    }
+
+    void read_approach(uint64_t path, uint64_t target, bool planned) {
+        ClosestApproach a;
+        a.planned = planned;
+        try {  // this install's kRPC: Orbit.NextClosestApproach returns a ClosestApproach object
+            uint64_t ca = object(c_, sc("Orbit_NextClosestApproach", {obj(path), obj(target)}));
+            if (!ca) return;
+            a.ut = get_double(c_, sc("ClosestApproach_get_UT", {obj(ca)}));
+            a.vessel = vec3(c_.invoke(sc("ClosestApproach_Position", {obj(ca), obj(frame_)})).data);
+            a.target = vec3(c_.invoke(sc("ClosestApproach_TargetPosition", {obj(ca), obj(frame_)})).data);
+        } catch (const RpcError&) {  // older kRPC builds: the time only, then both orbits at that time
+            a.ut = get_double(c_, sc("Orbit_TimeOfClosestApproach", {obj(path), obj(target)}));
+            a.vessel = state_at(path, a.ut).first;
+            a.target = state_at(target, a.ut).first;
+        }
+        if (std::isfinite(a.ut) && a.vessel.finite() && a.target.finite()) result_.approach = a;
+    }
+
+    /// A moon's sphere of influence ahead on `orbit`: the patch inside it, around the moon's position at the entry.
+    void read_encounter(uint64_t orbit, bool planned, double ut) {
+        double after = get_double(c_, sc("Orbit_get_TimeToSOIChange", {obj(orbit)}));
+        if (!std::isfinite(after) || after < 0) return;
+        uint64_t next = object(c_, sc("Orbit_get_NextOrbit", {obj(orbit)}));
+        if (!next) return;
+        uint64_t moon = object(c_, sc("Orbit_get_Body", {obj(next)}));
+        if (!moon || moon == body_) return;
+        const BodyInfo& b = body_info(moon);
+        if (b.parent != body_ || !b.orbit) return;  // escaping into the parent's sphere: not an encounter
+        Encounter e;
+        e.body = b.name, e.radius = b.radius, e.mu = b.mu, e.soi = b.soi;
+        e.ut = ut + after, e.planned = planned;
+        // Both states come from orbits around the current body, so the frame semantics of future positions agree.
+        auto [vessel, vessel_velocity] = state_at(orbit, e.ut);
+        auto [center, moon_velocity] = state_at(b.orbit, e.ut);
+        e.center = center, e.position = vessel - center, e.velocity = vessel_velocity - moon_velocity;
+        if (e.center.finite() && e.position.finite() && e.velocity.finite() && e.mu > 0) result_.encounters.push_back(e);
+    }
+
+    Client& c_;
+    uint64_t orbit_, body_, frame_;
+    Group streams_;
+    std::tuple<uint64_t, uint64_t, uint64_t> key_{~0ull, ~0ull, ~0ull};
+    double refresh_at_ = 0;
+    Result result_;
+    std::map<uint64_t, BodyInfo> bodies_;
+    std::set<std::string> failed_;
+    uint64_t name_id_ = 0;
+    std::string target_name_;
 };
 
 // ------------------------------------------------------------------------------------------- systems
@@ -974,6 +1128,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     std::unique_ptr<NavigationStreams> nav;
     std::unique_ptr<SystemsStreams> systems;
     std::unique_ptr<ManeuverStreams> maneuver;
+    std::unique_ptr<TargetStreams> targets;
     try {
         nav = std::make_unique<NavigationStreams>(c, vessel, rate);
     } catch (const RpcError& e) {
@@ -983,6 +1138,11 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         maneuver = std::make_unique<ManeuverStreams>(c, vessel, body, inertial);
     } catch (const RpcError& e) {
         log::warning(LOG, "maneuver orbit unavailable: " + short_error(e));
+    }
+    try {
+        targets = std::make_unique<TargetStreams>(c, vessel, orbit, body, inertial);
+    } catch (const RpcError& e) {
+        log::warning(LOG, "target orbit unavailable: " + short_error(e));
     }
     try {
         systems = std::make_unique<SystemsStreams>(c, vessel);
@@ -1028,6 +1188,14 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
         s.orbit_state = OrbitState{position, velocity, mu, *axes};
         // Optional dashed post-burn orbit: a failure only hides it (retried after 1 s).
         if (maneuver) optional_step([&] { s.maneuver_orbit = maneuver->sample(mu); }, [&] { maneuver->invalidate(); });
+        // Optional target orbit, closest approach and encounters (about 1 Hz): each failure drops only its value.
+        if (targets)
+            optional_step(
+                [&] {
+                    const auto& t = targets->sample(s.ut);
+                    s.target_orbit = t.target, s.approach = t.approach, s.encounters = t.encounters;
+                },
+                [] {});
         s.vessel_view = vessel_view_.poll(c, monotonic());  // its own errors only clear the VESSEL panel
         s.received = monotonic();
         publish(std::move(s));

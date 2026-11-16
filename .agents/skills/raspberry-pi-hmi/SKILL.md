@@ -319,3 +319,11 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   forward axis when wider, and skips meshes far outside their part's colliders: struts and fuel lines are
   skipped that way by design (`vessel view: skipped mesh` in KSP.log names each one with its shader).
   Render a dumped shape with a stdlib PNG rasterizer to look at it before asking the user.
+- ORBIT target / encounter (2026-11-16): this install's kRPC has no `Orbit.time_of_closest_approach` or
+  `distance_at_closest_approach`; use `Orbit.next_closest_approach(target_orbit)` (a `ClosestApproach` object:
+  `ut`, `distance`, `position(frame)`, `target_position(frame)`; C++ `Orbit_NextClosestApproach`,
+  `ClosestApproach_get_UT`, `ClosestApproach_Position`). KSP's `position_at` of a future patch around another
+  body adds that body's CURRENT position: build an encounter from the vessel's and the moon's states at the
+  entry UT (`time_to_soi_change` is relative to now) read from their orbits around the current body.
+  The ORBIT view fit has hysteresis (grows at once, shrinks after 2 s under 60 %): a test that draws a big
+  orbit then a small one on the same Display must advance `Snapshot::received` by more than 2 s.

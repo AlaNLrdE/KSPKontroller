@@ -242,9 +242,11 @@ struct OrbitScope {
     bool titles, crt;
     decltype(Display::orbit_label) label;
     decltype(Display::orbit_body) body;
+    Display::OrbitStyle style;
     explicit OrbitScope(Display& d)
-        : d(d), titles(d.panel_titles), crt(d.orbit_crt), label(d.orbit_label), body(d.orbit_body) {}
+        : d(d), titles(d.panel_titles), crt(d.orbit_crt), label(d.orbit_label), body(d.orbit_body), style(d.orbit_style) {}
     ~OrbitScope() {
+        d.orbit_style = style;
         d.panel_titles = titles;
         d.orbit_crt = crt;
         d.orbit_label = std::move(label);
@@ -579,6 +581,8 @@ void GameSkin::orbit(Canvas& c, const Rect& r, const Snapshot& s) {
     OrbitScope scope(d_);
     d_.panel_titles = false;
     d_.orbit_crt = false;
+    // The map view's colours: a violet target orbit and mark, encounter patches in warm yellow.
+    d_.orbit_style = Display::OrbitStyle{Color{186, 104, 255}, Color{255, 200, 72}};
     d_.orbit_body = [&](double x, double y, double radius) { orbit_art_.body(c, s.body, x, y, radius, false); };
     d_.orbit_label = [&](const std::string& value, float size, Color ink, double x, double y, Anchor a) {
         if (value == s.body) return Rect();
