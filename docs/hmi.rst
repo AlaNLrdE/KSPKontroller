@@ -35,7 +35,20 @@ The two application roles are:
   It reconnects forever, so starting the Pi before KSP is fine. ``DemoSource`` flies an 80 x 250 km Kerbin
   orbit, so the screens can be worked on without the game.
 * the **display** (``src/display.cpp``, SDL2 + SDL2_ttf) draws the latest snapshot at ``fps`` frames per second.
-  The layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV or a window on the PC.
+  The layout is in units of the screen height, so it fits the 2520x1680 monitor, a TV, a Mac or a PC screen.
+  The HMI is always full screen at the display's native pixel resolution, read from SDL at start-up on every
+  platform (no size settings; HiDPI pixels on macOS). When the window or display changes size while it
+  runs, the canvas and every size-dependent cache are rebuilt for the new size. ``--size`` only sizes
+  off-screen frames (``--screenshot``, ``--bench``, ``--offscreen``) and ``--windowed`` exists only for the
+  virtual-desktop test harnesses (``tools/hmi-container``).
+* **keyboard** (any platform with a keyboard on the HMI: Pi, PC, Mac, Linux). Esc or ``q`` quits. ``T`` is the
+  board's SAS button and ``R`` its RCS button: in flight they toggle the vessel's SAS / RCS through kRPC
+  ``Control.SAS`` / ``Control.RCS`` (the board's edge toggle); in the VAB they call ``KSPHMI.Press("SAS"|"RCS")``,
+  which goes through the same ``EditorNavigation`` as a board press (SAS next editor screen, RCS previous).
+  Other scenes ignore them. The display thread only queues a press (at most 8); the telemetry thread sends it
+  on its own kRPC connection and logs ``key: ...`` or why it was not applied. ``1`` selects the classic
+  skin and ``2`` the apollo skin until the HMI exits, over the context reply and ``[display] skin``.
+  Key auto-repeat is not a new press.
 
 The kRPC wire protocol (protocol version 1, the same as the krpc 0.7 clients) is encoded by hand in
 ``src/pb.cpp`` / ``src/krpc.cpp`` instead of libprotobuf: a few hundred lines, no ``protoc`` step, no library
@@ -171,7 +184,10 @@ service ``KSPHMI`` (see :doc:`plugin`). The Pi uses its existing kRPC connection
 * ``KSPHMI.Revision() -> uint`` increases whenever the report's contents change. While the UDP context says
   ``vab``, the telemetry thread calls it about twice a second (``ShipReportPoller``) and calls
   ``KSPHMI.ShipReport() -> string`` only when it differs from the revision last fetched.
-* Both procedures exist only in the editor scene (kRPC ``GameScene.Editor``). A missing service (DLL not
+* ``KSPHMI.Press(string button)`` (0.19.5.1) is the keyboard's T / R in the VAB: ``"SAS"`` or ``"RCS"``, any
+  other value is an ``ArgumentException``. An older ``KSPSerialIO.Hmi.dll`` lacks it: the key is logged as not
+  applied and nothing else changes.
+* The procedures exist only in the editor scene (kRPC ``GameScene.Editor``). A missing service (DLL not
   installed, no kRPC), another scene or a report that does not parse leaves ``Snapshot.ship`` empty: the static
   VAB cards stay, the session is not affected, and server errors are retried after 5 s. The log says
   ``ship report unavailable (static VAB cards): ...`` once per distinct reason and
@@ -398,9 +414,9 @@ The binary finds it through
 under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
 ``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
-``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --size WxH --screenshot FILE --seconds S
+``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --size WxH --screenshot FILE --seconds S
 --config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME --layer-cache auto|on|off``
-(``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
+(``ksphmi --help``; ``--windowed`` is for test harnesses only). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).
 
 ``[display] skin`` picks the look: ``apollo`` (the default since 2026-11-14) or ``classic`` (the previous flat
@@ -647,13 +663,15 @@ image build time; this environment is repeatable tooling, not a bit-for-bit depe
 Building on macOS
 -----------------
 
-With the Xcode command line tools and ``brew install cmake pkg-config sdl2 sdl2_ttf``, ``./ci hmi`` runs a
-native Mac window (``build_hmi`` names exactly these packages when one is missing). ``./ci hmi --demo`` displays simulated data without KSP. Run ``./ci test_hmi`` for native tests;
+With the Xcode command line tools and ``brew install cmake pkg-config sdl2 sdl2_ttf``, ``./ci hmi`` runs the
+HMI full screen at the Mac display's native resolution (Esc or ``q`` quits; ``build_hmi`` names exactly these packages when one is missing). ``./ci hmi --demo`` displays simulated data without KSP. Run ``./ci test_hmi`` for native tests;
 ``./ci hmi --demo --screenshot build/hmi-macos-demo.png --size 1280x800`` saves an off-screen frame.
 Native rendering falls back to macOS Arial Bold when the Linux fonts are absent; ``KSPHMI_FONT`` can
 select the same font used on the Pi for visual comparisons. Executable-relative configuration lookup
 uses the macOS API. Linux fbdev is unavailable on macOS and gives an explicit error; SDL and off-screen
-output work. For the simulator and HMI together in the browser, use ``./ci hmi_desktop``.
+output work. With a scaled Retina mode the size is the full-screen area macOS gives the app in backing
+pixels (for example 2940x1846 for "looks like 1470x956" minus the notch band), drawn 1:1 with the
+compositor; the boot-splash ready file is Linux only. For the simulator and HMI together in the browser, use ``./ci hmi_desktop``.
 
 Building on this PC
 -------------------
@@ -699,7 +717,7 @@ Commands
 --------
 
 ==========================  ===========================================================================
-``./ci hmi --demo``         Build the HMI and run it on the PC in a window with the simulated orbit
+``./ci hmi --demo``         Build the HMI and run it full screen on this computer with the simulated orbit
 ``./ci hmi``                Same against KSP on this PC (``--address`` for another one)
 ``./ci build_hmi``          Build into ``build/hmi-cpp`` (on Windows inside WSL)
 ``./ci test_hmi [--sim]``   Build and run ctest; ``--sim`` adds the run against ``tools/kspsim``

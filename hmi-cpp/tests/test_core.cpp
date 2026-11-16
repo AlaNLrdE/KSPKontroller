@@ -457,7 +457,7 @@ TEST(config_layers_and_environment) {
     CHECK(mkdtemp(dir) != nullptr);
     std::string app = std::string(dir), local = app + "/local.toml";
     std::ofstream(app + "/config.toml") << "source = \"krpc\"  # comment\n[krpc]\naddress = 'pc'\nrate_hz = 10\n"
-                                           "[display]\nfps = 10\nfullscreen = true\n[format]\nday_hours = 6\n";
+                                           "[display]\nfps = 10\nlayer_cache = \"on\"\n[format]\nday_hours = 6\n";
     std::ofstream(local) << "[display]\nfps = 5\n";
     setenv("KSPHMI_APP_DIR", app.c_str(), 1);
     setenv("KSPHMI_LOCAL_CONFIG", local.c_str(), 1);
@@ -467,7 +467,7 @@ TEST(config_layers_and_environment) {
     unsetenv("KSPHMI_LOCAL_CONFIG");
     unsetenv("KSPHMI_KRPC_ADDRESS");
     CHECK_EQ(cfg.display.fps, 5);
-    CHECK(cfg.display.fullscreen);  // untouched keys keep config.toml / defaults
+    CHECK_EQ(cfg.display.layer_cache, "on");  // untouched keys keep config.toml / defaults
     CHECK_EQ(cfg.krpc.address, "10.0.0.9");
     CHECK_EQ(cfg.krpc.rpc_port, 50000);
     CHECK_EQ(cfg.loaded.size(), size_t(2));
@@ -480,7 +480,7 @@ TEST(config_layers_and_environment) {
 }
 
 TEST(config_integer_fields_reject_invalid_conversions) {
-    for (const char* key : {"display.fps", "display.width", "display.height", "krpc.rpc_port", "krpc.stream_port"}) {
+    for (const char* key : {"display.fps", "krpc.rpc_port", "krpc.stream_port"}) {
         for (const char* value : {"1e100", "-1e100", "inf", "-inf", "nan", "1.5", "-0.5",
                                  "2147483648", "-2147483649"}) {
             Config cfg;
@@ -497,8 +497,8 @@ TEST(config_integer_fields_reject_invalid_conversions) {
     }
     for (int value : {std::numeric_limits<int>::min(), -1, 0, 60, std::numeric_limits<int>::max()}) {
         Config cfg;
-        apply_toml(cfg, parse_toml("[display]\nwidth = " + std::to_string(value)));
-        CHECK_EQ(cfg.display.width, value);
+        apply_toml(cfg, parse_toml("[krpc]\nrpc_port = " + std::to_string(value)));
+        CHECK_EQ(cfg.krpc.rpc_port, value);
     }
     Config cfg;
     apply_toml(cfg, parse_toml("[display]\nfps = 60.0"));
@@ -631,6 +631,50 @@ TEST(krpc_client_calls_errors_nulls_and_streams) {
     }
     CHECK(rpc_error);
     c.remove_stream(ut);
+}
+
+TEST(keyboard_presses_follow_the_board) {
+    std::mutex m;
+    std::vector<std::string> calls;
+    bool sas = true, rcs = false;
+    std::string pressed;
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        std::lock_guard<std::mutex> lock(m);
+        calls.push_back(proc);
+        if (proc == "Vessel_get_Control") return {pb::enc_object(42)};
+        if (proc == "Control_get_SAS") return {pb::enc_bool(sas)};
+        if (proc == "Control_get_RCS") return {pb::enc_bool(rcs)};
+        if (proc == "Control_set_SAS") return sas = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "Control_set_RCS") return rcs = pb::dec_bool(args.at(1)), FakeResult{""};
+        if (proc == "Press") return pressed = pb::dec_string(args.at(0)), FakeResult{""};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    // Flight: T toggles SAS and R toggles RCS on the vessel, like the board's edge toggle.
+    CHECK_EQ(send_press(c, Button::Sas, 7, "flight"), "SAS off");
+    CHECK_EQ(send_press(c, Button::Rcs, 7, "flight"), "RCS on");
+    CHECK(!sas);
+    CHECK(rcs);
+    // VAB: KSPHMI.Press feeds the board's editor navigation (SAS next screen, RCS previous).
+    CHECK_EQ(send_press(c, Button::Sas, 0, "vab"), "SAS pressed in the VAB (next editor screen)");
+    CHECK_EQ(pressed, "SAS");
+    CHECK_EQ(send_press(c, Button::Rcs, 0, "vab"), "RCS pressed in the VAB (previous editor screen)");
+    CHECK_EQ(pressed, "RCS");
+    // Elsewhere (Space Center, SPH, menus) nothing reaches the game.
+    {
+        std::lock_guard<std::mutex> lock(m);
+        calls.clear();
+    }
+    CHECK(send_press(c, Button::Sas, 0, "spacecenter").find("ignored") != std::string::npos);
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK(calls.empty());
+    }
+    CHECK_EQ(std::string(button_name(Button::Rcs)), "RCS");
 }
 
 TEST(krpc_stream_disconnect_overrides_cached_value) {

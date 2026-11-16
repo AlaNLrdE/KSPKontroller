@@ -274,6 +274,16 @@ class Simulator:
                 self.ship_revision += 1
         log.info("editor mode %s", mode)
 
+    def editor_press(self, button: str) -> None:
+        """KSPHMI.Press from the HMI keyboard: in the VAB, SAS steps to the next editor screen and RCS to the
+        previous one, like a board press in KSPSerialIO.Hmi (the SPH ignores it)."""
+        if button not in ("SAS", "RCS"):
+            raise ValueError("button must be SAS or RCS")
+        with self.lock:
+            if self.scene == "vab":
+                direction = 1 if button == "SAS" else -1
+                self.set_editor_mode(EDITOR_MODES[(EDITOR_MODES.index(self.editor_mode) + direction) % 4])
+
     def set_editor_group(self, group: str) -> None:
         valid = ("stage", "gear", "lights", "brakes", "abort", "sas", "rcs") + tuple("custom%d" % n for n in range(1,11))
         if group not in valid:

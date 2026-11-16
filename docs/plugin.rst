@@ -253,7 +253,9 @@ part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has n
   ``ShipReportCache``. The revision increases only when the text changes, and once more when the editor is left
   (the report is then empty).
 * ``HmiService`` (``[KRPCService(Name = "KSPHMI", GameScene = GameScene.Editor)]``) has ``Revision() -> uint``
-  and ``ShipReport() -> string``. They only read the cache: no RPC touches KSP objects. No service ``Id`` is set,
+  and ``ShipReport() -> string``, which only read the cache, and ``Press(string)`` (0.19.5.1), the HMI
+  keyboard's SAS / RCS: it calls ``EditorNavigation.Press(7|6)``, the same step as a board press, which only
+  queues it for ``EditorShipReport.Update``. No RPC touches KSP objects directly. No service ``Id`` is set,
   so kRPC assigns one and cannot clash with another mod's.
 * ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
   ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.

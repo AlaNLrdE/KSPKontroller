@@ -125,6 +125,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). The Pi builds it:
   `./ci deploy_hmi` copies it to `~/ksphmi/cpp`, runs cmake/ctest there and restarts `ksphmi.service`. On this PC
   `./ci build_hmi`/`hmi`/`test_hmi` run inside WSL (no Windows C++ toolchain). Tests and tools stay Python.
+- The HMI is always full screen at the display's native pixel size on every platform (user, 2026-11-15): no size settings, `ALLOW_HIGHDPI` on macOS, and a window/display size change rebuilds Canvas and Display. `--size` is for off-screen frames only; `--windowed` only for the virtual-desktop test harnesses. Boot ready file: Linux only.
+- HMI keys (user, 2026-11-15): T = SAS, R = RCS as board presses (flight: kRPC Control toggle; VAB: KSPHMI.Press into EditorNavigation), 1 = classic, 2 = apollo. The frame loop only queues presses: kRPC calls stay on the telemetry thread, never on the display thread.
 - HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /

@@ -728,12 +728,30 @@ class ShipReportTest(unittest.TestCase):
                 self.assertEqual(conn.ksphmi.revision(), rev + 1)
                 self.assertIn("name=Heavy%20Lifter", conn.ksphmi.ship_report())
                 self.assertEqual(conn.ksphmi.revision(), rev + 1)  # polling alone changes nothing
+                # The HMI keyboard: T (SAS) next editor screen, R (RCS) previous, as the board in the VAB
+                self.assertEqual(sim.editor_mode, "construction")
+                conn.ksphmi.press("SAS")
+                self.assertEqual(sim.editor_mode, "actions")
+                conn.ksphmi.press("RCS")
+                conn.ksphmi.press("RCS")
+                self.assertEqual(sim.editor_mode, "cargo")
+                self.assertEqual(conn.ksphmi.revision(), rev + 4)  # every mode change is a new report
+                with self.assertRaises(Exception):
+                    conn.ksphmi.press("STAGE")
                 sim.set_scene("flight")  # GameScene.Editor: kRPC refuses the call elsewhere
                 with self.assertRaises(Exception) as err:
                     conn.ksphmi.revision()
                 self.assertIn("not available in game scene", str(err.exception))
+                control = conn.space_center.active_vessel.control  # in flight T / R toggle the vessel's SAS / RCS
+                for flag in ("sas", "rcs"):
+                    before = getattr(control, flag)
+                    setattr(control, flag, not before)
+                    self.assertEqual(getattr(control, flag), not before)
+                    self.assertEqual(sim.game[flag], not before)
                 sim.set_scene("sph")
-                self.assertEqual(conn.ksphmi.revision(), rev + 1)
+                self.assertEqual(conn.ksphmi.revision(), rev + 4)
+                conn.ksphmi.press("SAS")  # the SPH ignores presses, like KSPSerialIO.Hmi
+                self.assertEqual(sim.editor_mode, "cargo")
                 sim.set_ship("")  # as without KSPSerialIO.Hmi.dll: the service is gone
                 with self.assertRaises(Exception):
                     conn.ksphmi.revision()

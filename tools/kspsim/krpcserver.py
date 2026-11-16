@@ -50,6 +50,21 @@ def read_varint(data: bytes) -> int:
     raise ValueError("truncated varint")
 
 
+def read_string(data: bytes) -> str:
+    """A protobuf string argument: varint length, then UTF-8 bytes."""
+    n = shift = i = 0
+    while True:
+        if i >= len(data):
+            raise ValueError("truncated string")
+        b = data[i]
+        i += 1
+        n |= (b & 0x7F) << shift
+        if not b & 0x80:
+            break
+        shift += 7
+    return data[i:i + n].decode("utf-8")
+
+
 def enc_double(v: float) -> bytes:
     return struct.pack("<d", v)
 
@@ -129,6 +144,9 @@ def services_message(ksphmi: bool = True) -> K.Services:
             proc = hmi.procedures.add(name=name)
             proc.return_type.code = code
             proc.game_scenes.extend([K.Procedure.EDITOR_VAB, K.Procedure.EDITOR_SPH])
+        press = hmi.procedures.add(name="Press")  # void Press(string button): the HMI keyboard's T / R
+        press.parameters.add(name="button").type.code = K.Type.STRING
+        press.game_scenes.extend([K.Procedure.EDITOR_VAB, K.Procedure.EDITOR_SPH])
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
                 "Resources", "Stage", "Part", "Parts"):
@@ -352,10 +370,10 @@ class KrpcServer:
             with self.sim.lock:
                 return self._space_center(proc, args)
         if service == "KSPHMI" and self.sim.ship:
-            return self._ksphmi(proc)
+            return self._ksphmi(proc, args)
         raise RpcFailure("kspsim does not implement the %s service" % service)
 
-    def _ksphmi(self, proc: str) -> bytes:
+    def _ksphmi(self, proc: str, args: dict) -> bytes | None:
         """KSPSerialIO.Hmi's editor ship report. kRPC refuses an Editor-scene procedure in any other scene."""
         sim = self.sim
         if sim.scene not in KSPHMI_SCENES:
@@ -364,6 +382,12 @@ class KrpcServer:
             return varint(sim.ship_revision)
         if proc == "ShipReport":
             return enc_string(sim.ship_report())
+        if proc == "Press":
+            button = read_string(args.get(0, b""))
+            if button not in ("SAS", "RCS"):
+                raise RpcFailure("button must be SAS or RCS, not '%s'" % button, "KRPC", "ArgumentException")
+            sim.editor_press(button)
+            return None
         raise RpcFailure("kspsim does not implement KSPHMI.%s" % proc)
 
     def _krpc(self, client: ClientConn, proc: str, args: dict) -> bytes | None:
@@ -532,6 +556,9 @@ class KrpcServer:
                 return enc_enum(int(r['speed_mode']))
             if member == 'get_SASMode':
                 return enc_enum((0, 2, 3, 4, 5, 7, 6, 8, 9, 1)[sim.sas_mode - 1])
+            if member in ('set_SAS', 'set_RCS'):  # the HMI keyboard's T / R in flight
+                sim.set_game(**{member[4:].lower(): bool(read_varint(args.get(1, b'\x00')))})
+                return None
             if member in ('get_SAS', 'get_RCS'):
                 return enc_bool(bool(r['action_groups'] & (1 if member == 'get_SAS' else 2)))
             if member == 'get_Throttle':

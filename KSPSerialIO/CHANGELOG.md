@@ -1,5 +1,10 @@
 # Changelog
 
+* **0.19.5.1**: 20261115
+  HMI keyboard: `KSPHMI.Press("SAS"|"RCS")` feeds the board's `EditorNavigation`, so T/R on the Pi or a
+  desktop HMI step the VAB editor screens like the board's SAS/RCS. In flight the HMI toggles SAS/RCS through
+  kRPC's `Control`. No serial packet or firmware change.
+
 * **0.19.5.0**: 20261115
   Editor modes on the Pi: action assignments, seat manifests, inventory capacity and named staging parts.
   A dedicated editor serial owner routes SAS/RCS to synchronized screen navigation.

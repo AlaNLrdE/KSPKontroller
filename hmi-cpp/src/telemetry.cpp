@@ -57,9 +57,23 @@ void Source::publish(Snapshot snap) {
 
 bool Source::wait(double seconds) {
     std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait_for(lock, std::chrono::duration<double>(std::max(0.0, seconds)), [this] { return stop_.load(); });
+    cv_.wait_for(lock, std::chrono::duration<double>(std::max(0.0, seconds)), [this] { return stop_.load() || wake_; });
+    wake_ = false;
     return stop_;
 }
+
+void Source::wake() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        wake_ = true;
+    }
+    cv_.notify_all();
+}
+
+void Source::press(Button b) { log::info(LOG, std::string(button_name(b)) + " key ignored: no game link (" + name_ + ")"); }
+
+const char* button_name(Button b) { return b == Button::Sas ? "SAS" : "RCS"; }
+
 
 void Source::run_guarded() {
     try {
@@ -508,6 +522,21 @@ private:
 
 }  // namespace
 
+std::string send_press(Client& c, Button b, uint64_t vessel, const std::string& scene) {
+    const std::string name = button_name(b);
+    if (vessel) {
+        uint64_t control = object(c, sc("Vessel_get_Control", {obj(vessel)}));
+        const bool on = get_bool(c, sc("Control_get_" + name, {obj(control)}));
+        c.invoke(sc("Control_set_" + name, {obj(control), pb::enc_bool(!on)}));
+        return name + (on ? " off" : " on");
+    }
+    if (scene == "vab") {
+        c.invoke(Call{"KSPHMI", "Press", {pb::enc_string(name)}});
+        return name + " pressed in the VAB (" + (b == Button::Sas ? "next" : "previous") + " editor screen)";
+    }
+    return name + " ignored: no vessel and no editor screens in scene '" + scene + "'";
+}
+
 // ================================================================================================ ShipReportPoller
 void ShipReportPoller::reset() {
     report_.reset();
@@ -605,6 +634,30 @@ void KrpcSource::publish(Snapshot snap) {
     Source::publish(std::move(snap));
 }
 
+void KrpcSource::press(Button b) {
+    {
+        std::lock_guard<std::mutex> lock(press_mutex_);
+        if (presses_.size() >= 8) return;  // a held or hammered key must not build a backlog
+        presses_.push_back(b);
+    }
+    wake();
+}
+
+void KrpcSource::send_presses(Client& conn, uint64_t vessel, const std::string& scene) {
+    std::vector<Button> todo;
+    {
+        std::lock_guard<std::mutex> lock(press_mutex_);
+        todo.swap(presses_);
+    }
+    for (Button b : todo) {
+        try {
+            log::info(LOG, "key: " + send_press(conn, b, vessel, scene));
+        } catch (const RpcError& e) {  // KSPHMI missing (old KSPSerialIO.Hmi.dll), scene changed, vessel gone
+            log::warning(LOG, std::string("key ") + button_name(b) + " not applied: " + short_error(e));
+        }
+    }
+}
+
 void KrpcSource::on_stop() {
     std::lock_guard<std::mutex> lock(client_mutex_);
     if (active_) active_->close();
@@ -694,6 +747,7 @@ void KrpcSource::session(Client& conn) {
             context_skin_ = ctx.skin;
             context_at_ = monotonic();
             // The VAB shows the editor ship report when KSPSerialIO.Hmi.dll serves it; polled about twice a second.
+            send_presses(conn, 0, s.scene);
             const bool vab = s.scene == "vab";
             if (vab) s.ship = ship_.poll(conn, monotonic());
             else ship_.reset();
@@ -766,6 +820,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     while (!stopping()) {
         // Also a liveness probe: throws when the socket is gone (0 = left flight).
         if (object(c, sc("get_ActiveVessel")) != vessel) return;
+        send_presses(c, vessel, "flight");
         if (stream_object(c, streams.id("body")) != body) return;  // sphere of influence change: new frames
         Snapshot s;
         s.state = State::Flight;

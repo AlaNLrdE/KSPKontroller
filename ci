@@ -21,7 +21,7 @@
 #   ./ci verify [ARGS]       Run every consistency check (tools/verify.py): protocol, pins, versions, install, KSP.log, git;
 #                            --board also tests the Arduino, --snapshot records the GameData mods, --log PATH analyses a saved log
 #   ./ci build_hmi           Build the Raspberry Pi HMI (hmi-cpp/, C++, CMake) into build/hmi-cpp; on Windows in WSL
-#   ./ci hmi [ARGS]          Build it and run it on this PC in a window (--demo: simulated orbit, no KSP needed)
+#   ./ci hmi [ARGS]          Build it and run it full screen at this display's native resolution (--demo: no KSP)
 #   ./ci test_hmi [--sim]    Build it and run its tests (ctest); --sim also runs it against ./ci sim --no-board
 #   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
 #   ./ci hmi_desktop        Open both HMI and simulator windows in a browser desktop at localhost:6080
@@ -670,11 +670,12 @@ build_hmi() {
   cmake --build "$BUILD/hmi-cpp" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 }
 
-# Build, then run it in a window on this PC (WSLg on Windows); ARGS as ksphmi --help, e.g. --demo
+# Build, then run it full screen at this display's native resolution (WSLg on Windows; Esc or q quits);
+# ARGS as ksphmi --help, e.g. --demo
 hmi() {
   if is_windows; then hmi_in_wsl hmi "$@"; return; fi
   build_hmi
-  "$BUILD/hmi-cpp/ksphmi" --windowed "$@"
+  "$BUILD/hmi-cpp/ksphmi" "$@"
 }
 
 # End to end: tools/kspsim serves the real kRPC protocol; the HMI must follow its vessel and draw a frame.

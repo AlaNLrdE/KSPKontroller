@@ -50,8 +50,10 @@ void usage(FILE* out) {
                  "  --demo             simulated orbit, no game needed\n"
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
                  "  --skin NAME        classic or apollo (overrides [display] skin)\n"
-                 "  --windowed         window instead of full screen (development on a PC)\n"
-                 "  --size WxH         window or screen size, for example 1920x1080\n"
+                 "  --windowed         test harnesses only: a --size window on a virtual desktop\n"
+                 "                     (tools/hmi-container); a real screen is always full screen\n"
+                 "  --size WxH         size of off-screen frames (--screenshot, --bench, --offscreen) or of a\n"
+                 "                     --windowed test window; a real screen uses its native resolution\n"
                  "  --screenshot FILE  draw for --seconds, save the frame as PNG and exit (off-screen)\n"
                  "  --seconds S        how long --screenshot waits for data (default 1.5)\n"
                  "  --fps N            frames per second (default: [display] fps)\n"
@@ -165,6 +167,16 @@ public:
         return ok;
     }
 
+    /// Re-reads the renderer's pixel size after a window or display change; true when it differs.
+    bool refresh_size() {
+        if (!window_) return false;
+        int w = 0, h = 0;
+        if (SDL_GetRendererOutputSize(renderer_, &w, &h) != 0 || w <= 0 || h <= 0) return false;
+        if (w == w_ && h == h_) return false;
+        w_ = w, h_ = h;
+        return true;
+    }
+
     SDL_Renderer* renderer() const { return renderer_; }
     bool video() const { return video_; }
     bool accelerated() const { return accelerated_; }
@@ -177,14 +189,17 @@ private:
     bool open_sdl(const Config& cfg, const Args& args, int want_w, int want_h, bool need_gpu, std::string& why) {
         if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) return why = std::string("SDL video: ") + SDL_GetError(), false;
         video_ = true;
-        bool fullscreen = cfg.display.fullscreen && !args.windowed;
-        Uint32 flags = 0;
-        if (fullscreen) flags |= (want_w > 0 && want_h > 0) ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_FULLSCREEN_DESKTOP;
-        if (want_w <= 0 || want_h <= 0) {
+        // A real screen is always full screen at the display's current (native) mode, whatever the platform:
+        // the Pi's panel, a Mac's Retina display or a PC monitor. ALLOW_HIGHDPI makes the renderer size the
+        // physical pixels on macOS (points otherwise). Only --windowed test harnesses use a --size window.
+        const bool fullscreen = !args.windowed;
+        Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
+        if (fullscreen) {
+            flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
             SDL_DisplayMode mode;
-            if (fullscreen && SDL_GetDesktopDisplayMode(0, &mode) == 0) want_w = mode.w, want_h = mode.h;
-            else want_w = 1280, want_h = 800;
+            if (SDL_GetDesktopDisplayMode(0, &mode) == 0) want_w = mode.w, want_h = mode.h;
         }
+        if (want_w <= 0 || want_h <= 0) want_w = 1280, want_h = 800;
         window_ = SDL_CreateWindow("KSP HMI", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, want_w, want_h, flags);
         if (!window_) return why = std::string("SDL window: ") + SDL_GetError(), false;
         renderer_ = SDL_CreateRenderer(window_, -1, SDL_RENDERER_ACCELERATED);
@@ -274,7 +289,7 @@ int run(int argc, char** argv) {
     Config cfg = load_config(args.config);
     if (!args.skin.empty()) cfg.display.skin = args.skin;
     if (!args.address.empty()) cfg.krpc.address = args.address;  // one place: the source and the waiting screen
-    int want_w = cfg.display.width, want_h = cfg.display.height;
+    int want_w = 0, want_h = 0;
     if (!args.size.empty()) {
         size_t x = args.size.find_first_of("xX");
         if (x == std::string::npos) throw std::runtime_error("--size must look like 1920x1080");
@@ -286,8 +301,13 @@ int run(int argc, char** argv) {
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
     // Boot hand-over: the splash (ksphmi-splash.service) draws until this file exists; it is written after the
-    // first presented frame. Only the real screen announces itself, never a window, a screenshot or a benchmark.
+    // first presented frame. Only the real screen announces itself, never a window, a screenshot or a benchmark,
+    // and only on Linux: the boot splash is a Linux framebuffer service (the Pi), absent on macOS or a PC.
+#if defined(__linux__)
     const bool announce = !args.bench && args.screenshot.empty() && !args.offscreen && !args.windowed;
+#else
+    const bool announce = false;
+#endif
     if (announce) remove_ready_file();
     std::unique_ptr<Source> source;
     if (!args.bench) source = make_source(cfg, args);
@@ -298,16 +318,26 @@ int run(int argc, char** argv) {
     int code = 0;
     {
         Output out(cfg, args, want_w, want_h);
-        Canvas canvas(out.renderer(), out.w(), out.h(), out.accelerated());
-        Display display(cfg, canvas);
-        log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
-        {
+        if (!args.size.empty() && out.video() && !args.windowed)
+            log::warning(LOG, "--size ignored: a real screen uses its native resolution");
+        // Canvas and Display are sized for the screen: rebuilt when the window or display changes size.
+        std::unique_ptr<Canvas> canvas;
+        std::unique_ptr<Display> display;
+        std::string key_skin;  // 1 / 2 on the keyboard; survives a rebuild for a new screen size
+        auto build_view = [&] {
+            display.reset();
+            canvas.reset();
+            canvas = std::make_unique<Canvas>(out.renderer(), out.w(), out.h(), out.accelerated());
+            display = std::make_unique<Display>(cfg, *canvas);
+            display->choose_skin(key_skin);
+            log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
             const std::string mode = args.layer_cache.empty() ? cfg.display.layer_cache : args.layer_cache;
             const bool want = mode == "on" || (mode != "off" && out.accelerated());
-            const bool on = display.set_layer_cache(want);
+            const bool on = display->set_layer_cache(want);
             log::info(LOG, fmt::str("layer cache: %s (%s%s)", on ? "on" : "off", mode.c_str(),
                                     want && !on ? ", no render targets" : ""));
-        }
+        };
+        build_view();
         const int fps = std::max(1, args.fps ? args.fps : cfg.display.fps);
         const double frame = 1.0 / fps;
         const double deadline = monotonic() + args.seconds;
@@ -322,8 +352,8 @@ int run(int argc, char** argv) {
         // --bench-anim turns the attitude 1.5 degrees per frame around a tilted axis; the sample never changes.
         auto bench_attitude = [](int i) { return attitude(10 + 20 * std::sin(i * .05), i * 1.5, 15 * std::cos(i * .03)); };
         if (args.bench) {  // warm-up frame: fonts, label atlas and lighting are built once, outside the timing
-            if (args.bench_anim) display.navball().hold = bench_attitude(0);
-            display.draw(*bench_snap, monotonic());
+            if (args.bench_anim) display->navball().hold = bench_attitude(0);
+            display->draw(*bench_snap, monotonic());
             if (args.bench_anim) last = bench_snap;
             out.present();
         }
@@ -331,22 +361,42 @@ int run(int argc, char** argv) {
             double tick = monotonic();
             if (out.video()) {
                 SDL_Event ev;
-                while (SDL_PollEvent(&ev))
-                    if (ev.type == SDL_QUIT ||
-                        (ev.type == SDL_KEYDOWN && (ev.key.keysym.sym == SDLK_ESCAPE || ev.key.keysym.sym == SDLK_q)))
+                bool resized = false, reset = false;
+                while (SDL_PollEvent(&ev)) {
+                    // Keys: Esc / q quit; T = SAS and R = RCS as if pressed on the board (flight toggles, VAB
+                    // editor screens); 1 = classic skin, 2 = apollo. Auto-repeat is not a new press.
+                    const SDL_Keycode key = ev.type == SDL_KEYDOWN && !ev.key.repeat ? ev.key.keysym.sym : SDLK_UNKNOWN;
+                    if (ev.type == SDL_QUIT || key == SDLK_ESCAPE || key == SDLK_q)
                         quit_signal = 1;
+                    else if ((key == SDLK_t || key == SDLK_r) && source)
+                        source->press(key == SDLK_t ? Button::Sas : Button::Rcs);
+                    else if (key == SDLK_1 || key == SDLK_2 || key == SDLK_KP_1 || key == SDLK_KP_2) {
+                        key_skin = key == SDLK_1 || key == SDLK_KP_1 ? "classic" : "apollo";
+                        display->choose_skin(key_skin);
+                        last = nullptr;  // redraw now in the chosen skin
+                    }
+                    else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+                        resized = true;
+                    else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
+                        reset = true;  // cached textures are gone: rebuild them even at the same size
+                }
+                const bool changed = (resized || reset) && out.refresh_size();
+                if (changed || reset) {
+                    build_view();
+                    last = nullptr;  // full redraw at the new size
+                }
             }
             std::shared_ptr<const Snapshot> snap;
             if (!args.bench) snap = source->latest();
-            else if (args.bench_anim) snap = bench_snap, display.navball().hold = bench_attitude(i + 1);
+            else if (args.bench_anim) snap = bench_snap, display->navball().hold = bench_attitude(i + 1);
             else snap = std::make_shared<const Snapshot>(bench_source.sample(i + 1));
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick. Between samples
             // only the NavBall turns: a NavBall-only frame over the cached layer when there is one.
             bool full = snap != last || snap->state != State::Flight || stale(*snap, tick);
-            bool anim = !full && snap->state == State::Flight && display.navball().animating();
+            bool anim = !full && snap->state == State::Flight && display->navball().animating();
             if (full || anim) {
                 double t0 = monotonic();
-                if (!(anim && display.animate())) display.draw(*snap, t0), anim = false;
+                if (!(anim && display->animate())) display->draw(*snap, t0), anim = false;
                 double t1 = monotonic(), c1 = thread_cpu();
                 out.present();
                 double t2 = monotonic(), c2 = thread_cpu();
@@ -368,7 +418,7 @@ int run(int argc, char** argv) {
                 std::printf("HMI_RENDER_MS=%.1f HMI_PRESENT_MS=%.1f HMI_PRESENT_CPU_MS=%.1f frames=%d full=%d "
                             "navball_only=%d layer_cache=%s size=%dx%d output=%s\n",
                             draw_ms / frames, present_ms / frames, present_cpu_ms / frames, frames, full_frames,
-                            anim_frames, display.layer_cache() ? "on" : "off", out.w(), out.h(), out.kind().c_str());
+                            anim_frames, display->layer_cache() ? "on" : "off", out.w(), out.h(), out.kind().c_str());
                 break;
             }
             if (!args.screenshot.empty() && tick >= deadline) {

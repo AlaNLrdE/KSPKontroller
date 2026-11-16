@@ -133,6 +133,10 @@ void Display::set_skin(const std::string& name, const char* why) {
     skin_ = name;
 }
 
+void Display::choose_skin(const std::string& name) {
+    if (name.empty() || known_skin(name)) chosen_skin_ = name;
+}
+
 Rect Display::orbit_text(const std::string& s, float units, Color color, double x, double y, Anchor a) {
     if (orbit_label) return orbit_label(s, units, color, x, y, a);
     return c_.text(s, units, color, x, y, a);
@@ -209,9 +213,11 @@ bool Display::animate() {
 }
 
 void Display::draw_screen(const Snapshot& snap, double now) {
-    // The simulator's context reply may pick the skin; otherwise the [display] setting. Each skin keeps its own
-    // caches (built lazily, released with the Display), so switching back and forth costs nothing after the first.
-    if (known_skin(snap.skin)) set_skin(snap.skin, "context");
+    // A keyboard choice wins; then the simulator's context reply; otherwise the [display] setting. Each skin keeps
+    // its own caches (built lazily, released with the Display), so switching back and forth costs nothing after
+    // the first.
+    if (!chosen_skin_.empty()) set_skin(chosen_skin_, "keyboard");
+    else if (known_skin(snap.skin)) set_skin(snap.skin, "context");
     else set_skin(config_skin_, "config");
     if (skin_ == "apollo") {
         if (!apollo_) apollo_ = std::make_unique<ApolloSkin>(*this, cfg_);

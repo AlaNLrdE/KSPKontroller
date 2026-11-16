@@ -12,11 +12,23 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "krpc.hpp"
 #include "model.hpp"
 
 namespace ksphmi {
+
+/// The board buttons the HMI keyboard can press (T = SAS, R = RCS), forwarded as if they came from the board.
+enum class Button { Sas, Rcs };
+/// "SAS" or "RCS": the KSPHMI.Press argument and the log name.
+const char* button_name(Button b);
+
+/// Send one press to the game the way KSPSerialIO applies a board press. In flight (vessel != 0) it toggles the
+/// vessel's SAS / RCS (Control.SAS / Control.RCS, the board's edge toggle). In the VAB it calls KSPHMI.Press, which
+/// feeds the same EditorNavigation as the board (SAS next screen, RCS previous). In any other scene nothing is
+/// sent. Returns what happened, for the log. RpcError and ConnectionError propagate.
+std::string send_press(krpc::Client& c, Button b, uint64_t vessel, const std::string& scene);
 
 class Source {
 public:
@@ -25,14 +37,19 @@ public:
     void stop();
     std::shared_ptr<const Snapshot> latest() const;
     const char* name() const { return name_; }
+    /// A keyboard press from the display thread. Never blocks: a source with a game link queues it for its own
+    /// thread, the others only log it.
+    virtual void press(Button b);
 
 protected:
     explicit Source(const char* name);
     virtual void run() = 0;
     virtual void publish(Snapshot snap);
     virtual void on_stop() {}
-    /// Sleep up to `seconds`; true when stop() was called.
+    /// Sleep up to `seconds` or until wake(); true when stop() was called.
     bool wait(double seconds);
+    /// End the current wait() early (a queued keyboard press), without stopping.
+    void wake();
     bool stopping() const { return stop_; }
     /// Ask the thread to finish without joining it (callable from the thread itself).
     void request_stop();
@@ -44,6 +61,7 @@ private:
     std::condition_variable cv_;
     std::shared_ptr<const Snapshot> latest_;
     std::atomic<bool> stop_{false};
+    bool wake_ = false;  ///< guarded by mutex_
     std::thread thread_;
 };
 
@@ -88,6 +106,7 @@ public:
     explicit KrpcSource(Options options);
     ~KrpcSource() override;
     std::string address() const;
+    void press(Button b) override;
 
 protected:
     void run() override;
@@ -98,6 +117,8 @@ protected:
     virtual void session(krpc::Client& conn);
     virtual std::string discover_server();
     void follow(krpc::Client& conn, uint64_t vessel);
+    /// Send the queued keyboard presses (telemetry thread). An RpcError is logged and drops that press only.
+    void send_presses(krpc::Client& conn, uint64_t vessel, const std::string& scene);
 
     Options options_;
     double period_;
@@ -110,6 +131,8 @@ private:
     std::string context_skin_;
     double context_at_ = -1e9;
     ShipReportPoller ship_;
+    std::mutex press_mutex_;
+    std::vector<Button> presses_;  ///< keyboard presses waiting for the telemetry thread
 };
 
 constexpr double KERBIN_MU = 3.5316e12;
