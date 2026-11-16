@@ -81,7 +81,10 @@ The textured colour planet originally shown in the Apollo proposal was moved her
 runtime copy. Steampunk's `OrbitArt` draws this full-colour material at the body's actual
 projected centre/radius; conics, inertial view axes and Cartesian markers remain telemetry.
 The body name sits above the plot instead of obscuring the globe. Other bodies use their
-own shaded colours and never reuse Kerbin geography. This image is illustrative, not a
+own detailed materials from the shared `../bodies/` catalog and never reuse Kerbin geography.
+Classic now uses that same colour catalog; Apollo converts each body's own image to green
+CRT phosphor. These original Kerbin files are retained as source-history references;
+`../bodies/kerbin.png` and its 512px BMP are the active shared material. This image is illustrative, not a
 cartographic map or a live terrain/cloud sensor. Its original generation prompt is recorded
 in `../apollo/README.md`. Apollo shares the source only to create a separately cached green
 CRT material and never applies its CRT palette to Steampunk.

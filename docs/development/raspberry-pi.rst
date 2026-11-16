@@ -138,12 +138,17 @@ black modules, glass windows and the annular NavBall bezel are baked into static
 ``flight_layout(canvas, true)`` is the single Apollo right-column geometry source. A scoped
 ``Display::orbit_body`` callback replaces only the body material, preserving world geometry,
 inertial axes, conics and clipping. It is restored along with the label callback on all exits.
-``OrbitArt`` shares planet materials: Steampunk owns the original colour view; Apollo uses
-cached green-phosphor luminance and a size-cached scanline/vignette mask. ``orbit_crt`` scopes
+``OrbitArt`` shares the body-keyed ``assets/bodies`` catalog across all three themes.
+Classic/Steampunk use colour materials; Apollo uses cached green-phosphor luminance
+and a size-cached scanline/vignette mask. ``orbit_crt`` scopes
 the entire shared renderer's palette (including markers and maneuver dashes), and is restored
 with the material/label callbacks. All colour filtering and mask pixel generation happen only
-when creating a cached texture, never via per-frame image readback. Kerbin is illustrated
-surface artwork; other bodies use shaded spheres.
+when creating a cached texture, never via per-frame image readback. The catalog covers
+all 17 original-system bodies. Each cache retains at most one texture per colour mode,
+keyed by normalized body name; sphere-of-influence changes replace the material. A missing
+custom body's optional BMP falls back to neutral shading, while missing stock artwork
+raises a packaging error. Both inertial and fallback conic paths use these materials;
+body names no longer obscure Classic's detailed globe.
 The waiting/no-vessel illustration uses a separate ``OrbitArt`` cache owned by the skin
 on the live renderer (never the temporary static-art renderer). It shares the flight
 material choice but is labelled as link search, with no fabricated vessel/orbit state.

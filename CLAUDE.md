@@ -249,6 +249,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   digital readouts and glass resource tubes. Fixed scales must indicate saturation without clamping data;
   missing or escaping-orbit measurements must never acquire a fabricated needle.
 
-- The detailed colour planet view belongs to Steampunk (theme 3). Apollo ORBIT is a green CRT throughout:
-  body, atmosphere, curves, maneuver dashes, markers and annotations. Restore orbit_crt with the material
-  hooks and clip; cache luminance conversion / scanline masks instead of filtering image pixels each frame.
+- All themes select ORBIT artwork by the snapshot's body name from assets/bodies (17 original-system bodies).
+  Classic and Steampunk show colour; Apollo remains green CRT throughout, including atmosphere, curves,
+  dashes, markers and annotations. Cache identity includes body and colour mode; bound memory to the latest
+  body per mode. Unknown custom worlds may provide a safely named BMP, otherwise use neutral shading,
+  never Kerbin geography. Restore hooks/palette/clip; convert luminance only when loading a material.
