@@ -524,6 +524,7 @@ namespace {
 
 constexpr int WARP_RAILS = 0, WARP_PHYSICS = 1;  // kRPC SpaceCenter.WarpMode (None = 2)
 constexpr int PHYSICS_WARP_MAX = 3;
+constexpr int CAMERA_AUTOMATIC = 0, CAMERA_MAP = 6;  // kRPC SpaceCenter.CameraMode
 
 int get_int(Client& c, const Call& call) { return pb::dec_sint32(c.invoke(call).data); }
 
@@ -608,6 +609,12 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
         case Command::Quickload:
             c.invoke(sc("Quickload"));
             return name;
+        case Command::ToggleMap: {  // kRPC: Map enters the map view, any other mode only leaves it
+            const uint64_t camera = object(c, sc("get_Camera"));
+            const bool map = get_int(c, sc("Camera_get_Mode", {obj(camera)})) == CAMERA_MAP;
+            c.invoke(sc("Camera_set_Mode", {obj(camera), pb::enc_sint32(map ? CAMERA_AUTOMATIC : CAMERA_MAP)}));
+            return map ? "flight view" : "map view";
+        }
     }
     return name + " unknown";
 }

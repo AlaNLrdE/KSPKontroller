@@ -83,6 +83,9 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
    * - ``,`` / ``.`` / ``/``
      - time warp down / up / to 1x: physics warp while it is active or rails warp is not allowed, rails
        otherwise (kRPC's rails setter also cuts the throttle, so physics warp is stopped through its own factor)
+   * - ``M``
+     - map view toggle (kRPC ``Camera.Mode``: ``Map`` enters it, any other mode only leaves it, keeping the
+       flight camera)
    * - F5 / F9 (held 1 s)
      - quicksave / quickload
    * - Ctrl+1 / Ctrl+2

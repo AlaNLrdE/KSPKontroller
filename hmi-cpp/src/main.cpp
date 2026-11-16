@@ -301,7 +301,7 @@ KeyEvent key_event(const SDL_KeyboardEvent& k) {
     if (s == SDLK_SLASH || sc == SDL_SCANCODE_SLASH) return e.key = Key::Slash, e;
     static const std::pair<SDL_Keycode, Key> keys[] = {
         {SDLK_ESCAPE, Key::Escape}, {SDLK_t, Key::T}, {SDLK_r, Key::R}, {SDLK_f, Key::F}, {SDLK_z, Key::Z},
-        {SDLK_x, Key::X}, {SDLK_g, Key::G}, {SDLK_u, Key::U}, {SDLK_b, Key::B}, {SDLK_SPACE, Key::Space},
+        {SDLK_x, Key::X}, {SDLK_g, Key::G}, {SDLK_u, Key::U}, {SDLK_b, Key::B}, {SDLK_m, Key::M}, {SDLK_SPACE, Key::Space},
         {SDLK_BACKSPACE, Key::Backspace}, {SDLK_F5, Key::F5}, {SDLK_F9, Key::F9}, {SDLK_w, Key::W},
         {SDLK_s, Key::S}, {SDLK_a, Key::A}, {SDLK_d, Key::D}, {SDLK_q, Key::Q}, {SDLK_e, Key::E}, {SDLK_h, Key::H},
         {SDLK_n, Key::N}, {SDLK_i, Key::I}, {SDLK_k, Key::K}, {SDLK_j, Key::J}, {SDLK_l, Key::L},
