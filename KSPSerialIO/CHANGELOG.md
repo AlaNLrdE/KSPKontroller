@@ -1,5 +1,11 @@
 # Changelog
 
+* **0.19.7.3**: 20261116
+  HMI throttle readout: `KSPHMIFlight.Throttle()` returns the main throttle KSP applies to the active vessel
+  (`ctrlState.mainThrottle`). kRPC's `Control.Throttle` reads kRPC's own pilot state: it stayed 0.0 in every
+  skin while a live vessel flew at full throttle. The HMI streams the new procedure and keeps kRPC's value with an
+  older plugin. `KSPSerialIO.dll` only changes version. No serial packet or firmware change.
+
 * **0.19.7.2**: 20261116
   VESSEL panel, second live test (Orion V on the pad, Bluedog parts): launch clamps and towers (`LaunchClamp`) are
   ground equipment and no longer drawn (the FASA launch tower was a 58 m slab beside the rocket); the side view

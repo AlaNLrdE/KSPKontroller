@@ -172,6 +172,9 @@ def services_message(ksphmi: bool = True) -> K.Services:
             for param in params:
                 proc.parameters.add(name=param).type.code = K.Type.FLOAT
             proc.game_scenes.append(K.Procedure.FLIGHT)
+        throttle = flight.procedures.add(name="Throttle")  # float Throttle(): the throttle KSP applies
+        throttle.return_type.code = K.Type.FLOAT
+        throttle.game_scenes.append(K.Procedure.FLIGHT)
         for name in ("VesselShape", "VesselState"):  # the VESSEL panel (format v1, shared fixture)
             proc = flight.procedures.add(name=name)
             proc.return_type.code = K.Type.STRING
@@ -411,6 +414,9 @@ class KrpcServer:
             raise RpcFailure("Procedure not available in game scene '%s'" % sim.scene, "KRPC", "InvalidOperationException")
         if proc in ("VesselShape", "VesselState"):
             return enc_string(vessel_view_fixture(proc == "VesselShape"))
+        if proc == "Throttle":
+            with sim.lock:
+                return enc_float(sim.vessel.controls.throttle)
         values = [read_float(args.get(i, b"\x00" * 4)) for i in range(6)]
         if proc == "SetAxes":
             with sim.lock:
