@@ -319,7 +319,14 @@ positions, values and click feedback are drawn live.
 **A click is the key.** ``CockpitInput`` (``src/cockpitinput.cpp``, no SDL) turns a click into the same
 ``Command`` the key produces, into the same queue (at most 16); only the telemetry thread calls kRPC. New commands:
 ``ToggleControl`` (``ReactionWheels``, ``SolarPanels``, ``Antennas``, ``Radiators``, ``CargoBays``, ``Intakes``),
-``SpeedMode``, ``DeployChutes`` and ``CutChutes``. Mouse coordinates are converted to canvas pixels (HiDPI);
+``SpeedMode``, ``DeployChutes`` and ``CutChutes``. In flight a command thread sends each queued command as soon as
+it arrives, on the telemetry connection (``krpc::Client::invoke`` serializes calls) with the vessel's ``Control``
+object looked up once, so a click waits at most for the one call in progress, not for a telemetry iteration. A
+click on a switch or action group already knows the state its lamp shows and writes the other state in one call
+(``Command::set``); the keys still read the state first. The log shows each command's time in the queue and in
+kRPC (``key: Lights on (queued 2 ms, kRPC 48 ms)``). Over Wi-Fi a kRPC call takes about 50 ms (up to about 250 ms)
+against a few ms over Ethernet: a wired Mac or PC answers clicks fastest. Mouse coordinates are converted to
+canvas pixels (HiDPI);
 a touch screen's synthesized mouse events work the same way. BRAKES act while the button is held; losing focus,
 changing scene or leaving flight releases them.
 

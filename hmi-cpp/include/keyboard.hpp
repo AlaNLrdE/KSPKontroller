@@ -44,7 +44,12 @@ struct Command {
     /// SetBrakes: 1 on / 0 off; ActionGroup: kRPC group 0-9 (0 = group 10); SasMode: kRPC SASMode; ToggleControl:
     /// an index of CONTROL_PROPERTIES; SpeedMode: kRPC SpeedMode (0 orbit, 1 surface, 2 target)
     int value = 0;
-    bool operator==(const Command& o) const { return kind == o.kind && value == o.value; }
+    /// Toggles (SAS, RCS, gear, lights, ToggleControl, ActionGroup): -1 flips what the game reports now (one read
+    /// and one write, as the keys do); 0 / 1 sets that state in one call (a panel click, which knows the state its
+    /// lamp shows).
+    int set = -1;
+    double queued = 0;  ///< monotonic time it was queued (latency log); not part of the command's identity
+    bool operator==(const Command& o) const { return kind == o.kind && value == o.value && set == o.set; }
 };
 
 /// "SAS on/off toggle", "stage", ... for the log.

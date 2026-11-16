@@ -350,6 +350,10 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   part lists and the current stage are streams; adding streams and the Part.Stage/Title scan run as queued steps
   within 40 ms per sample. A blocking 90-part scan over the Mac's Wi-Fi (~50 ms per call) delayed clicks and the
   first sample by seconds (2026-11-16): never add a per-part synchronous loop to the telemetry thread.
+- Click latency: in flight `KrpcSource::command_loop` sends commands on their own thread (shared Client,
+  `invoke` holds `rpc_mutex_`), with a cached Control object; panel toggles carry `Command::set` and cost one call.
+  Read `key: ... (queued N ms, kRPC N ms)` in the log before blaming the game. The Mac is on Wi-Fi (~50 ms per call,
+  spikes ~250 ms), the Pi on Ethernet: compare the two machines' logs, not their absolute speed.
 - kRPC 0.7 facts: `Parachute.SafeState` / `Cut` exist; `Control.Parachutes` cannot be set to false; there is no
   `Parts.InStage`, so the next stage is `Part.Stage == CurrentStage - 1` over `Parts.All`.
 - Apollo's non-flight panel is light grey with dark `INK`: text over dark wells (scene ribbon, grey veils) must use

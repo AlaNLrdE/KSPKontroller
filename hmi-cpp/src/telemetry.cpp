@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <thread>
 #include <tuple>
 
 #include "fmt.hpp"
@@ -859,8 +860,9 @@ constexpr int CAMERA_AUTOMATIC = 0, CAMERA_MAP = 6;  // kRPC SpaceCenter.CameraM
 int get_int(Client& c, const Call& call) { return pb::dec_sint32(c.invoke(call).data); }
 
 /// Flip one boolean Control property ("SAS", "RCS", "Gear", "Lights"); "SAS on" / "SAS off".
-std::string toggle(Client& c, uint64_t control, const std::string& property) {
-    const bool on = get_bool(c, sc("Control_get_" + property, {obj(control)}));
+/// With `set` 0 / 1 (a panel click that knows the state its lamp shows) that state is written in one call.
+std::string toggle(Client& c, uint64_t control, const std::string& property, int set = -1) {
+    const bool on = set >= 0 ? set == 0 : get_bool(c, sc("Control_get_" + property, {obj(control)}));
     c.invoke(sc("Control_set_" + property, {obj(control), pb::enc_bool(!on)}));
     return property + (on ? " off" : " on");
 }
@@ -893,7 +895,7 @@ std::string warp(Client& c, Command::Kind kind) {
 
 }  // namespace
 
-std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const std::string& scene) {
+std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const std::string& scene, uint64_t control_id) {
     const std::string name = command_name(cmd);
     if (!vessel) {
         const bool board_button = cmd.kind == Command::ToggleSas || cmd.kind == Command::ToggleRcs;
@@ -905,12 +907,12 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
         }
         return name + " ignored in scene '" + scene + "'";
     }
-    auto control = [&] { return object(c, sc("Vessel_get_Control", {obj(vessel)})); };
+    auto control = [&] { return control_id ? control_id : object(c, sc("Vessel_get_Control", {obj(vessel)})); };
     switch (cmd.kind) {
-        case Command::ToggleSas: return toggle(c, control(), "SAS");
-        case Command::ToggleRcs: return toggle(c, control(), "RCS");
-        case Command::ToggleGear: return toggle(c, control(), "Gear");
-        case Command::ToggleLights: return toggle(c, control(), "Lights");
+        case Command::ToggleSas: return toggle(c, control(), "SAS", cmd.set);
+        case Command::ToggleRcs: return toggle(c, control(), "RCS", cmd.set);
+        case Command::ToggleGear: return toggle(c, control(), "Gear", cmd.set);
+        case Command::ToggleLights: return toggle(c, control(), "Lights", cmd.set);
         case Command::SetBrakes:
             c.invoke(sc("Control_set_Brakes", {obj(control()), pb::enc_bool(cmd.value != 0)}));
             return name;
@@ -921,6 +923,11 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
             c.invoke(sc("Control_ActivateNextStage", {obj(control())}));
             return name;
         case Command::ActionGroup:
+            if (cmd.set >= 0) {
+                c.invoke(sc("Control_SetActionGroup",
+                            {obj(control()), pb::enc_uint32(uint32_t(cmd.value)), pb::enc_bool(cmd.set != 0)}));
+                return name + (cmd.set ? " on" : " off");
+            }
             c.invoke(sc("Control_ToggleActionGroup", {obj(control()), pb::enc_uint32(uint32_t(cmd.value))}));
             return name;
         case Command::SasMode:
@@ -941,7 +948,7 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
             return name;
         case Command::ToggleControl:
             if (cmd.value < 0 || cmd.value >= CONTROL_PROPERTY_COUNT) return name + " unknown";
-            return toggle(c, control(), CONTROL_PROPERTIES[cmd.value]);
+            return toggle(c, control(), CONTROL_PROPERTIES[cmd.value], cmd.set);
         case Command::SpeedMode:
             c.invoke(sc("Control_set_SpeedMode", {obj(control()), pb::enc_sint32(cmd.value)}));
             return name;
@@ -1133,8 +1140,42 @@ void KrpcSource::command(const Command& c) {
         std::lock_guard<std::mutex> lock(input_mutex_);
         if (commands_.size() >= 16) return;  // hammered keys must not build a backlog
         commands_.push_back(c);
+        commands_.back().queued = monotonic();
     }
+    input_cv_.notify_all();
     wake();
+}
+
+void KrpcSource::send_one(Client& conn, const Command& cmd, uint64_t vessel, const std::string& scene, uint64_t control) {
+    const double start = monotonic();
+    try {
+        const std::string what = send_command(conn, cmd, vessel, scene, control);
+        const double done = monotonic();
+        log::info(LOG, fmt::str("key: %s (queued %.0f ms, kRPC %.0f ms)", what.c_str(),
+                                cmd.queued > 0 ? (start - cmd.queued) * 1000 : 0.0, (done - start) * 1000));
+    } catch (const RpcError& e) {  // old KSPSerialIO.Hmi.dll, scene changed, vessel gone, staging locked
+        log::warning(LOG, "key " + command_name(cmd) + " not applied: " + short_error(e));
+    } catch (const pb::DecodeError& e) {
+        log::warning(LOG, "key " + command_name(cmd) + " not applied: " + short_error(e));
+    }
+}
+
+void KrpcSource::command_loop(Client& conn, uint64_t vessel, uint64_t control, const std::atomic<bool>& stop) {
+    try {
+        while (true) {
+            std::vector<Command> todo;
+            {
+                std::unique_lock<std::mutex> lock(input_mutex_);
+                input_cv_.wait(lock, [&] { return stop.load() || !commands_.empty(); });
+                if (stop) return;  // whatever is still queued goes to the next session's sender or loop
+                todo.swap(commands_);
+            }
+            for (const Command& cmd : todo) send_one(conn, cmd, vessel, "flight", control);
+            wake();  // sample the result now rather than at the end of the telemetry period
+        }
+    } catch (const std::exception& e) {  // the link broke: the telemetry thread ends the session as well
+        log::warning(LOG, std::string("command sender stopped: ") + short_error(e));
+    }
 }
 
 void KrpcSource::hold(const Held& h) {
@@ -1155,16 +1196,10 @@ void KrpcSource::send_inputs(Client& conn, uint64_t vessel, const std::string& s
     Held held;
     {
         std::lock_guard<std::mutex> lock(input_mutex_);
-        todo.swap(commands_);
+        if (!sender_active_) todo.swap(commands_);  // in flight the command thread sends them at once
         held = held_;
     }
-    for (const Command& cmd : todo) {
-        try {
-            log::info(LOG, "key: " + send_command(conn, cmd, vessel, scene));
-        } catch (const RpcError& e) {  // old KSPSerialIO.Hmi.dll, scene changed, vessel gone, staging locked
-            log::warning(LOG, "key " + command_name(cmd) + " not applied: " + short_error(e));
-        }
-    }
+    for (const Command& cmd : todo) send_one(conn, cmd, vessel, scene, 0);
     if (!vessel) {  // held keys act in flight only; the plugin's 0.5 s timeout releases what was sent before
         sent_ = Held{};
         nudged_at_ = -1;
@@ -1355,6 +1390,29 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     }
     std::unique_ptr<CockpitStreams> cockpit;  // only while the cockpit panel scene is shown
     double cockpit_retry = 0;
+    // Commands in flight go through their own thread on this connection (see command_loop), with the vessel's
+    // Control object looked up once.
+    const uint64_t control = object(c, sc("Vessel_get_Control", {obj(vessel)}));
+    std::atomic<bool> stop_sender{false};
+    {
+        std::lock_guard<std::mutex> lock(input_mutex_);
+        sender_active_ = true;
+    }
+    std::thread sender([this, &c, vessel, control, &stop_sender] { command_loop(c, vessel, control, stop_sender); });
+    struct StopSender {
+        KrpcSource& self;
+        std::atomic<bool>& stop;
+        std::thread& thread;
+        ~StopSender() {
+            {
+                std::lock_guard<std::mutex> lock(self.input_mutex_);
+                stop = true;
+                self.sender_active_ = false;
+            }
+            self.input_cv_.notify_all();
+            thread.join();
+        }
+    } stop_guard{*this, stop_sender, sender};
     log::info(LOG, "following " + name + " around " + body_name);
     vessel_view_.reset();
     auto d = [&](const std::string& key) { return pb::dec_double(c.stream(streams.id(key)).data); };

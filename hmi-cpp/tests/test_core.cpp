@@ -2146,17 +2146,17 @@ TEST(cockpit_clicks_send_the_same_commands_as_the_keys) {
         CockpitPress p = in.press(c, s, 0);
         return p.commands.size() == 1 && p.commands[0] == expected;
     };
-    CHECK(only(Ctl::Sas, {Command::ToggleSas}));
-    CHECK(only(Ctl::Rcs, {Command::ToggleRcs}));
-    CHECK(only(Ctl::Gear, {Command::ToggleGear}));
+    CHECK(only(Ctl::Sas, {Command::ToggleSas, 0, 1}));  // the lamp shows off: set on in one call
+    CHECK(only(Ctl::Rcs, {Command::ToggleRcs, 0, 1}));
+    CHECK(only(Ctl::Gear, {Command::ToggleGear}));  // state unknown: read, then flip
     CHECK(only(Ctl::Lights, {Command::ToggleLights}));
     CHECK(only(Ctl::Wheels, {Command::ToggleControl, 0}));
-    CHECK(only(Ctl::Solar, {Command::ToggleControl, 1}));
+    CHECK(only(Ctl::Solar, {Command::ToggleControl, 1, 1}));
     CHECK(only(Ctl::Intakes, {Command::ToggleControl, 5}));
     CHECK(only(Ctl::Mode1, {Command::SasMode, 2}));  // PRO = kRPC Prograde, as Alt+2
     CHECK(only(Ctl::Mode9, {Command::SasMode, 1}));  // NODE = kRPC Maneuver, as Alt+0
     CHECK(only(Ctl::RefSurface, {Command::SpeedMode, 1}));
-    CHECK(only(Ctl::Group1, {Command::ActionGroup, 1}));
+    CHECK(only(Ctl::Group1, {Command::ActionGroup, 1, 1}));
     CHECK(only(Ctl::Group10, {Command::ActionGroup, 0}));  // kRPC group 0 = custom group 10, as key 0
     CHECK(only(Ctl::Deploy, {Command::DeployChutes}));
     CHECK(only(Ctl::ThrottleFull, {Command::ThrottleFull}));
@@ -2270,7 +2270,7 @@ TEST(cockpit_commands_reach_krpc) {
         if (proc == "Parachute_Cut") return cut.push_back(std::to_string(pb::dec_object(args.at(0)))), FakeResult{""};
         if (proc == "Control_get_SolarPanels") return {pb::enc_bool(solar)};
         if (proc == "Control_set_SolarPanels") return solar = pb::dec_bool(args.at(1)), FakeResult{""};
-        if (proc == "Control_set_SpeedMode" || proc == "Control_set_Parachutes") return {""};
+        if (proc == "Control_set_SpeedMode" || proc == "Control_set_Parachutes" || proc == "Control_SetActionGroup") return {""};
         return {"", false, "no such procedure " + proc};
     });
     krpc::Client::Options o;
@@ -2291,8 +2291,41 @@ TEST(cockpit_commands_reach_krpc) {
         CHECK_EQ(last_args["Control_set_Parachutes"], pb::enc_bool(true));
     }
     CHECK_EQ(send_command(c, {Command::CutChutes}, 7, "flight"), "2 parachutes cut");  // only the open ones
+    {
+        std::lock_guard<std::mutex> lock(m);
+        CHECK_EQ(cut.size(), size_t(2));
+        last_args.clear();
+    }
+    // A click that knows the state: one write with the cached Control object, no lookup and no read
+    CHECK_EQ(send_command(c, {Command::ToggleControl, 1, 0}, 7, "flight", 42), "SolarPanels off");
+    CHECK(!solar);
+    CHECK_EQ(send_command(c, {Command::ActionGroup, 0, 1}, 7, "flight", 42), "action group 10 on");
     std::lock_guard<std::mutex> lock(m);
-    CHECK_EQ(cut.size(), size_t(2));
+    CHECK(!last_args.count("Vessel_get_Control") && !last_args.count("Control_get_SolarPanels"));
+    CHECK_EQ(last_args["Control_SetActionGroup"], pb::enc_uint32(0) + pb::enc_bool(true));
+}
+
+TEST(krpc_client_serializes_calls_from_two_threads) {
+    // The telemetry thread and the in-flight command thread share one connection: replies never cross.
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        if (proc == "Echo") return {args.at(0)};
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    std::atomic<int> wrong{0};
+    auto run = [&](int base) {
+        for (int i = 0; i < 200; ++i) {
+            const std::string v = pb::enc_sint32(base + i);
+            if (c.invoke(krpc::Call{"SpaceCenter", "Echo", {v}}).data != v) ++wrong;
+        }
+    };
+    std::thread a(run, 0), b(run, 100000);
+    a.join(), b.join();
+    CHECK_EQ(wrong.load(), 0);
 }
 
 int main(int argc, char** argv) {

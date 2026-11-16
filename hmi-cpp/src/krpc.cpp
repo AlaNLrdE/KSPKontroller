@@ -208,6 +208,7 @@ void Client::close() noexcept {
 }
 
 Value Client::invoke(const Call& call) {
+    std::lock_guard<std::mutex> lock(rpc_mutex_);
     try {
         return invoke_once(call);
     } catch (const RpcError&) {

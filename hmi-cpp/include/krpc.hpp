@@ -92,6 +92,7 @@ private:
     std::thread reader_;
     std::atomic<bool> closing_{false};
     std::atomic<bool> broken_{false};  // an RPC failed at the link level
+    std::mutex rpc_mutex_;  // one request/reply at a time on the RPC socket: the telemetry and command threads share it
     std::mutex mutex_;
     std::condition_variable updated_;
     std::map<uint64_t, std::string> latest_;  // stream id -> ProcedureResult bytes

@@ -168,6 +168,12 @@ void CockpitInput::expect(Ctl c, const Snapshot& s, double now) {
 CockpitPress CockpitInput::press(Ctl c, const Snapshot& s, double now) {
     CockpitPress r;
     auto send = [&](Command cmd, bool confirm = true) {
+        // A switch or group whose state the lamp shows is set to the other state in one call (no read first).
+        const bool toggle = cmd.kind == Command::ToggleSas || cmd.kind == Command::ToggleRcs ||
+                            cmd.kind == Command::ToggleGear || cmd.kind == Command::ToggleLights ||
+                            cmd.kind == Command::ToggleControl || cmd.kind == Command::ActionGroup;
+        if (toggle)
+            if (const std::optional<int> now_on = observe(c, s)) cmd.set = *now_on ? 0 : 1;
         r.commands.push_back(cmd);
         if (confirm) expect(c, s, now);
         else pending_[c] = Pending{now, 0, true};
