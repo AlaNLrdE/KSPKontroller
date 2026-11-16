@@ -20,6 +20,7 @@
 #include "display.hpp"
 #include "log.hpp"
 #include "png.hpp"
+#include "orbitart.hpp"
 #include "navball.hpp"
 #include "scenes.hpp"
 #include "segments.hpp"
@@ -1110,6 +1111,71 @@ TEST(instrument_history_waits_for_samples_and_resets_for_a_new_vessel_or_time_re
     CHECK(!draw());
     snap.vessel = "Another vessel";
     CHECK(draw());
+    }
+}
+
+TEST(body_material_catalog_is_distinct_cached_by_body_and_monochrome_only_for_crt) {
+    Screen screen(512,512);
+    OrbitArt art;
+    CHECK_EQ(OrbitArt::stock_bodies().size(),17u);
+    CHECK_EQ(OrbitArt::material_key("Kerbol"),"sun");
+    CHECK_EQ(OrbitArt::material_key("The Mun"),"mun");
+    CHECK_EQ(OrbitArt::material_key("Custom World"),"custom_world");
+    CHECK(OrbitArt::material_key("../../kerbin").empty());
+    auto draw=[&](const std::string& body,bool crt) {
+        screen.canvas->clear({0,0,0});
+        art.body(*screen.canvas,body,256,256,210,crt);
+        screen.canvas->flush(); SDL_RenderFlush(screen.renderer);
+        return pixels(screen);
+    };
+    for(bool crt:{false,true}) {
+        std::set<uint64_t> identities;
+        for(const auto& name:OrbitArt::stock_bodies()) {
+            const auto image=draw(name,crt);
+            uint64_t fingerprint=1469598103934665603ull;
+            std::set<uint32_t> detail;
+            for(int y=120;y<390;y+=3)for(int x=120;x<390;x+=3) {
+                const auto pixel=image[y*512+x];
+                fingerprint=(fingerprint^pixel)*1099511628211ull;
+                detail.insert(pixel);
+                if(crt) {
+                    const int r=(pixel>>16)&255,g=(pixel>>8)&255,b=pixel&255;
+                    CHECK(g>=r);CHECK(g>=b);
+                }
+            }
+            CHECK(detail.size()>50); CHECK(identities.insert(fingerprint).second);
+        }
+        const auto first=draw("Kerbin",crt);
+        CHECK(first!=draw("Duna",crt));
+        CHECK(first==draw("Kerbin",crt)); // return after an SOI change cannot retain the previous texture
+        CHECK(draw("Sun",crt)==draw("Kerbol",crt));
+        CHECK(draw("Unknown Mod World",crt)!=first);
+    }
+}
+
+TEST(all_themes_change_orbit_material_when_telemetry_changes_body) {
+    const char* shots=std::getenv("KSPHMI_BODY_SHOTS");
+    for(const char* skin:{"classic","apollo","steampunk"}) {
+        Screen screen(1920,1080,skin);
+        auto snap=demo(600); snap.received=0;
+        screen.display->navball().hold=attitude(0,0,0);
+        const auto layout=flight_layout(*screen.canvas,std::string(skin)=="apollo");
+        auto draw=[&](const char* body) {
+            snap.body=body;
+            // Keep orbital geometry fixed to isolate the material, but do not invent a lunar atmosphere.
+            snap.atmosphere_depth=std::string(body)=="Mun" ? 0 : std::string(body)=="Duna" ? 50000 :
+                                  std::string(body)=="Jool" ? 200000 : 70000;
+            screen.display->draw(snap,0);
+            screen.canvas->flush(); SDL_RenderFlush(screen.renderer);
+            std::vector<uint32_t> region;
+            for(int y=layout.orbit.y;y<layout.orbit.bottom();++y)
+                for(int x=layout.orbit.x;x<layout.orbit.right();++x)region.push_back(screen.pixel(x,y));
+            if(shots) CHECK(save_png(screen.surface,std::string(shots)+"/"+skin+"_"+body+".png"));
+            return region;
+        };
+        const auto kerbin=draw("Kerbin");
+        CHECK(kerbin!=draw("Duna")); CHECK(kerbin!=draw("Jool")); CHECK(kerbin!=draw("Mun"));
+        CHECK(kerbin==draw("Kerbin"));
     }
 }
 

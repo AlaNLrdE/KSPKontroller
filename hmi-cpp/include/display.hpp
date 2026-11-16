@@ -19,6 +19,7 @@
 namespace ksphmi {
 
 class ApolloSkin;
+class OrbitArt;
 
 /// Shared right-column layout profiles: ORBIT and VESSEL above the NavBall. The default keeps the classic
 /// 34u row; flight_deck selects the approved Apollo half-screen layout and its 33u row.
@@ -106,7 +107,7 @@ public:
     void choose_skin(const std::string& name);
     /// ORBIT's body and apsis labels go through this when set (the apollo skin paints them in its lettering).
     std::function<Rect(const std::string&, float, Color, double, double, Anchor)> orbit_label;
-    /// Optional body material for Apollo; radius and centre remain the orbital projection's actual geometry.
+    /// Optional skin override of the shared body material; radius and centre remain the orbital projection's actual geometry.
     std::function<void(double, double, double)> orbit_body;
     /// Scoped green CRT palette for the entire ORBIT projection, including its maneuver and marker primitives.
     bool orbit_crt = false;
@@ -165,6 +166,7 @@ private:
     Config cfg_;
     std::string config_skin_, skin_, chosen_skin_;
     bool vessel_heat_ = false;
+    std::unique_ptr<OrbitArt> orbit_art_;
     std::unique_ptr<ApolloSkin> apollo_;
     std::unique_ptr<ApolloSkin> steampunk_;
 };

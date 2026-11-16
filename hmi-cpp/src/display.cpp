@@ -1,4 +1,5 @@
 #include "display.hpp"
+#include "orbitart.hpp"
 #include "resource_ui.hpp"
 
 #include <algorithm>
@@ -122,6 +123,7 @@ Display::Display(const Config& cfg, Canvas& canvas)
       cfg_(cfg),
       config_skin_(known_skin(cfg.display.skin) ? cfg.display.skin : "classic"),
       skin_(config_skin_) {
+    orbit_art_ = std::make_unique<OrbitArt>();
     if (!known_skin(cfg.display.skin)) log::warning("ksphmi.display", "unknown skin '" + cfg.display.skin + "', using classic");
     log::info("ksphmi.display", "skin: " + skin_ + " (config)");
 }
@@ -396,7 +398,7 @@ void Display::waiting(const Snapshot& snap, double now) {
     const double u = c_.u;
     const double cx = c_.w / 2.0, cy = c_.h * 0.5;
     // A small moon circling a planet, so a frozen screen is easy to tell from a waiting one.
-    c_.circle(static_cast<float>(cx), static_cast<float>(cy - 12 * u), static_cast<float>(6 * u), BODY);
+    orbit_art_->body(c_, "Kerbin", cx, cy-12*u, 6*u, false);
     double ang = now * 1.2;
     c_.ring(static_cast<float>(cx), static_cast<float>(cy - 12 * u), static_cast<float>(11 * u),
             std::max(1.0f, static_cast<float>(static_cast<int>(0.25 * u))), GRID);
@@ -1002,7 +1004,7 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
         return Pt{static_cast<float>(fx + r * std::cos(nu) * scale), static_cast<float>(fy - r * std::sin(nu) * scale)};
     };
     if (s.atmosphere_depth > 0)
-        c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(3.0, atmo * scale)), orbit_ink(ATMOSPHERE));
+        c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(3.0, atmo * scale)), (orbit_crt ? orbit_ink(ATMOSPHERE) : OrbitArt::atmosphere_color(s.body)));
     double p = a * (1 - e * e);
     std::vector<Pt> points;
     double limit = 3 * std::max(xmax - xmin, 2 * ymax);
@@ -1015,8 +1017,9 @@ void Display::orbit_contents(const Rect& rect, const Snapshot& s) {
     }
     if (points.size() > 1) orbit_line(points, elliptic, 1, orbit_body ? Color{155,242,139} : ACCENT);
     if (orbit_body) orbit_body(fx, fy, std::max(2.0, radius * scale));
-    else c_.circle(static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(std::max(2.0, radius * scale)), orbit_ink(BODY));
-    orbit_text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
+    else orbit_art_->body(c_, s.body, fx, fy, std::max(2.0, radius*scale), orbit_crt);
+    if(orbit_body) orbit_text(s.body, 2.8, VALUE, fx, fy, Anchor::Center);
+    else orbit_text(s.body, 1.8, VALUE, rect.right()-2*u, rect.y+6*u, Anchor::MidRight);
 
     float marker = static_cast<float>(0.8 * u);
     if (elliptic) {
@@ -1100,7 +1103,7 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
         return Pt{static_cast<float>(cx + x * scale), static_cast<float>(cy - y * scale)};
     };
     if (s.atmosphere_depth > 0)
-        c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), orbit_ink(ATMOSPHERE));
+        c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(3.0, atmo * scale)), (orbit_crt ? orbit_ink(ATMOSPHERE) : OrbitArt::atmosphere_color(s.body)));
     const float orbit_width = static_cast<float>(std::max(1.5, .14 * u));  // as the dashed orbit
     if (conic) {
         std::vector<Pt> segment;
@@ -1118,8 +1121,9 @@ void Display::inertial_orbit(const Rect& rect, const Snapshot& s) {
     last_node_marker.reset();
     if (next && next_span) maneuver_orbit(s, *next, *next_span, scale, reach, cx, cy, rect, false);
     if (orbit_body) orbit_body(cx, cy, std::max(2.0, radius * scale));
-    else c_.circle(static_cast<float>(cx), static_cast<float>(cy), static_cast<float>(std::max(2.0, radius * scale)), orbit_ink(BODY));
-    orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
+    else orbit_art_->body(c_, s.body, cx, cy, std::max(2.0, radius*scale), orbit_crt);
+    if(orbit_body) orbit_text(s.body, 2.8, VALUE, cx, cy, Anchor::Center);
+    else orbit_text(s.body, 1.8, VALUE, rect.right()-2*u, rect.y+6*u, Anchor::MidRight);
     // At zero eccentricity the apsides have no unique direction: do not invent one.
     if (conic && conic->eccentricity > 1e-5) {
         if (auto position = conic->position(PI)) {
