@@ -70,6 +70,11 @@ internal static class Program
     // Kerbal X's Poodle stage; deltaVActual read 2328, TWRActual 5.15).
     private static void Situations()
     {
+        Check(VesselViewFormat.IsEffectShader("Waterfall/Additive (Dynamic)") &&
+              VesselViewFormat.IsEffectShader("KSP/Particles/Alpha Blended") &&
+              VesselViewFormat.IsEffectShader("Legacy Shaders/Particles/Additive") &&
+              !VesselViewFormat.IsEffectShader("KSP/Bumped Specular") && !VesselViewFormat.IsEffectShader("TU/Metallic") &&
+              !VesselViewFormat.IsEffectShader(null), "vessel view effect shaders");
         Check(ShipMath.Situation("vac", 1000, 2328, 2452) == 2452, "vacuum situation uses the vacuum value");
         Check(ShipMath.Situation("vac", 4.9, 5.15, 5.42) == 5.42, "vacuum situation TWR");
         Check(ShipMath.Situation("asl", 631, 700, 2452) == 631, "sea level");

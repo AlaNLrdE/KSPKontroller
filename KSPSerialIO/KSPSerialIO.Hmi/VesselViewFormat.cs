@@ -31,6 +31,18 @@ namespace KSPSerialIO.Hmi
             return Array.IndexOf(NotFuel, resourceName) < 0;
         }
 
+        /// <summary>
+        /// True for an engine plume or particle effect shader (Waterfall, stock and SmokeScreen particles, additive
+        /// glows): those meshes hang tens of metres below engines and are not part of the vessel's outline.
+        /// </summary>
+        public static bool IsEffectShader(string shaderName)
+        {
+            if (string.IsNullOrEmpty(shaderName)) return false;
+            return shaderName.StartsWith("Waterfall/", StringComparison.Ordinal) ||
+                   shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   shaderName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         /// <summary>Percent of capacity, rounded; -1 without capacity (no tanks).</summary>
         public static int FuelPercent(double amount, double capacity)
         {

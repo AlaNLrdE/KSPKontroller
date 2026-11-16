@@ -241,7 +241,9 @@ above the SAS MODE lamps, and the classic globe moves and then shrinks so the sp
 fit (``Navball::globe_geometry``).
 
 ``KSPSerialIO.Hmi.dll`` (0.19.7.0) measures parts the way Vessel Viewer does (MIT): each part's enabled model
-meshes (at most 256 vertices per mesh, the bounding box of an unreadable mesh) projected on the root part's
+meshes (at most 256 vertices per mesh, the bounding box of an unreadable mesh; since 0.19.7.1 not the renderers
+whose materials all use effect shaders, ``Waterfall/``, particle or additive: engine plumes reached tens of metres
+below the engines) projected on the root part's
 right/up plane, then a convex hull of at most 32 points. ``VesselViewReport`` rebuilds that shape only when
 the active vessel, its part count or ``onVesselWasModified`` change, and refreshes fuel and heat twice a
 second; ``KSPHMIFlight.VesselShape`` / ``VesselState`` only read its cache. The telemetry thread

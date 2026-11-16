@@ -131,13 +131,26 @@ namespace KSPSerialIO.Hmi
             foreach (MeshFilter mf in p.FindModelComponents<MeshFilter>())
             {
                 MeshRenderer r = mf.GetComponent<MeshRenderer>();
-                if (r != null && r.enabled && mf.gameObject.activeInHierarchy) add(mf.sharedMesh, mf.transform);
+                if (r != null && r.enabled && mf.gameObject.activeInHierarchy && !IsEffect(r)) add(mf.sharedMesh, mf.transform);
             }
             foreach (SkinnedMeshRenderer smr in p.FindModelComponents<SkinnedMeshRenderer>())
-                if (smr.enabled && smr.gameObject.activeInHierarchy) add(smr.sharedMesh, smr.transform);
+                if (smr.enabled && smr.gameObject.activeInHierarchy && !IsEffect(smr)) add(smr.sharedMesh, smr.transform);
             if (points.Count < 3) return null;
             var shape = new VesselPartShape { Depth = depth / points.Count, Hull = VesselViewFormat.ConvexHull(points) };
             return shape.Hull.Count >= 3 ? shape : null;
+        }
+
+        /// <summary>
+        /// A renderer whose materials all use effect shaders (engine plumes such as Waterfall's live under the part
+        /// model, enabled even at zero throttle, and reached 60 m below a 55 m rocket's engines in a live test).
+        /// </summary>
+        private static bool IsEffect(Renderer r)
+        {
+            Material[] materials = r.sharedMaterials;
+            if (materials == null || materials.Length == 0) return false;
+            foreach (Material m in materials)
+                if (m == null || m.shader == null || !VesselViewFormat.IsEffectShader(m.shader.name)) return false;
+            return true;
         }
 
         private static void AddPoint(List<double[]> points, ref double depth, Transform root, Vector3 world)

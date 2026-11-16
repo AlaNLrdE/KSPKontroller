@@ -1,5 +1,11 @@
 # Changelog
 
+* **0.19.7.1**: 20261116
+  VESSEL panel fix from the first live test (92-part Orion V with Waterfall): part outlines skip renderers whose
+  materials all use effect shaders (`Waterfall/`, particle or additive), so engine plumes no longer stretch the
+  vessel (KS-107 outlines reached 63 m below the engine plate, RL79 ones 10 m sideways). `KSPSerialIO.dll` only
+  changes version. No serial packet or firmware change.
+
 * **0.19.7.0**: 20261116
   VESSEL panel on the HMI: `KSPSerialIO.Hmi.dll` adds `KSPHMIFlight.VesselShape` (one convex side-view outline per
   part from its model meshes, rebuilt on vessel change, part count change or `onVesselWasModified`) and
