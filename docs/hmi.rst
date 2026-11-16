@@ -585,8 +585,10 @@ The binary finds it through
 ``KSPHMI_APP_DIR`` (the unit sets ``~/ksphmi/cpp``), else next to or one level above itself, so a build tree
 under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
 (``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
-``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's address as the Pi sees it (or to
-``HMI_KRPC_ADDRESS`` if set). Options: ``--demo --address --windowed --desktop --monitor auto|N --size WxH
+``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's mDNS name (``<hostname>.local``)
+when the Pi resolves it to the address the SSH session comes from, so a DHCP change needs no
+redeploy; otherwise to the PC's address as the Pi sees it, or to ``HMI_KRPC_ADDRESS`` if set. The HMI resolves
+the name again at every reconnect (user, 2026-11-16: Mac, PC and Pi reach each other by name). Options: ``--demo --address --windowed --desktop --monitor auto|N --size WxH
 --screenshot FILE --seconds S --config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME
 --layer-cache auto|on|off`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).

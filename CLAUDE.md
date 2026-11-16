@@ -41,6 +41,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
    `tools/verify.py` as a `check_*` function (stdlib only), never as a one-off manual grep.
 5. **Commit only after a successful build**; capture exit codes (`out=$(cmd 2>&1); rc=$?`), never
    `cmd | grep && git commit`. **Never push without the user's explicit OK for that push** (Pages publishes the docs).
+   Shell sequences that publish and then send RESULT must use `set -e`: a rejected push must stop before
+   success messages or done markers. Derive reported HEADs from git, and verify the remote ref first.
 6. Commit messages end with the co-author trailer the harness gives.
 7. Reply to the user in Spanish; code, comments, docs and commits in English.
 8. Bump the plugin version (`AssemblyInfo.cs` + top `CHANGELOG.md` entry, they must match) for every change that is deployed.

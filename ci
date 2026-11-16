@@ -49,7 +49,8 @@
 #   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
 #   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
 #   HMI_HOST      SSH destination of the Raspberry Pi (default: ksphmi, a Host entry in ~/.ssh/config)
-#   HMI_KRPC_ADDRESS  kRPC server address the Pi uses (default: this PC's address as the Pi sees it)
+#   HMI_KRPC_ADDRESS  kRPC server address the Pi uses (default: this PC's <hostname>.local when the Pi resolves it
+#                     to this PC, else this PC's address as the Pi sees it)
 #   NO_KIOSK      Set to 1 to make deploy_hmi only report an outdated kiosk boot instead of applying it
 
 set -euo pipefail
@@ -841,10 +842,30 @@ $missing
 run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
 }
 
+# The kRPC endpoint the Pi keeps in ~/ksphmi/env: HMI_KRPC_ADDRESS if set; else this computer's mDNS name
+# (<hostname>.local) when the Pi resolves it to the address this SSH session comes from, so DHCP changes need no
+# redeploy (user, 2026-11-16); else that numeric address. The HMI resolves the name again at every reconnect.
+hmi_pc_address() {
+  if [ -n "${HMI_KRPC_ADDRESS:-}" ]; then echo "$HMI_KRPC_ADDRESS"; return; fi
+  local ip name short
+  ip="$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')"
+  short="$(hostname 2>/dev/null || true)"
+  short="${short%%.*}"
+  if [ -n "$short" ]; then
+    name="$short.local"
+    if hmi_ssh "getent ahostsv4 '$name' 2>/dev/null | awk '{print \$1}' | grep -qx '$ip'" </dev/null; then
+      echo "$name"
+      return
+    fi
+    echo "==> $HMI_HOST does not resolve $name to $ip: using the numeric address" >&2
+  fi
+  echo "$ip"
+}
+
 deploy_hmi() {
   hmi_preflight
   local pc_ip
-  pc_ip="${HMI_KRPC_ADDRESS:-$(hmi_ssh 'echo "${SSH_CLIENT%% *}"')}"
+  pc_ip="$(hmi_pc_address)"
 
   log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
   # cd + relative names: GNU tar reads a "C:/..." argument as a remote host
