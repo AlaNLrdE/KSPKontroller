@@ -56,7 +56,7 @@ struct Args {
 void usage(FILE* out) {
     std::fprintf(out,
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed | --desktop] [--size WxH]\n"
-                 "              [--skin classic|apollo|steampunk|ksp1|ksp2] [--monitor auto|N]\n"
+                 "              [--skin auto|classic|apollo|steampunk|ksp1|ksp2] [--monitor auto|N]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N [--bench-anim]] [--offscreen]\n"
                  "              [--layer-cache auto|on|off]\n"
                  "       ksphmi --splash [--screenshot FILE --size WxH [--splash-state STAGE]]\n\n"
@@ -64,7 +64,7 @@ void usage(FILE* out) {
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
                  "  --demo             simulated orbit, no game needed\n"
                  "  --address HOST     kRPC server address (overrides the settings, disables discovery)\n"
-                 "  --skin NAME        classic, apollo, steampunk, ksp1 or ksp2 (overrides [display] skin)\n"
+                 "  --skin NAME        auto (the game's look), classic, apollo, steampunk, ksp1 or ksp2\n"
                  "  --windowed         window instead of full screen (development on a PC)\n"
                  "  --desktop          on the PC that runs the game (./ci hmi): fills the chosen secondary monitor\n"
                  "                     (full-screen desktop), else a window; KSPHMI_WSLG=1: always a window\n"

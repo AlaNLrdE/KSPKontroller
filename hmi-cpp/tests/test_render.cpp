@@ -669,6 +669,31 @@ TEST(apollo_full_frame_software_render_time) {
     CHECK(ms < 1000);
 }
 
+// [display] skin = "auto" (the default): the KSP1 Stock look for KSP 1 and before any game, KSP2 Redux for Redux;
+// the keyboard and the simulator's context reply still win (user, 2026-11-16).
+TEST(auto_skin_follows_the_game) {
+    Screen s(1280, 800, "auto");
+    CHECK_EQ(s.display->skin(), std::string("ksp1"));
+    Snapshot waiting;
+    s.display->draw(waiting, 100.2);
+    CHECK_EQ(s.display->skin(), std::string("ksp1"));
+    Snapshot redux = demo(0);
+    redux.game = "ksp2";
+    s.display->draw(redux, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("ksp2"));
+    Snapshot ksp1 = demo(0);
+    ksp1.game = "ksp1";
+    s.display->draw(ksp1, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("ksp1"));
+    ksp1.skin = "steampunk";  // the simulator's context reply
+    s.display->draw(ksp1, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("steampunk"));
+    s.display->choose_skin("classic");  // Ctrl+1
+    s.display->draw(redux, monotonic());
+    CHECK_EQ(s.display->skin(), std::string("classic"));
+    CHECK_EQ(Config().display.skin, std::string("auto"));
+}
+
 // KSPHMI_SHOTS=DIR saves the apollo screens that --demo --screenshot cannot reach (facility, no vessel, stale).
 TEST(instrument_review_screenshots_on_request) {
     const char* dir = std::getenv("KSPHMI_SHOTS");

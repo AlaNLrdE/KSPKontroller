@@ -122,11 +122,12 @@ Display::Display(const Config& cfg, Canvas& canvas)
       server_text_(fmt::str("kRPC server: %s:%d", cfg.krpc.address.c_str(), cfg.krpc.rpc_port)),
       net_(cfg.krpc.address),
       cfg_(cfg),
-      config_skin_(known_skin(cfg.display.skin) ? cfg.display.skin : "classic"),
-      skin_(config_skin_) {
+      config_skin_(known_skin(cfg.display.skin) || cfg.display.skin == "auto" ? cfg.display.skin : "auto"),
+      skin_(config_skin_ == "auto" ? auto_skin("") : config_skin_) {
     orbit_art_ = std::make_unique<OrbitArt>();
-    if (!known_skin(cfg.display.skin)) log::warning("ksphmi.display", "unknown skin '" + cfg.display.skin + "', using classic");
-    log::info("ksphmi.display", "skin: " + skin_ + " (config)");
+    if (!known_skin(cfg.display.skin) && cfg.display.skin != "auto")
+        log::warning("ksphmi.display", "unknown skin '" + cfg.display.skin + "', using auto");
+    log::info("ksphmi.display", "skin: " + skin_ + (config_skin_ == "auto" ? " (auto until a game answers)" : " (config)"));
 }
 
 bool Display::known_skin(const std::string& name) { return name == "classic" || name == "apollo" || name == "steampunk" || name == "ksp1" || name == "ksp2"; }
@@ -337,11 +338,13 @@ bool Display::animate() {
 }
 
 void Display::draw_screen(const Snapshot& snap, double now) {
-    // A keyboard choice wins; then the simulator's context reply; otherwise the [display] setting. Each skin keeps
+    // A keyboard choice wins; then the simulator's context reply; otherwise the [display] setting, where "auto"
+    // follows the game that answers (ksp1 for KSP 1 over kRPC, ksp2 for KSP2 Redux; user 2026-11-16). Each skin keeps
     // its own caches (built lazily, released with the Display), so switching back and forth costs nothing after
     // the first.
     if (!chosen_skin_.empty()) set_skin(chosen_skin_, "keyboard");
     else if (known_skin(snap.skin)) set_skin(snap.skin, "context");
+    else if (config_skin_ == "auto") set_skin(auto_skin(snap.game), snap.game.empty() ? "auto" : "auto, game");
     else set_skin(config_skin_, "config");
     navball_.flight_deck = skin_ == "apollo" || skin_ == "ksp2";
     if (skin_ == "ksp1" || skin_ == "ksp2") {

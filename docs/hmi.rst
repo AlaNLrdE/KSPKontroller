@@ -616,8 +616,10 @@ SDL2 itself (no new runtime image library). Static art is baked once per size/sc
 normal telemetry frames draw the live values and plots only. Font atlases are keyed by
 family and size. See ``assets/steampunk/README.md`` for provenance and demo capture commands.
 
-``[display] skin`` selects ``apollo`` (shipped default), ``steampunk``, ``classic``,
-``ksp1`` or ``ksp2``.
+``[display] skin`` selects ``auto`` (shipped default), ``apollo``, ``steampunk``, ``classic``,
+``ksp1`` or ``ksp2``. ``auto`` follows the game that answers (user, 2026-11-16): ``ksp1`` (KSP1 Stock) when
+kRPC answers for KSP 1, ``ksp2`` (KSP2 Redux) when the Redux UDP endpoint answers, and ``ksp1`` before any game.
+Each source marks its snapshots (``Snapshot::game``); a ``source = "auto"`` HMI switches with the game.
 
 KSP1 Stock and KSP2 Redux themes
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -706,7 +708,7 @@ Try ``./ci hmi --demo --skin apollo --size 1920x1080 --seconds 3 --screenshot bu
 
 The skin can change while the HMI runs: the context reply on UDP 50002 may carry an optional field,
 ``KSPHMI/1 <scene> skin=<name>``. Only the simulator sends it (its *HMI skin* selector, or ``--skin``);
-KSPSerialIO never does, so with the game ``[display] skin`` decides. The HMI asks for the context about once a
+KSPSerialIO never does, so with the game ``[display] skin`` decides (``auto``: the game's own look). The HMI asks for the context about once a
 second in every state, flight included (telemetry thread, 0.15 s timeout). Known skin in the reply > the
 setting; each skin keeps its caches, built the first time it is shown. Changes are logged
 (``ksphmi.display: skin: apollo (context, was classic)``). The default skin is the one line ``skin = ...`` in

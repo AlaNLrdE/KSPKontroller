@@ -770,6 +770,7 @@ void KrpcSource::publish(Snapshot snap) {
         if (snap.state == State::NoVessel && snap.scene.empty()) snap.scene = ctx.scene;
     }
     snap.skin = context_skin_;
+    if (snap.state != State::Connecting) snap.game = "ksp1";  // kRPC answered: KSP 1 (skin auto picks ksp1)
     Source::publish(std::move(snap));
 }
 

@@ -101,6 +101,8 @@ public:
     /// The skin drawn now: "classic", "apollo", "steampunk", "ksp1" or "ksp2". The context reply's skin (simulator) wins over [display] skin.
     const std::string& skin() const { return skin_; }
     static bool known_skin(const std::string& name);
+    /// [display] skin = "auto": the game's own look, ksp2 for KSP2 Redux, ksp1 for KSP 1 and before any game answers.
+    static std::string auto_skin(const std::string& game) { return game == "ksp2" ? "ksp2" : "ksp1"; }
     /// Switch at once (logged); unknown names are ignored. The next draw re-applies the context or config choice.
     void set_skin(const std::string& name, const char* why = "request");
     /// Skin chosen on the keyboard (Ctrl+1 classic, Ctrl+2 apollo, Ctrl+3 steampunk, Ctrl+4 ksp1, Ctrl+5 ksp2): wins over the context reply and [display] skin.

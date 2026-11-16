@@ -399,6 +399,7 @@ void ReduxSource::run() {
         if (auto reply = redux_exchange(socket.get(), request, nonce, 0.08)) {
             version2 = reply->version2;
             reply->snapshot.server = "KSP2 Redux UDP :50003";
+            reply->snapshot.game = "ksp2";  // skin auto picks ksp2
             in_vab = reply->snapshot.state == State::NoVessel && reply->snapshot.scene == "vab";
             in_flight = reply->snapshot.state == State::Flight;
             if (!in_vab) ship.reset();
