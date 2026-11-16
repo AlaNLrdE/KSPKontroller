@@ -25,6 +25,57 @@ log = logging.getLogger("kspsim.krpc")
 PROTOCOL_VERSION = 1
 SITUATIONS = list(physics.SITUATIONS)
 BODY_KERBIN, FRAME_KERBIN = 1, 2
+# The Mun: the target body when the target is enabled (ORBIT draws its orbit, the closest approach and encounters).
+BODY_MUN, ORBIT_MUN = 4, 5
+MUN_ORBIT_RADIUS, MUN_MU, MUN_RADIUS, MUN_SOI = 12_000_000.0, 6.5138398e10, 200_000.0, 2_429_559.1
+MUN_PHASE = 1.7  # rad at UT 0
+NULL = b'<null>'  # _targets(): answer a null object (None there means "not a target procedure")
+
+
+def mun_state(ut: float):
+    """The Mun on its circular, equatorial orbit in Kerbin's non-rotating frame (the reported x/z plane)."""
+    n = math.sqrt(physics.MU / MUN_ORBIT_RADIUS ** 3)
+    a = MUN_PHASE + n * ut
+    speed = n * MUN_ORBIT_RADIUS
+    return ((MUN_ORBIT_RADIUS * math.cos(a), 0.0, MUN_ORBIT_RADIUS * math.sin(a)),
+            (-speed * math.sin(a), 0.0, speed * math.cos(a)))
+
+
+def _distance(a, b) -> float:
+    return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+
+def path_events(t0: float, r, v, samples: int = 600) -> dict:
+    """Closest approach to the Mun and the first Mun SOI entry of a Kerbin coast from (t0, r, v), searched over one
+    orbital period (an open path: until it leaves Kerbin's sphere, at most 2 days), like KSP's patched conics."""
+    ap, _, e, a = physics.extremes(r, v)
+    if e < 1 and a > 0 and ap + physics.RADIUS < physics.SOI_RADIUS:
+        horizon = min(2 * math.pi * math.sqrt(a ** 3 / physics.MU), 4e5)
+    else:
+        horizon = 1.7e5
+    def gap(t):
+        p, _ = physics.propagate3(r, v, t - t0)
+        return _distance(p, mun_state(t)[0])
+    times = [t0 + horizon * i / samples for i in range(samples + 1)]
+    gaps = [gap(t) for t in times]
+    best = min(range(len(gaps)), key=gaps.__getitem__)
+    lo, hi = times[max(0, best - 1)], times[min(samples, best + 1)]
+    for _ in range(40):  # golden section around the best sample
+        m1, m2 = hi - (hi - lo) * 0.618, lo + (hi - lo) * 0.618
+        if gap(m1) < gap(m2):
+            hi = m2
+        else:
+            lo = m1
+    events = {'approach': (lo + hi) / 2}
+    for i in range(1, len(gaps)):
+        if gaps[i] < MUN_SOI <= gaps[i - 1]:
+            lo, hi = times[i - 1], times[i]
+            for _ in range(50):
+                mid = (lo + hi) / 2
+                lo, hi = (lo, mid) if gap(mid) < MUN_SOI else (mid, hi)
+            events['soi'] = hi
+            break
+    return events
 
 
 # ---------------------------------------------------------------------------------------------- encoding
@@ -504,6 +555,85 @@ class KrpcServer:
             return enc_object(BODY_KERBIN)
         raise RpcFailure("kspsim does not implement SpaceCenter.%s for a node orbit" % proc)
 
+    def _path(self, orbit_id: int):
+        """(t0, r, v) of the vessel's orbit or of the post-burn node orbit, in Kerbin's non-rotating frame."""
+        sim = self.sim
+        r = sim.reported()
+        if orbit_id % 10000 == 6000 or orbit_id % 10000 == 7001 or orbit_id % 10000 == 8001:
+            if not r['node_enabled']:
+                raise RpcFailure('The maneuver node was removed', 'KRPC', 'InvalidOperationException')
+            pos, vel = physics.maneuver_state(r)
+            return sim.ut + r['node_time'], pos, vel
+        return sim.ut, tuple(r['position_' + a] for a in 'xyz'), tuple(r['velocity_' + a] for a in 'xyz')
+
+    def _events(self, orbit_id: int) -> dict:
+        t0, r, v = self._path(orbit_id)
+        key = (orbit_id % 2, t0, r, v)
+        if getattr(self, '_events_key', None) != key:  # one search per tick and path, whatever the HMI asks
+            self._events_key, self._events_value = key, path_events(t0, r, v)
+        return self._events_value
+
+    def _targets(self, proc: str, args: dict) -> bytes | None:
+        """The Mun, closest approaches and Mun encounters; None when `proc` is not one of them."""
+        sim = self.sim
+        cls, _, member = proc.partition('_')
+        first = read_varint(args[0]) if args.get(0) is not None else -1
+        base = sim.vessel_uid * 10000
+        vessel_orbit, node_orbit = sim.vessel_uid * 10 + 1, base + 6000
+        if cls == 'CelestialBody' and member == 'get_Orbit':
+            return enc_object(ORBIT_MUN) if first == BODY_MUN else NULL  # Kerbin orbits the Sun: not modelled
+        if cls == 'CelestialBody' and first == BODY_MUN:
+            values = {'get_Name': enc_string('Mun'), 'get_EquatorialRadius': enc_double(MUN_RADIUS),
+                      'get_HasAtmosphere': enc_bool(False), 'get_AtmosphereDepth': enc_double(0),
+                      'get_GravitationalParameter': enc_double(MUN_MU), 'get_SphereOfInfluence': enc_double(MUN_SOI)}
+            if member in values:
+                return values[member]
+            if member != 'Position':
+                raise RpcFailure('kspsim does not implement SpaceCenter.%s for the Mun' % proc)
+            return None
+        if cls == 'Orbit' and first == ORBIT_MUN:
+            if member == 'get_Body':
+                return enc_object(BODY_KERBIN)
+            if member in ('PositionAt', 'VelocityAt'):
+                state = mun_state(struct.unpack('<d', args[1])[0])
+                return enc_tuple(state[0] if member == 'PositionAt' else state[1])
+            raise RpcFailure('kspsim does not implement SpaceCenter.%s for the Mun' % proc)
+        if cls == 'Orbit' and first in (base + 7000, base + 7001):  # the patch inside the Mun's sphere
+            if member == 'get_Body':
+                return enc_object(BODY_MUN)
+            raise RpcFailure('kspsim does not implement SpaceCenter.%s for an encounter patch' % proc)
+        if cls == 'Orbit' and first in (vessel_orbit, node_orbit):
+            if member in ('get_TimeToSOIChange', 'get_NextOrbit'):
+                soi = self._events(first).get('soi')
+                if member == 'get_TimeToSOIChange':
+                    return enc_double(soi - sim.ut if soi is not None else float('nan'))
+                return enc_object(base + (7001 if first == node_orbit else 7000)) if soi is not None else NULL
+            if member == 'NextClosestApproach':
+                if read_varint(args[1]) != ORBIT_MUN:
+                    raise RpcFailure('kspsim knows closest approaches to the Mun only', 'KRPC', 'ArgumentException')
+                return enc_object(base + (8001 if first == node_orbit else 8000))
+            if member in ('PositionAt', 'VelocityAt') and first == vessel_orbit:
+                t0, r, v = self._path(first)
+                state = physics.propagate3(r, v, struct.unpack('<d', args[1])[0] - t0)
+                return enc_tuple(state[0] if member == 'PositionAt' else state[1])
+            return None
+        if cls == 'ClosestApproach' and first in (base + 8000, base + 8001):
+            path = node_orbit if first == base + 8001 else vessel_orbit
+            ut = self._events(path)['approach']
+            if member == 'get_UT':
+                return enc_double(ut)
+            t0, r, v = self._path(path)
+            vessel = physics.propagate3(r, v, ut - t0)[0]
+            mun = mun_state(ut)[0]
+            if member == 'Position':
+                return enc_tuple(vessel)
+            if member == 'TargetPosition':
+                return enc_tuple(mun)
+            if member == 'get_Distance':
+                return enc_double(_distance(vessel, mun))
+            raise RpcFailure('kspsim does not implement SpaceCenter.%s' % proc)
+        return None
+
     def _space_center(self, proc: str, args: dict) -> bytes | None:
         sim = self.sim
         if proc == "get_ActiveVessel":  # real kRPC 0.7: null outside flight (seen at the Space Center), not an error
@@ -515,7 +645,7 @@ class KrpcServer:
         if proc in ('get_TargetVessel', 'get_TargetDockingPort'):
             return None
         if proc == 'get_TargetBody':
-            return enc_object(BODY_KERBIN) if sim.reported()['target_enabled'] else None
+            return enc_object(BODY_MUN) if sim.reported()['target_enabled'] else None
         if proc == 'TransformDirection':
             r = sim.reported()
             frame = read_varint(args[1]) % 10
@@ -565,6 +695,9 @@ class KrpcServer:
                     count = max(0, min(100, int(r['stage_parts'])))
                     return enc_list([sim.vessel_uid * 10000 + 3000 + number * 100 + i for i in range(count)])
 
+        extra = self._targets(proc, args)
+        if extra is not None:
+            return None if extra is NULL else extra
         if proc.startswith('Orbit_') and args.get(0) is not None and read_varint(args[0]) == sim.vessel_uid * 10000 + 6000:
             return self._node_orbit(proc, args)
 

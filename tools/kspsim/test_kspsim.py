@@ -502,6 +502,28 @@ class KrpcTest(unittest.TestCase):
         finally:
             server.stop()
 
+    def test_mun_transfer_finds_the_encounter_and_the_closest_approach(self):
+        from kspsim import krpcserver as ks
+        r0 = physics.RADIUS + 100_000
+        a = (r0 + ks.MUN_ORBIT_RADIUS) / 2
+        transfer = math.pi * math.sqrt(a ** 3 / physics.MU)
+        n = math.sqrt(physics.MU / ks.MUN_ORBIT_RADIUS ** 3)
+        # Leave at angle 0 so that the Mun reaches the apoapsis (angle pi) when the vessel does.
+        t0 = ((math.pi - ks.MUN_PHASE) / n - transfer) % (2 * math.pi / n)
+        v0 = math.sqrt(physics.MU * (2 / r0 - 1 / a))
+        events = ks.path_events(t0, (r0, 0.0, 0.0), (0.0, 0.0, v0))
+        self.assertIn('soi', events)
+        self.assertLess(events['soi'], t0 + transfer)
+        self.assertGreater(events['soi'], t0 + transfer * .5)  # the sphere is 2.4 Mm wide
+        p, _ = physics.propagate3((r0, 0.0, 0.0), (0.0, 0.0, v0), events['soi'] - t0)
+        self.assertAlmostEqual(math.dist(p, ks.mun_state(events['soi'])[0]), ks.MUN_SOI, delta=10)
+        p, _ = physics.propagate3((r0, 0.0, 0.0), (0.0, 0.0, v0), events['approach'] - t0)
+        self.assertLess(math.dist(p, ks.mun_state(events['approach'])[0]), ks.MUN_SOI)
+        # Low orbit: no encounter, an approach somewhere ahead within one period.
+        low = ks.path_events(0, (r0, 0.0, 0.0), (0.0, 0.0, math.sqrt(physics.MU / r0)))
+        self.assertNotIn('soi', low)
+        self.assertGreaterEqual(low['approach'], 0)
+
     def test_krpc_client_end_to_end(self):
         import krpc
         from kspsim.krpcserver import KrpcServer
@@ -574,6 +596,17 @@ class KrpcTest(unittest.TestCase):
             self.assertEqual(resources.max("MonoPropellant"), 0)
             self.assertEqual(vessel.control.current_stage, 1)
             self.assertEqual(sorted(s.number for s in vessel.stages), [0, 1])
+            # The target body is the Mun (ORBIT: its orbit, the closest approach and Mun encounters)
+            mun = sc.target_body
+            self.assertEqual((mun.name, mun.orbit.body.name), ("Mun", "Kerbin"))
+            self.assertAlmostEqual(math.hypot(*mun.orbit.position_at(sc.ut, frame)), 12e6, delta=1)
+            approach = after.next_closest_approach(mun.orbit)
+            self.assertGreaterEqual(approach.ut, node.ut - 1)
+            self.assertAlmostEqual(approach.distance, math.dist(approach.position(frame), approach.target_position(frame)),
+                                   delta=1)
+            self.assertTrue(math.isnan(orbit.time_to_soi_change))
+            self.assertIsNone(orbit.next_orbit)
+            self.assertIsNone(body.orbit)
             sim.set_manual_values(target_enabled=0, node_enabled=0, speed_mode=1)
             self.assertIsNone(sc.target_vessel)
             self.assertEqual(len(vessel.control.nodes), 0)
