@@ -842,12 +842,21 @@ $missing
 run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
 }
 
-# The kRPC endpoint the Pi keeps in ~/ksphmi/env: HMI_KRPC_ADDRESS if set; else this computer's mDNS name
-# (<hostname>.local) when the Pi resolves it to the address this SSH session comes from, so DHCP changes need no
-# redeploy (user, 2026-11-16); else that numeric address. The HMI resolves the name again at every reconnect.
+# The kRPC endpoint the Pi keeps in ~/ksphmi/env (user, 2026-11-16: names that survive IP changes), in order:
+# HMI_KRPC_ADDRESS if set; else the name already in the Pi's env (the game PC: a deploy from the Mac, which runs no
+# game, or a cold mDNS lookup must not replace it); else this computer's <hostname>.local when the Pi resolves it to
+# the address this SSH session comes from; else that numeric address (first setup). The HMI re-resolves at reconnect.
 hmi_pc_address() {
   if [ -n "${HMI_KRPC_ADDRESS:-}" ]; then echo "$HMI_KRPC_ADDRESS"; return; fi
-  local ip name short
+  local current ip name short
+  current="$(hmi_ssh "sed -n 's/^KSPHMI_KRPC_ADDRESS=//p' ~/ksphmi/env 2>/dev/null" </dev/null || true)"
+  case "$current" in
+    *:*|'') ;;                 # IPv6 or nothing: not a name to keep
+    *[!0-9.]*)                 # a name (letters), not a dotted IPv4 address
+      echo "==> keeping the Pi's kRPC endpoint $current (set HMI_KRPC_ADDRESS to change it)" >&2
+      echo "$current"
+      return ;;
+  esac
   # Over IPv4: with ksphmi reached by its .local name, ssh may prefer IPv6 link-local, which the HMI cannot use.
   ip="$("$(hmi_ssh_client)" -4 -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" 'echo "${SSH_CLIENT%% *}"' </dev/null)"
   ip="${ip%%\%*}"
