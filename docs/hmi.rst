@@ -244,7 +244,9 @@ fit (``Navball::globe_geometry``).
 meshes (at most 256 vertices per mesh, the bounding box of an unreadable mesh; since 0.19.7.1 not the renderers
 whose materials all use effect shaders, ``Waterfall/``, particle or additive: engine plumes reached tens of metres
 below the engines) projected on the root part's
-right/up plane, then a convex hull of at most 32 points. ``VesselViewReport`` rebuilds that shape only when
+right/up plane (forward/up when the vessel is wider that way, 0.19.7.2), then a convex hull of at most 32 points.
+Launch clamps and towers are skipped, and so is a mesh reaching well outside its part's colliders (logged once as
+``vessel view: skipped mesh``). ``VesselViewReport`` rebuilds that shape only when
 the active vessel, its part count or ``onVesselWasModified`` change, and refreshes fuel and heat twice a
 second; ``KSPHMIFlight.VesselShape`` / ``VesselState`` only read its cache. The telemetry thread
 (``VesselViewPoller``) calls ``VesselState`` every 0.5 s and ``VesselShape`` only when the state's revision

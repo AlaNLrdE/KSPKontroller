@@ -1,5 +1,14 @@
 # Changelog
 
+* **0.19.7.2**: 20261116
+  VESSEL panel, second live test (Orion V on the pad, Bluedog parts): launch clamps and towers (`LaunchClamp`) are
+  ground equipment and no longer drawn (the FASA launch tower was a 58 m slab beside the rocket); the side view
+  uses the root part's forward axis when the vessel is wider that way, so side boosters stand beside the core
+  instead of covering it; a mesh reaching well outside its part's colliders is skipped and logged once with its
+  shader (`vessel view: skipped mesh`), after a ~25 m non-plume mesh on each Bluedog RL79; transparent render
+  queue materials count as effects. `KSPSerialIO.Hmi.csproj` references `UnityEngine.PhysicsModule`.
+  `KSPSerialIO.dll` only changes version. No serial packet or firmware change.
+
 * **0.19.7.1**: 20261116
   VESSEL panel fix from the first live test (92-part Orion V with Waterfall): part outlines skip renderers whose
   materials all use effect shaders (`Waterfall/`, particle or additive), so engine plumes no longer stretch the

@@ -59,6 +59,10 @@
       <HintPath>$(KSPManaged)\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(KSPManaged)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(KSPManaged)\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
