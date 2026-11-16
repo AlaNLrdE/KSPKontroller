@@ -11,6 +11,8 @@
 #   KSPHMI_INTRO_AUDIO  mpv --audio-device (default alsa/hdmi:CARD=vc4hdmi0,DEV=0, the HDMI port next to USB-C)
 #   KSPHMI_INTRO_DRM    the KMS device (default /dev/dri/by-path/platform-gpu-card, else /dev/dri/card1)
 #   KSPHMI_INTRO_VO     mpv --vo (default gpu: V3D scales; drm scales on the CPU, too slow for a 4K mode)
+#   KSPHMI_INTRO_HWDEC  mpv --hwdec (default v4l2m2m-copy, the Pi 4 H.264 decoder). With the gpu VO's default
+#                       high-quality scaling to 4K the video ran ~3 s behind its audio; --profile=fast keeps it in sync
 #   KSPHMI_INTRO_LOG    mpv's log file of the last boot (default ~/ksphmi/intro-mpv.log; --no-terminal is silent)
 set -u
 
@@ -18,6 +20,7 @@ app="${KSPHMI_APP_DIR:-$HOME/ksphmi/cpp}"
 video="${KSPHMI_INTRO_VIDEO:-$app/assets/intro/KSPKontroller_pi_Intro.mp4}"
 audio="${KSPHMI_INTRO_AUDIO:-alsa/hdmi:CARD=vc4hdmi0,DEV=0}"
 vo="${KSPHMI_INTRO_VO:-gpu}"
+hwdec="${KSPHMI_INTRO_HWDEC:-v4l2m2m-copy}"
 mpvlog="${KSPHMI_INTRO_LOG:-$HOME/ksphmi/intro-mpv.log}"
 drm="${KSPHMI_INTRO_DRM:-}"
 if [ -z "$drm" ]; then
@@ -76,9 +79,9 @@ stop() {
 }
 trap stop TERM INT HUP
 
-say "playing $video on $drm (vo $vo, audio $audio)"
+say "playing $video on $drm (vo $vo, hwdec $hwdec, audio $audio)"
 mpv --no-config --no-terminal --log-file="$mpvlog" \
-    --vo="$vo" --gpu-context=drm --drm-device="$drm" --hwdec=auto-safe \
+    --vo="$vo" --gpu-context=drm --drm-device="$drm" --profile=fast --hwdec="$hwdec" \
     --ao=alsa --audio-device="$audio" --audio-fallback-to-null=yes \
     --keep-open=always --osd-level=0 --no-osc --no-input-default-bindings --no-input-cursor \
     --input-ipc-server="$sock" "$video" &

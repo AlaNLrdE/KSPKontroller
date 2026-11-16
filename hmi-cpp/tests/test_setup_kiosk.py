@@ -152,7 +152,7 @@ class KioskTest(unittest.TestCase):
                     proc.kill()
                 proc.wait()
             args = json.loads((root / 'args.json').read_text())
-            for flag in ('--keep-open=always', '--no-terminal', '--osd-level=0', '--no-osc', '--hwdec=auto-safe',
+            for flag in ('--keep-open=always', '--no-terminal', '--osd-level=0', '--no-osc', '--profile=fast', '--hwdec=v4l2m2m-copy',
                          '--audio-fallback-to-null=yes', '--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0',
                          '--input-ipc-server=%s' % (run / 'mpv.sock'), '--drm-device=%s' % status, str(video)):
                 self.assertIn(flag, args)

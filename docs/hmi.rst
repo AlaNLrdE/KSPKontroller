@@ -725,11 +725,13 @@ its sound on the HDMI monitor, and its last frame until the HMI's first frame.
 ``ksphmi-intro.sh`` writes ``/run/ksphmi-intro/starting``, waits up to 20 s for a connected HDMI connector
 (``/sys/class/drm/card*-HDMI-A-*/status``; a 4K monitor is often detected late), then starts mpv on the KMS device
 (``/dev/dri/by-path/platform-gpu-card``, else ``/dev/dri/card1``) with ``--vo=gpu --gpu-context=drm`` (V3D scales
-the video to the monitor's native mode; ``--vo=drm`` would scale on the CPU), ``--hwdec=auto-safe``,
+the video to the monitor's native mode; ``--vo=drm`` would scale on the CPU), ``--profile=fast``
+``--hwdec=v4l2m2m-copy`` (first boot, 2026-11-16: with the default high-quality scaling to 4096x2160 and
+software decoding the picture ended ~3 s after its sound; with these it ends 0.2 s after), 
 ``--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0`` (``--audio-fallback-to-null=yes``: no sound card, still the
 video), ``--keep-open=always``, ``--no-terminal`` (its log goes to ``~/ksphmi/intro-mpv.log``) and
 ``--input-ipc-server=/run/ksphmi-intro/mpv.sock``, and removes ``starting`` once the socket exists. Settings in
-``~/ksphmi/intro.env`` (read by the unit): ``KSPHMI_INTRO_VIDEO``, ``KSPHMI_INTRO_AUDIO``, ``KSPHMI_INTRO_DRM``,
+``~/ksphmi/intro.env`` (read by the unit): ``KSPHMI_INTRO_VIDEO``, ``KSPHMI_INTRO_AUDIO``, ``KSPHMI_INTRO_DRM``, ``KSPHMI_INTRO_HWDEC``,
 ``KSPHMI_INTRO_VO``, ``KSPHMI_INTRO_LOG``.
 
 Hand-over from the video: mpv is DRM master while it holds the last frame, so SDL's kmsdrm cannot open the display
