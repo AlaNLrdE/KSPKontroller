@@ -277,5 +277,157 @@ sleep() { :; }
                 self.assertEqual(calls, [])
 
 
+def ci_functions(*names):
+    ci = (ROOT / 'ci').read_text(encoding='utf-8')
+    found = []
+    for name in names:
+        match = re.search(r'^' + name + r'\(\) \{\n.*?^\}', ci, re.M | re.S)
+        assert match, name
+        found.append(match.group())
+    return '\n\n'.join(found) + '\n'
+
+
+def run_bash(script, env, timeout=30):
+    return subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script], env=env,
+                          capture_output=True, text=True, timeout=timeout)
+
+
+class CrossDeployTest(unittest.TestCase):
+    """deploy_hmi ships cross-built programs (user, 2026-11-17: never build on the Pi), with stubs for SSH and builds."""
+
+    STUBS = '''set -euo pipefail
+record() { printf '%s\\n' "$1" >> "$TRACE"; }
+log() { printf '==> %s\\n' "$*"; }
+die() { printf 'DIE %s\\n' "$*"; exit 1; }
+is_windows() { return 1; }
+'''
+
+    def test_cross_path_when_toolchain_present_else_on_pi_build(self):
+        stubs = self.STUBS + '''hmi_preflight() { record preflight; }
+hmi_deploy_lock() { record lock; }
+hmi_deploy_unlock() { record unlock; }
+hmi_pc_address() { echo 192.0.2.1; }
+hmi_cross_available() { [ "$CROSS" = 1 ]; }
+build_hmi_pi() { record build_hmi_pi; }
+hmi_ship_cross() { record ship_cross; }
+hmi_copy_sources() { record copy_sources; }
+hmi_build_on_pi() { record build_on_pi; }
+hmi_install_service() { record "install $1"; }
+hmi_kiosk() { record kiosk; }
+'''
+        script = stubs + ci_functions('deploy_hmi') + 'deploy_hmi\n'
+        for cross, expected, warned in (
+                ('1', ['preflight', 'lock', 'build_hmi_pi', 'ship_cross', 'install 192.0.2.1', 'kiosk', 'unlock'], False),
+                ('0', ['preflight', 'lock', 'copy_sources', 'build_on_pi', 'install 192.0.2.1', 'kiosk', 'unlock'], True)):
+            with self.subTest(cross=cross), tempfile.TemporaryDirectory() as directory:
+                trace = Path(directory) / 'trace'
+                result = run_bash(script, dict(os.environ, TRACE=trace.as_posix(), CROSS=cross, HMI_HOST='fake-pi',
+                                               HMI_CROSS_APT='g++-aarch64-linux-gnu'))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(trace.read_text().splitlines(), expected)
+                self.assertEqual('WARNING: no aarch64 cross compiler' in result.stdout, warned, result.stdout)
+
+    def ship(self, failing_test=''):
+        """Run the real hmi_ship_cross against a fake Pi home (hmi_ssh = a local shell there)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        home, hmi, build, bin_dir = root / 'pi', root / 'hmi-cpp', root / 'hmi-cpp-pi', root / 'bin'
+        for name in ('CMakeLists.txt', 'config.toml'):
+            (hmi / name).parent.mkdir(parents=True, exist_ok=True)
+            (hmi / name).write_text('new ' + name, newline='\n')
+        for folder in ('cmake', 'include', 'src', 'tests', 'systemd', 'assets'):
+            (hmi / folder).mkdir(parents=True, exist_ok=True)
+            (hmi / folder / 'file.txt').write_text('new', newline='\n')
+        build.mkdir()
+        tests = ['ksphmi_tests', 'ksphmi_render_tests']
+        for name in ['ksphmi'] + tests:
+            code = 1 if name == failing_test else 0
+            (build / name).write_text('#!/bin/sh\necho ran %s >> "$HOME/ran"\nexit %d\n' % (name, code), newline='\n')
+        bin_dir.mkdir()
+        (bin_dir / 'python3').write_text('#!/bin/sh\necho "python3 $*" >> "$HOME/ran"\n', newline='\n')
+        (home / 'ksphmi/cpp/build').mkdir(parents=True)
+        (home / 'ksphmi/cpp/config.toml').write_text('old config', newline='\n')
+        (home / 'ksphmi/cpp/build/ksphmi').write_text('old binary', newline='\n')
+        stubs = self.STUBS + '''hmi_ssh() { HOME="$FAKE_HOME" PATH="$(cd "$FAKE_BIN" && pwd):$PATH" bash -c "$1"; }
+'''
+        script = stubs + ci_functions('hmi_pack_sources', 'hmi_ship_cross') + 'hmi_ship_cross\n'
+        env = dict(os.environ, FAKE_HOME=home.as_posix(), FAKE_BIN=bin_dir.as_posix(), HMI_DIR=hmi.as_posix(),
+                   HMI_PI_BUILD=build.as_posix(), HMI_PI_TESTS=' '.join(tests), HMI_HOST='fake-pi',
+                   TRACE=(root / 'trace').as_posix())
+        return run_bash(script, env), home / 'ksphmi'
+
+    def test_binaries_staged_then_swapped_only_after_tests_pass(self):
+        result, pi = self.ship()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        ran = (pi.parent / 'ran').read_text().splitlines()
+        self.assertEqual(ran[:2], ['ran ksphmi_tests', 'ran ksphmi_render_tests'])
+        self.assertIn('python3 tests/test_screenshots.py', ' '.join(ran).replace('-B ', ''))
+        self.assertIn('ran ksphmi', (pi / 'cpp/build/ksphmi').read_text())
+        self.assertEqual((pi / 'cpp/build/ksphmi.prev').read_text(), 'old binary')
+        self.assertTrue((pi / 'cpp/build/ksphmi_render_tests').is_file())
+        self.assertEqual((pi / 'cpp/config.toml').read_text(), 'new config.toml')
+        self.assertFalse((pi / 'cpp.next').exists())
+
+    def test_failed_pi_test_leaves_the_running_hmi_untouched(self):
+        result, pi = self.ship(failing_test='ksphmi_render_tests')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('DIE tests failed', result.stdout)
+        self.assertEqual((pi / 'cpp/build/ksphmi').read_text(), 'old binary')
+        self.assertEqual((pi / 'cpp/config.toml').read_text(), 'old config')
+        self.assertFalse((pi / 'cpp/build/ksphmi.prev').exists())
+        self.assertTrue((pi / 'cpp.next/build/ksphmi').is_file())  # kept for inspection
+
+    def test_sysroot_copied_again_only_when_the_pi_packages_change(self):
+        stubs = self.STUBS + '''hmi_ssh() {
+  case "$1" in
+    *dpkg-query*) printf '%s  -\\n' "$PACKAGES" ;;
+    *tar*) record copy; cat >/dev/null ;;
+  esac
+}
+hmi_sysroot_unpack() { record unpack; mkdir -p "$HMI_PI_SYSROOT"; }
+'''
+        script = stubs + ci_functions('hmi_sysroot_stamp', 'hmi_sysroot') + 'hmi_sysroot "$@"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'hmi-cpp/cmake').mkdir(parents=True)
+            (root / 'hmi-cpp/cmake/pi-sysroot-files.sh').write_text('echo usr/include\n', newline='\n')
+            trace = root / 'trace'
+            env = dict(os.environ, TRACE=trace.as_posix(), HMI_DIR=(root / 'hmi-cpp').as_posix(),
+                       HMI_PI_SYSROOT=(root / 'pi-sysroot').as_posix(), HMI_HOST='fake-pi')
+            for packages, extra, copies in (('aaa', [], 1), ('aaa', [], 1), ('bbb', [], 2), ('bbb', ['--force'], 3)):
+                result = run_bash(script + '', dict(env, PACKAGES=packages)) if not extra else \
+                    subprocess.run([find_bash(), '--noprofile', '--norc', '-c', script, 'ci'] + extra,
+                                   env=dict(env, PACKAGES=packages), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                calls = trace.read_text().splitlines() if trace.exists() else []
+                self.assertEqual(calls.count('copy'), copies, (packages, extra, result.stdout))
+                self.assertEqual(calls.count('unpack'), copies)
+            self.assertIn('packages bbb list', (root / 'pi-sysroot/.stamp').read_text())
+
+    def test_one_deploy_at_a_time_on_the_pi(self):
+        stubs = self.STUBS + '''hmi_ssh() { HOME="$FAKE_HOME" bash -c "$1"; }
+'''
+        script = stubs + ci_functions('hmi_deploy_lock', 'hmi_deploy_unlock')
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            env = dict(os.environ, FAKE_HOME=home.as_posix(), HMI_HOST='fake-pi')
+            first = run_bash(script + 'hmi_deploy_lock\necho held\n', env)  # exits while holding: the trap releases
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            self.assertFalse((home / 'ksphmi/.deploy.lock').exists())
+            (home / 'ksphmi/.deploy.lock').mkdir()
+            (home / 'ksphmi/.deploy.lock/owner').write_text('Mac pid 1\n')
+            busy = run_bash(script + 'hmi_deploy_lock\n', env)
+            self.assertNotEqual(busy.returncode, 0)
+            self.assertIn('another ./ci deploy_hmi is running', busy.stdout)
+            self.assertIn('Mac pid 1', busy.stdout)
+            self.assertTrue((home / 'ksphmi/.deploy.lock').exists())  # never removes another deploy's lock
+            old = 1_000_000_000
+            os.utime(home / 'ksphmi/.deploy.lock', (old, old))
+            stale = run_bash(script + 'hmi_deploy_lock\nhmi_deploy_unlock\n', env)
+            self.assertEqual(stale.returncode, 0, stale.stdout + stale.stderr)
+            self.assertIn('older than 30 minutes', stale.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
