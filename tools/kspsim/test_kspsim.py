@@ -1036,5 +1036,89 @@ class AttitudeTest(unittest.TestCase):
         self.assertIn("SAS off", "\n".join(logs.output))
 
 
+class ReduxOrbitTest(unittest.TestCase):
+    """KSP2ORB1 v1 (docs/hmi.rst "KSP 2 Redux source"): the encoder against the fixtures the HMI's parser reads
+    (hmi-cpp/tests/data/redux_orb1_*_v1.txt, from the KSP2 workbench's spec) and the UDP responder."""
+
+    @staticmethod
+    def fixture(name):
+        with open(os.path.join(ROOT, "hmi-cpp", "tests", "data", name), encoding="ascii", newline="") as f:
+            return f.read().rstrip("\r\n")
+
+    def test_golden_bodies_round_trip(self):
+        from kspsim import redux
+        for name in ("redux_orb1_v1.txt", "redux_orb1_maneuver_v1.txt"):
+            body = self.fixture(name)
+            self.assertEqual(redux.encode_body(redux.decode_body(body)), body, name)
+        golden = redux.decode_body(self.fixture("redux_orb1_v1.txt"))
+        self.assertEqual((golden["body"], golden["mu"], golden["target"]["name"]), ("Kerbin", 3531600000000.0, "Mun"))
+        self.assertNotIn("maneuver", golden)
+        self.assertEqual(golden["encounters"][0]["center"], (-8000000.0, 8000000.0, 0.0))
+        self.assertEqual(redux.encode_body(None), "-")
+        self.assertIsNone(redux.decode_body("-"))
+
+    def test_numbers_use_the_csharp_round_trip_format(self):
+        from kspsim import redux
+        cases = {1000.5: "1000.5", -358.8: "-358.8", 3531600000000.0: "3531600000000", 1e-05: "1E-05",
+                 1.5e20: "1.5E+20", 1e15: "1E+15", -2.5e300: "-2.5E+300", -0.0: "0", 0.1: "0.1", 1e-300: "1E-300"}
+        for value, text in cases.items():
+            self.assertEqual(redux.number(value), text)
+            self.assertEqual(float(text), value)
+        for bad in (float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                redux.number(bad)
+        self.assertEqual(redux.hexname("Mun"), "4d756e")
+        self.assertEqual(redux.hexname(""), "-")
+        golden = self.fixture("redux_orb1_v1.txt")
+        for bad in (golden + " 0", golden + " ", golden.replace(" 6 ", " 8 ", 1), golden.replace("4b657262696e", "4B657262696E"),
+                    golden[:-2], "1 - 1 0 0 0 0 0 0 0 0"):
+            with self.assertRaises(ValueError):
+                redux.decode_body(bad)
+
+    def test_responder_reports_the_simulated_orbit_in_the_zup_frame(self):
+        import socket
+        from kspsim import redux
+
+        sim = Simulator("orbit")
+        sim.set_manual_mode(True)
+        sim.set_manual_values(target_enabled=1, node_enabled=1, node_time=240, node_prograde=600, node_normal=0,
+                              node_radial=0)
+        server = redux.ReduxOrbitServer(sim, "127.0.0.1", 0)
+        server.start()
+        try:
+            def ask(request):
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.settimeout(1.0)
+                    sock.sendto(request, ("127.0.0.1", server.port))
+                    try:
+                        return sock.recv(8192).decode("ascii")
+                    except socket.timeout:
+                        return None
+            answer = ask(b"KSP2ORB1 42")
+            self.assertTrue(answer.startswith("KSP2ORB1 42 "), answer)
+            self.assertLessEqual(len(answer), 4096)
+            report = redux.decode_body(answer[len("KSP2ORB1 42 "):])
+            r = sim.reported()
+            self.assertEqual(report["body"], "Kerbin")
+            self.assertEqual(report["position"], redux.zup([r["position_" + a] for a in "xyz"]))
+            self.assertEqual(report["velocity"], redux.zup([r["velocity_" + a] for a in "xyz"]))
+            self.assertEqual(report["position"][2], 0.0)  # the equatorial orbit lies in Zup's x/y plane
+            self.assertEqual(report["target"]["name"], "Mun")
+            self.assertTrue(report["target"]["body"])
+            self.assertTrue(report["approach"]["planned"])  # on the post-burn patch, as with a node in KSP
+            self.assertAlmostEqual(report["maneuver"]["ut"], sim.ut + 240)
+            self.assertEqual(report["maneuver"]["soi"], physics.SOI_RADIUS)
+            for e in report["encounters"]:
+                self.assertEqual((e["body"], e["soi"]), ("Mun", 2_429_559.1))
+                self.assertAlmostEqual(math.dist(e["position"], (0, 0, 0)), e["soi"], delta=10)
+            # Malformed or other requests get no reply, as from the plugin.
+            for request in (b"KSP2ORB1", b"KSP2ORB1 x", b"KSP2ORB1 12345678901234567", b"KSP2ORB1 1 2", b"KSP2HMI2 1"):
+                self.assertIsNone(ask(request), request)
+            sim.set_scene("vab")
+            self.assertEqual(ask(b"KSP2ORB1 7"), "KSP2ORB1 7 -")
+        finally:
+            server.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

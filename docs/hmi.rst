@@ -822,6 +822,8 @@ Request                         Reply
 ``KSP2VSHP N`` / ``KSP2VSTA N`` ``\n`` + VESSEL shape / state v1 (``tests/data/vessel_*_v1.txt``), or ``-``
 ``KSP2KEY N name value``        ``queued``, ``disabled``, ``invalid`` or ``busy``
 ``KSP2HOLD N p y r x y z t``    ``queued``, ``disabled`` or ``invalid``
+``KSP2ORB1 N``                  ``KSP2ORB1 N`` + space + orbit report v1 (ORBIT state vectors), or ``-``;
+                                no reply at all from older plugins or with stale game data
 =============================== =====================================================================
 
 The game answers only while its snapshot is younger than 500 ms, and the HMI drains late datagrams before
@@ -836,6 +838,34 @@ only with its opt-in ``HmiCommands`` setting (``disabled`` otherwise), on Unity'
 older than 1 s and releases held keys 0.5 s after the last one. In the VAB, T / R step the Pi's editor page as
 the board's SAS / RCS do. Redux has no public quickload: F9 is logged as not available. While Redux is silent,
 keys go to the kRPC fallback exactly as without Redux.
+
+**Orbit report (KSP2ORB1 v1).** In flight the HMI asks ``KSP2ORB1 N`` about once a second (the plugin samples
+the report at 2 Hz; ``ReduxOrbitTracker::PERIOD``) and takes only the reply echoing its nonce. The reply is
+one line of at most 4096 bytes, single spaces, no trailing space: ``ut body mu px py pz vx vy vz mask``, then
+the groups the mask bits select, in this order: 1 maneuver (``ut soi px py pz vx vy vz``, the post-burn state
+at the node; ``soi`` <= 0 = unbounded), 2 target (``name isBody radius px py pz vx vy vz``), 4 closest
+approach (``ut planned vessel_xyz target_xyz``, only with a target), then ``n`` (0-4) encounters of
+``body radius mu soi ut planned cx cy cz px py pz vx vy vz`` (``c`` the moon centre at the SOI entry, ``p``/``v``
+the vessel relative to the moon). Names are lowercase hex of UTF-8 (``-`` = empty), flags are ``0``/``1``,
+numbers are C# ``R`` invariant text (an exponent such as ``1E-05`` may appear) and always finite; absent
+groups are omitted, never zero-filled. ``-`` means no orbit data. ``parse_redux_orbit`` rejects anything
+else (token counts, hex, flags, mask or ``n`` out of range, trailing tokens, oversize) and the exchange keeps
+waiting, so a bad datagram never ends the source thread. The tracker fills ``orbit_state``,
+``maneuver_orbit``, ``target_orbit``, ``approach`` and ``encounters`` of each snapshot from the last good
+report while it is younger than 3 s (``STALE``) and for the snapshot's vessel and body; a newer vessel or body,
+``-``, leaving flight or losing the link drops it at once, and ORBIT returns to its scalar view. No reply never
+affects the ``KSP2HMI`` snapshot. The view axes are fixed per vessel/body from ``r x v``, as in the kRPC source.
+
+The vectors are in Redux's ``UniverseModel.Zup`` frame, inertial and centred on the current body (spin axis
++z by its name; its handedness is not verified at runtime), and the HMI does not convert them: ORBIT only
+projects on view axes derived from ``n = r x v``, and for a reflection ``M`` the cross product gives
+``(Mr) x (Mv) = -M n``, so the axes follow the mirror and the projected picture is unchanged. The render test
+``redux_orbit_report_draws_congruently_in_a_reflected_frame`` proves it: mirroring z or y, or swapping y and z
+(kRPC's y-up), draws identical pixels; mirroring x or swapping x and y turns the view plane in itself and keeps
+every marker distance. The golden body from the KSP2 workbench's spec is ``hmi-cpp/tests/data/redux_orb1_v1.txt``
+(``redux_orb1_maneuver_v1.txt`` the maneuver-only example); kspsim's encoder round-trips both
+(``./ci sim --redux-orbit`` answers KSP2ORB1 from the simulated orbit, :doc:`simulator`).
+``KSPHMI_REDUX_PORT`` moves the UDP port for loopback tests only.
 
 Settings
 --------

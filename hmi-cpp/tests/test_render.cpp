@@ -8,6 +8,7 @@
 #include <map>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -23,6 +24,7 @@
 #include "log.hpp"
 #include "mechjebpage.hpp"
 #include "png.hpp"
+#include "redux_source.hpp"
 #include "orbitart.hpp"
 #include "navball.hpp"
 #include "scenes.hpp"
@@ -444,6 +446,106 @@ TEST(orbit_scale_holds_while_optional_data_flickers) {
     double grown = scale_at(full, 107.1);
     CHECK_NEAR(grown, wide, wide * .03);
     CHECK(s.display->last_target_marker.has_value());
+}
+
+namespace {
+
+/// The KSP2ORB1 golden report (Redux's Zup body-inertial frame, unconverted) with every vector mapped by `frame`,
+/// a post-burn orbit added and the encounter optional, through the Redux source's tracker as in flight.
+Snapshot redux_report(const std::function<Vec3(const Vec3&)>& frame, bool encounter) {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/redux_orb1_v1.txt", std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    std::string body = text.str();
+    while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
+    ReduxOrbit report = *parse_redux_orbit(body);
+    // A prograde burn at the vessel: Ap rises towards the Mun (dashed orbit and node marker).
+    report.maneuver = ManeuverOrbit{report.position, report.velocity * 1.3, report.ut + 60, 84159286};
+    if (!encounter) report.encounters.clear();  // the closest approach markers instead
+    auto map = [&](Vec3& v) { v = frame(v); };
+    map(report.position), map(report.velocity);
+    map(report.maneuver->position), map(report.maneuver->velocity);
+    map(report.target->position), map(report.target->velocity);
+    map(report.approach->vessel), map(report.approach->target);
+    for (Encounter& e : report.encounters) map(e.center), map(e.position), map(e.velocity);
+    Snapshot s = demo(report.ut);
+    s.vessel = "Redux", s.body = report.body, s.body_radius = 600000, s.atmosphere_depth = 70000;
+    s.received = 100;
+    ReduxOrbitTracker tracker;
+    tracker.received(report, s.vessel, 100);
+    tracker.apply(s, 100);
+    return s;
+}
+
+struct OrbitPicture {
+    std::vector<uint32_t> pixels;
+    double scale = 0;
+    std::vector<std::optional<Pt>> markers;  ///< vessel, node, target, approach, encounter
+};
+
+OrbitPicture draw_orbit(const Snapshot& snap) {
+    Screen s(1920, 1080, "classic");
+    Rect panel = orbit_panel(s);
+    s.fill(FILL);
+    s.display->orbit(panel, snap);
+    s.canvas->flush();
+    OrbitPicture p;
+    for (int y = int(panel.y); y < int(panel.bottom()); ++y)
+        for (int x = int(panel.x); x < int(panel.right()); ++x) p.pixels.push_back(s.pixel(x, y));
+    p.scale = s.display->last_orbit_scale;
+    p.markers = {s.display->last_vessel_marker, s.display->last_node_marker, s.display->last_target_marker,
+                 s.display->last_approach_marker, s.display->last_encounter_marker};
+    return p;
+}
+
+}  // namespace
+
+TEST(redux_orbit_report_draws_congruently_in_a_reflected_frame) {
+    // KSP2ORB1 sends Redux's Zup frame unconverted (spin axis +z, handedness unverified). ORBIT projects on view axes
+    // from n = r x v, and a reflection M gives (Mr) x (Mv) = -M n: the axes follow the mirror, so the projected
+    // picture is unchanged. Reflections that keep the reference axis (1, 0, 0) draw the same pixels; the others
+    // turn the view plane in itself, so every marker keeps its distances in metres.
+    using Frame = std::function<Vec3(const Vec3&)>;
+    const Frame same = [](const Vec3& v) { return v; };
+    const Frame pixel_equal[] = {
+        [](const Vec3& v) { return Vec3{v.x, v.y, -v.z}; },  // mirror z
+        [](const Vec3& v) { return Vec3{v.x, -v.y, v.z}; },  // mirror y
+        [](const Vec3& v) { return Vec3{v.x, v.z, v.y}; },   // Zup <-> Yup (kRPC's left-handed y-up)
+    };
+    const Frame congruent[] = {
+        [](const Vec3& v) { return Vec3{-v.x, v.y, v.z}; },  // mirror x
+        [](const Vec3& v) { return Vec3{v.y, v.x, v.z}; },   // swap x and y
+    };
+    for (bool encounter : {true, false}) {
+        const OrbitPicture reference = draw_orbit(redux_report(same, encounter));
+        CHECK(reference.scale > 0);
+        CHECK(reference.markers[0] && reference.markers[1] && reference.markers[2]);
+        CHECK(reference.markers[3].has_value() == !encounter && reference.markers[4].has_value() == encounter);
+        for (const Frame& f : pixel_equal) {
+            const OrbitPicture p = draw_orbit(redux_report(f, encounter));
+            CHECK(p.pixels == reference.pixels);
+            CHECK_EQ(p.scale, reference.scale);
+        }
+        // Marker pairs in metres (pixels / scale): equal pairwise distances = the same figure up to an isometry.
+        auto distances = [](const OrbitPicture& p) {
+            std::vector<double> d;
+            for (size_t i = 0; i < p.markers.size(); ++i)
+                for (size_t j = i + 1; j < p.markers.size(); ++j)
+                    if (p.markers[i] && p.markers[j])
+                        d.push_back(std::hypot(p.markers[i]->x - p.markers[j]->x, p.markers[i]->y - p.markers[j]->y) / p.scale);
+            return d;
+        };
+        const std::vector<double> expected = distances(reference);
+        CHECK(expected.size() >= 6);
+        for (const Frame& f : congruent) {
+            const OrbitPicture p = draw_orbit(redux_report(f, encounter));
+            for (size_t i = 0; i < p.markers.size(); ++i) CHECK(p.markers[i].has_value() == reference.markers[i].has_value());
+            const std::vector<double> got = distances(p);
+            CHECK_EQ(got.size(), expected.size());
+            for (size_t i = 0; i < got.size() && i < expected.size(); ++i)
+                CHECK_NEAR(got[i], expected[i], 2.5 / std::min(p.scale, reference.scale));  // marker pixel rounding
+        }
+    }
 }
 
 TEST(apsis_labels_stay_inside_orbit_panel_as_orbit_grows) {

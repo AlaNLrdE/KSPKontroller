@@ -5,6 +5,7 @@
     ./ci sim --no-board          only the Pi;  --no-krpc: only the board
     ./ci sim --headless          no window, status lines in the console
     ./ci sim --sas normal        start with SAS on in that mode (the vessel slews to it)
+    ./ci sim --redux-orbit       also answer KSP 2 Redux's KSP2ORB1 orbit report on UDP 50003 (no KSP2HMI snapshot)
 """
 from __future__ import annotations
 
@@ -95,6 +96,8 @@ def main(argv=None) -> int:
                          "as without KSPSerialIO.Hmi.dll)")
     ap.add_argument("--no-board-throttle", action="store_true",
                     help="ignore the board's throttle axis (engine off unless the window's slider says otherwise)")
+    ap.add_argument("--redux-orbit", action="store_true",
+                    help="answer KSP2ORB1 (KSP 2 Redux orbit report v1) on UDP 50003 from the simulated orbit")
     ap.add_argument("--headless", action="store_true", help="no window; print the status every 2 s")
     ap.add_argument("--seconds", type=float, default=0, help="with --headless: quit after this long (0 = never)")
     args = ap.parse_args(argv)
@@ -116,6 +119,11 @@ def main(argv=None) -> int:
         sim.sas_mode = sas_names.index(args.sas) + 1
     server = None if args.no_krpc else KrpcServer(sim, args.address, args.rpc_port, args.stream_port)
     board = None if args.no_board else BoardLink(sim, args.port, args.refresh)
+    redux = None
+    if args.redux_orbit:
+        from .redux import ReduxOrbitServer
+        redux = ReduxOrbitServer(sim, args.address)
+        redux.start()
     if server:
         sim.listeners.append(lambda scene: server.stop() if scene == "closed" else server.start())
         server.start()
@@ -151,6 +159,8 @@ def main(argv=None) -> int:
             board.stop()
         if server:
             server.stop()
+        if redux:
+            redux.stop()
         sim.stop()
     return 0
 

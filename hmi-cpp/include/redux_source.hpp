@@ -9,6 +9,7 @@
 //   KSP2VSHP|KSP2VSTA <nonce>        -> "\n" + VESSEL shape / state v1, or "-"
 //   KSP2KEY <nonce> <name> <value>   -> "queued" | "disabled" | "invalid" | "busy"  (remote keyboard, one-shot)
 //   KSP2HOLD <nonce> p y r x y z t   -> "queued" | "disabled" | "invalid"          (held keys, repeated per tick)
+//   KSP2ORB1 <nonce>                 -> " " + orbit report v1, or " -"           (ORBIT state vectors, about 1 Hz)
 #pragma once
 
 #include <memory>
@@ -43,6 +44,50 @@ std::string decode_redux_ack(const std::string& packet, const std::string& prefi
 std::string redux_key_request(const Command& c, const std::string& nonce);
 std::string redux_hold_request(const Held& h, const std::string& nonce);
 
+/// KSP2ORB1 v1 orbit report (docs/hmi.rst "KSP 2 Redux source"): state vectors in Redux's Zup body-inertial
+/// frame, sent unconverted; ORBIT projects them on view axes from r x v, so a reflected frame draws the same picture.
+struct ReduxOrbit {
+    double ut = 0;  ///< game UT the states were sampled at
+    std::string body;
+    double mu = 0;
+    Vec3 position, velocity;  ///< the vessel relative to the current body
+    std::optional<ManeuverOrbit> maneuver;
+    std::optional<TargetOrbit> target;
+    std::optional<ClosestApproach> approach;
+    std::vector<Encounter> encounters;  ///< at most 4
+};
+/// Parse the report body (the text after "KSP2ORB1 <nonce> "): nullopt for "-" (no orbit data). Throws on anything
+/// malformed: token counts, hex, flags, mask or encounter count out of range, non-finite numbers, over 4096 bytes.
+std::optional<ReduxOrbit> parse_redux_orbit(const std::string& body);
+/// A whole "KSP2ORB1 <nonce> <body>" reply. Throws on a foreign nonce or a malformed reply.
+std::optional<ReduxOrbit> decode_redux_orbit(const std::string& packet, const std::string& nonce);
+/// Fill the snapshot's ORBIT fields (orbit_state, maneuver_orbit, target_orbit, approach, encounters) from a report.
+void apply_redux_orbit(Snapshot& s, const ReduxOrbit& report, const Axes& axes);
+
+/// The ReduxSource's orbit report state, without sockets: the request cadence, the last good report and when it
+/// arrived, and the fixed view axes per vessel/body.
+class ReduxOrbitTracker {
+public:
+    static constexpr double PERIOD = 1.0;  ///< seconds between requests (the game samples at 2 Hz)
+    static constexpr double STALE = 3.0;   ///< a report older than this is dropped
+    bool due(double now) const { return now >= next_; }
+    void sent(double now) { next_ = now + PERIOD; }
+    /// A nonce-matched reply for the vessel the last snapshot named; nullopt ("-") drops the report at once.
+    void received(std::optional<ReduxOrbit> report, const std::string& vessel, double now);
+    /// Fill the snapshot from the last report when it is fresh and for the snapshot's vessel and body; otherwise
+    /// drop it and leave the orbit fields empty.
+    void apply(Snapshot& s, double now);
+    void reset();
+    bool holding() const { return report_.has_value(); }
+
+private:
+    std::optional<ReduxOrbit> report_;
+    std::string vessel_;  ///< the snapshot's vessel when the report arrived
+    double at_ = 0, next_ = 0;
+    std::optional<Axes> axes_;
+    std::string axes_vessel_, axes_body_;
+};
+
 struct ReduxReply {
     Snapshot snapshot;
     bool version2 = false;
@@ -55,6 +100,8 @@ std::optional<std::shared_ptr<const ShipReport>> redux_ship_exchange(net::socket
 /// A text reply (KSP2VSHP / KSP2VSTA): nullopt = no valid reply; an empty optional inside = "-".
 std::optional<std::optional<std::string>> redux_text_exchange(net::socket_t fd, const std::string& prefix, const std::string& nonce,
                                                               double timeout);
+/// A KSP2ORB1 reply: nullopt = no valid reply (an older plugin or stale game data); an empty optional inside = "-".
+std::optional<std::optional<ReduxOrbit>> redux_orbit_exchange(net::socket_t fd, const std::string& nonce, double timeout);
 /// A keyboard request's status word, nullopt without a valid reply.
 std::optional<std::string> redux_ack_exchange(net::socket_t fd, const std::string& request, const std::string& prefix,
                                               const std::string& nonce, double timeout);
