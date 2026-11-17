@@ -666,8 +666,10 @@ def check_hmi_cpp_layout(ctx):
     for extension in ("png", "bmp", "ttf"):
         if "hmi-cpp/assets/**/*.%s binary" % extension not in attributes:
             bad.append("HMI .%s assets need a binary Git attribute" % extension)
-    # deploy_hmi tars a fixed list: a new top-level folder (include/ on 2026-11-14) broke the Pi build when missing.
-    m = re.search(r"\btar\b[^|\n]*?-cf - ([^)]*)\)", read(os.path.join(ROOT, "ci")))  # options may precede -cf
+    # deploy_hmi tars a fixed list (hmi_pack_sources): a new top-level folder (include/ on 2026-11-14) broke the Pi
+    # build when missing.
+    pack = re.search(r"^hmi_pack_sources\(\) \{\n.*?^\}", read(os.path.join(ROOT, "ci")), re.M | re.S)
+    m = re.search(r"\btar\b[^|\n]*?-cf - ([^)]*)\)", pack.group() if pack else "")  # options may precede -cf
     shipped = set(m.group(1).split()) if m else set()
     for name in sorted(os.listdir(HMI_DIR)):
         if os.path.isdir(os.path.join(HMI_DIR, name)) and name != "build" and name not in shipped:
