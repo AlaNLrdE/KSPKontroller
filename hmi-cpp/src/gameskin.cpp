@@ -8,6 +8,7 @@
 #include <stdexcept>
 
 #include "cockpit.hpp"
+#include "mechjebpage.hpp"
 #include "config.hpp"
 #include "display.hpp"
 #include "fmt.hpp"
@@ -338,6 +339,7 @@ void GameSkin::draw(const Snapshot& s, double now) {
         for (const auto& item : visible_resources(s)) key += ":" + item.first;
     if (s.ship) key += ":" + s.ship->editor_mode + ":" + std::to_string(d_.config().vab.destinations.size());
     if (d_.cockpit_scene(s)) key = std::to_string(c.w) + ":" + std::to_string(c.h) + ":cockpit";
+    if (d_.mechjeb_scene(s)) key = std::to_string(c.w) + ":" + std::to_string(c.h) + ":mechjeb:" + d_.mechjeb_key(s);
     if (!panel_ || key != key_) build(s, key);
     c.image(panel_, 0, 0, float(c.w), float(c.h));
     paint(c, false, s, now);
@@ -349,6 +351,9 @@ void GameSkin::paint(Canvas& c, bool art, const Snapshot& s, double now) {
     if (d_.cockpit_scene(s)) {
         GameCockpitPainter painter(c, redux_);
         paint_cockpit(c, art, s, CockpitView{d_.cockpit_input(), now}, painter);
+    } else if (d_.mechjeb_scene(s)) {
+        GameCockpitPainter painter(c, redux_);
+        paint_mechjeb(c, art, s, MechJebView{d_.mechjeb_input(), now}, painter);
     } else if (s.state == State::Flight)
         flight(c, art, s, now);
     else if (s.state == State::NoVessel && s.scene == "vab" && s.ship) {

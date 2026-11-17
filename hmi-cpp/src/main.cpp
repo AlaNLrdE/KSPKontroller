@@ -22,6 +22,7 @@
 #include "fbdev.hpp"
 #include "fmt.hpp"
 #include "cockpitinput.hpp"
+#include "mechjebinput.hpp"
 #include "keyboard.hpp"
 #include "redux_source.hpp"
 #include "log.hpp"
@@ -47,7 +48,7 @@ std::string live_shot_path() {
 }
 
 struct Args {
-    std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor, flight_scene;
+    std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor, flight_scene, mechjeb_page;
     bool demo = false, windowed = false, desktop = false, offscreen = false, splash = false, bench_anim = false;
     bool vessel_heat = false;
     double seconds = 1.5;
@@ -80,7 +81,8 @@ void usage(FILE* out) {
                  "                     frames over the cached layer; full frames when the layer cache is off)\n"
                  "  --layer-cache M    auto (GPU renderer only), on or off (overrides [display] layer_cache)\n"
                  "  --vessel-heat      start the VESSEL panel on heat instead of fuel (Ctrl+0 switches)\n"
-                 "  --flight-scene S   first flight scene: instruments or cockpit (Ctrl+\"+\" / Ctrl+\"-\" switch)\n"
+                 "  --flight-scene S   first flight scene: instruments, cockpit or mechjeb (Ctrl+\"+\" / Ctrl+\"-\" switch)\n"
+                 "  --mechjeb-page P   first MechJeb page: menu or ascent\n"
                  "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
                  "  --splash           animate the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) until\n"
                  "                     the HMI writes $XDG_RUNTIME_DIR/ksphmi.ready; reads no settings\n"
@@ -103,6 +105,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--address") value(a.address);
         else if (k == "--skin") value(a.skin);
         else if (k == "--flight-scene") value(a.flight_scene);
+        else if (k == "--mechjeb-page") value(a.mechjeb_page);
         else if (k == "--size") value(a.size);
         else if (k == "--screenshot") value(a.screenshot);
         else if (k == "--seconds") value(v), a.seconds = std::stod(v);
@@ -349,7 +352,8 @@ KeyEvent key_event(const SDL_KeyboardEvent& k) {
         {SDLK_LSHIFT, Key::LeftShift}, {SDLK_LCTRL, Key::LeftCtrl},
         // Ctrl+"+" / Ctrl+"-": the "+" key of a Spanish layout, "=" (Shift: "+") of a US one, the keypad
         {SDLK_PLUS, Key::Plus}, {SDLK_EQUALS, Key::Plus}, {SDLK_KP_PLUS, Key::Plus}, {SDLK_MINUS, Key::Minus},
-        {SDLK_KP_MINUS, Key::Minus}};
+        {SDLK_KP_MINUS, Key::Minus}, {SDLK_RETURN, Key::Enter}, {SDLK_KP_ENTER, Key::Enter},
+        {SDLK_KP_PERIOD, Key::Period}};
     for (const auto& [code, key] : keys)
         if (s == code) return e.key = key, e;
     return e;
@@ -470,6 +474,10 @@ int run(int argc, char** argv) {
         FlightScene scene = parse_flight_scene(scene_name).value_or(FlightScene::Instruments);
         if (!parse_flight_scene(scene_name)) log::warning(LOG, "unknown flight scene '" + scene_name + "', using instruments");
         CockpitInput cockpit_input;  // clicks on the cockpit panel: armed STAGE, open guards, sent/rejected lamps
+        MechJebInput mechjeb_input;  // the MechJeb scene: page (kept while the HMI runs), ARM, keypad, sent/rejected
+        if (args.mechjeb_page == "ascent") mechjeb_input.set_page(MjPage::Ascent);
+        else if (!args.mechjeb_page.empty() && args.mechjeb_page != "menu")
+            log::warning(LOG, "unknown MechJeb page '" + args.mechjeb_page + "', using the menu");
         std::shared_ptr<const Snapshot> shown;  // the snapshot on screen: what a click acts on
         auto build_view = [&] {
             display.reset();
@@ -480,6 +488,7 @@ int run(int argc, char** argv) {
             display->set_vessel_heat(vessel_heat);
             display->set_flight_scene(scene);
             display->set_cockpit_input(&cockpit_input);
+            display->set_mechjeb_input(&mechjeb_input);
             log::info(LOG, fmt::str("screen %dx%d (%s)", out.w(), out.h(), out.kind().c_str()));
             const std::string mode = args.layer_cache.empty() ? cfg.display.layer_cache : args.layer_cache;
             const bool want = mode == "on" || (mode != "off" && out.accelerated());
@@ -515,6 +524,7 @@ int run(int argc, char** argv) {
         auto set_scene = [&](FlightScene next) {
             if (next == scene) return;
             send(cockpit_input.reset());
+            mechjeb_input.reset();
             scene = next;
             display->set_flight_scene(scene);
             log::info(LOG, std::string("flight scene: ") + flight_scene_name(scene));
@@ -547,8 +557,18 @@ int run(int argc, char** argv) {
                     // skin, Esc quits. Auto-repeat is not a new press.
                     if (ev.type == SDL_QUIT)
                         quit_signal = 1;
-                    else if (ev.type == SDL_KEYDOWN && !ev.key.repeat)
-                        apply_keys(keyboard.down(key_event(ev.key), tick));
+                    else if (ev.type == SDL_KEYDOWN && !ev.key.repeat) {
+                        // The MechJeb keypad, while open, takes digits, '.', '-', Backspace, Enter and Escape
+                        // (which then only closes it); every other key stays a KSP key.
+                        MechJebPress typed;
+                        if (display->mechjeb_shown() && shown &&
+                            mechjeb_input.key(key_event(ev.key), *shown, tick, typed)) {
+                            send(typed.commands);
+                            last = nullptr;
+                        } else {
+                            apply_keys(keyboard.down(key_event(ev.key), tick));
+                        }
+                    }
                     else if (ev.type == SDL_KEYUP)
                         apply_keys(keyboard.up(key_event(ev.key), tick));
                     else if (ev.type == SDL_WINDOWEVENT && ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
@@ -556,12 +576,25 @@ int run(int argc, char** argv) {
                         send(cockpit_input.release(tick));
                     } else if (ev.type == SDL_MOUSEMOTION) {
                         out.cursor_moved(tick);
-                    } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                    } else if (ev.type == SDL_MOUSEBUTTONDOWN &&
+                               (ev.button.button == SDL_BUTTON_LEFT || ev.button.button == SDL_BUTTON_RIGHT)) {
                         // A click on the cockpit panel (a touch screen's synthesized mouse events too) acts like
-                        // the control's KSP key: same Command, same queue.
+                        // the control's KSP key: same Command, same queue. A right click only steps a MechJeb
+                        // - / + by ten (user, 2026-11-17: Shift would also ramp the throttle); elsewhere it does
+                        // nothing.
                         out.cursor_moved(tick);
+                        const bool right = ev.button.button == SDL_BUTTON_RIGHT;
                         const auto [x, y] = out.to_canvas(ev.button.x, ev.button.y);
-                        const std::optional<Ctl> hit = display->cockpit_hit(x, y);
+                        std::optional<MjControl> mj = display->mechjeb_hit(x, y);
+                        if (mj && right && mj->kind != MjControl::Minus && mj->kind != MjControl::Plus) mj.reset();
+                        if (mj && shown) {
+                            const MechJebPress press = mechjeb_input.press(*mj, *shown, tick, right);
+                            log::info(LOG, "click: mechjeb " + mj->id());
+                            send(press.commands);
+                            if (press.scene) set_scene(*press.scene);
+                            last = nullptr;
+                        }
+                        const std::optional<Ctl> hit = right ? std::nullopt : display->cockpit_hit(x, y);
                         if (hit && shown) {
                             const CockpitPress press = cockpit_input.press(*hit, *shown, tick);
                             log::info(LOG, std::string("click: ") + ctl_legend(*hit));
@@ -597,11 +630,16 @@ int run(int argc, char** argv) {
             if (source) source->set_cockpit(scene == FlightScene::Cockpit);
             if (panel) cockpit_input.update(*snap, tick);
             else if (cockpit_input.busy(tick)) send(cockpit_input.reset());
+            // MechJeb is polled only while its scene is on screen; leaving it disarms and closes the keypad.
+            const bool mechjeb = display->mechjeb_scene(*snap);
+            if (source) source->set_mechjeb(scene == FlightScene::MechJeb);
+            if (mechjeb) mechjeb_input.update(*snap, tick);
+            else if (mechjeb_input.busy(tick) || mechjeb_input.keypad().is_open()) mechjeb_input.reset();
             // Redraw on new data; animated or ageing screens (waiting, stale counter) every tick. Between samples
             // only the NavBall turns: a NavBall-only frame over the cached layer when there is one.
             const bool shot = shot_signal != 0;
             bool full = shot || snap != last || snap->state != State::Flight || stale(*snap, tick) ||
-                        (panel && cockpit_input.busy(tick));
+                        (panel && cockpit_input.busy(tick)) || (mechjeb && mechjeb_input.busy(tick));
             bool anim = !full && snap->state == State::Flight && display->navball().animating();
             if (full || anim) {
                 double t0 = monotonic();

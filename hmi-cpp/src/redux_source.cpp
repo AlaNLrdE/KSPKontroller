@@ -82,7 +82,9 @@ std::string key_name(const Command& c, int& value) {
         case Command::ToggleControl:  // cockpit panel controls: no KSP2KEY verb yet (docs/hmi.rst)
         case Command::SpeedMode:
         case Command::DeployChutes:
-        case Command::CutChutes: return "";
+        case Command::CutChutes:
+        case Command::MechJebSet:  // MechJeb is a KSP 1 mod: the Redux source never sends it
+        case Command::MechJebAction: return "";
     }
     return "";
 }

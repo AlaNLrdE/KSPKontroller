@@ -8,6 +8,7 @@ import threading
 import time
 
 from . import physics, ships
+from .mechjeb import MechJebSim
 
 log = logging.getLogger("kspsim")
 
@@ -38,6 +39,9 @@ class Simulator:
         self.ship_revision = 1
         self.editor_mode = "construction"
         self.editor_group = "custom1"
+        # MechJeb behind KSPHMIFlight.MechJeb* (the HMI's MechJeb scene): the shared fixture's values, Set validation
+        # and engage/disengage/timed launch actions (tools/kspsim/mechjeb.py).
+        self.mechjeb = MechJebSim()
         self.warp = warp
         self.ut = 0.0
         self.tick = tick

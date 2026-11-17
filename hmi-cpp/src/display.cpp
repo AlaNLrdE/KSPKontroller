@@ -1,6 +1,7 @@
 #include "display.hpp"
 
 #include "cockpit.hpp"
+#include "mechjebpage.hpp"
 #include "gameskin.hpp"
 #include "orbitart.hpp"
 #include "resource_ui.hpp"
@@ -359,6 +360,8 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     else if (config_skin_ == "auto") set_skin(auto_skin(snap.game), snap.game.empty() ? "auto" : "auto, game");
     else set_skin(config_skin_, "config");
     cockpit_shown_ = cockpit_scene(snap);
+    mechjeb_shown_ = mechjeb_scene(snap);
+    mechjeb_path_ = mechjeb_path(snap);
     navball_.flight_deck = skin_ == "apollo" || skin_ == "ksp2";
     if (skin_ == "ksp1" || skin_ == "ksp2") {
         auto& skin=skin_=="ksp2"?ksp2_:ksp1_;
@@ -378,6 +381,7 @@ void Display::draw_screen(const Snapshot& snap, double now) {
     c_.clear(BG);
     header(snap, now);
     if (cockpit_shown_) cockpit(snap, now);
+    else if (mechjeb_shown_) mechjeb(snap, now);
     else if (snap.state == State::Flight) flight(snap);
     else if (snap.state == State::NoVessel && find_view(snap.scene)) facility(snap);
     else waiting(snap, now);
@@ -394,6 +398,25 @@ void Display::cockpit(const Snapshot& s, double now) {
     const CockpitView view{cockpit_input_, now};
     paint_cockpit(c_, true, s, view, painter);
     paint_cockpit(c_, false, s, view, painter);
+}
+
+std::optional<MjControl> Display::mechjeb_hit(int x, int y) const {
+    if (!mechjeb_shown_) return std::nullopt;
+    const MjPage page = mechjeb_input_ ? mechjeb_input_->page() : MjPage::Menu;
+    const bool pad = mechjeb_input_ && mechjeb_input_->keypad().is_open();
+    return ksphmi::mechjeb_hit(mechjeb_layout(c_, page, mechjeb_path_), pad, keypad_layout(c_), x, y);
+}
+
+void Display::mechjeb(const Snapshot& s, double now) {
+    ClassicCockpitPainter painter;
+    const MechJebView view{mechjeb_input_, now};
+    paint_mechjeb(c_, true, s, view, painter);
+    paint_mechjeb(c_, false, s, view, painter);
+}
+
+std::string Display::mechjeb_key(const Snapshot& s) const {
+    const MjPage page = mechjeb_input_ ? mechjeb_input_->page() : MjPage::Menu;
+    return std::string(page == MjPage::Ascent ? "ascent" : "menu") + ":" + std::to_string(mechjeb_path(s));
 }
 
 void Display::header(const Snapshot& snap, double now) {

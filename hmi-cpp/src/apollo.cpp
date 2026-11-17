@@ -1,5 +1,6 @@
 #include "apollo.hpp"
 #include "cockpit.hpp"
+#include "mechjebpage.hpp"
 #include "resource_ui.hpp"
 
 #include <algorithm>
@@ -647,6 +648,8 @@ ApolloSkin::Key ApolloSkin::key_for(const Snapshot& s) const {
     k.w = d_.w(), k.h = d_.h();
     if (d_.cockpit_scene(s)) {
         k.screen = COCKPIT;  // the panel art depends on the screen size only
+    } else if (d_.mechjeb_scene(s)) {
+        k.screen = MECHJEB, k.scene = d_.mechjeb_key(s);  // the page and the ascent path's rows
     } else if (s.state == State::Flight) {
         k.screen = FLIGHT;
         const auto resource_names = hmi_resource_names(s);
@@ -688,6 +691,8 @@ void ApolloSkin::build(const Key& key, const Snapshot& s) {
                 flight(art, true, s);
             else if (key.screen == COCKPIT)
                 cockpit(art, true, s, 0);
+            else if (key.screen == MECHJEB)
+                mechjeb(art, true, s, 0);
             else if (key.screen == FACILITY)
                 facility(art, true, s);
             else if (key.screen == VAB)
@@ -709,6 +714,11 @@ void ApolloSkin::cockpit(Canvas& c, bool art, const Snapshot& s, double now) {
     paint_cockpit(c, art, s, CockpitView{d_.cockpit_input(), now}, painter);
 }
 
+void ApolloSkin::mechjeb(Canvas& c, bool art, const Snapshot& s, double now) {
+    InstrumentCockpitPainter painter;
+    paint_mechjeb(c, art, s, MechJebView{d_.mechjeb_input(), now}, painter);
+}
+
 void ApolloSkin::draw(const Snapshot& s, double now) {
     PaletteScope scope(steampunk_);
     Canvas& c = d_.canvas();
@@ -727,6 +737,8 @@ void ApolloSkin::draw(const Snapshot& s, double now) {
         flight(c, false, s);
     else if (key.screen == COCKPIT)
         cockpit(c, false, s, now);
+    else if (key.screen == MECHJEB)
+        mechjeb(c, false, s, now);
     else if (key.screen == FACILITY)
         facility(c, false, s);
     else if (key.screen == VAB)
@@ -755,7 +767,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
             return;
         }
         std::string title = "KSP KONTROLLER", subtitle = "FLIGHT DATA DISPLAY";
-        if ((screen == FLIGHT || screen == COCKPIT)) {
+        if ((screen == FLIGHT || screen == COCKPIT || screen == MECHJEB)) {
             title = upper(s.vessel.empty() ? "Unnamed vessel" : s.vessel);
             subtitle = upper(s.body) + " / " + upper(fmt::situation(s.situation));
         } else if (screen == VAB && s.ship) {
@@ -767,7 +779,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
               Anchor::TopLeft, palette.INK, false, .06f);
         label(c, subtitle, fit(c, {subtitle}, 1.55f, nameplate.w - 3 * u), nameplate.x + 1.5 * u,
               nameplate.y + 3.65 * u, Anchor::TopLeft, palette.DIM_INK, false, .06f);
-        c.text((screen == FLIGHT || screen == COCKPIT) ? fmt::clock(s.ut, day_hours_) : "--", 2.8f, palette.INK, clockplate.centerx(),
+        c.text((screen == FLIGHT || screen == COCKPIT || screen == MECHJEB) ? fmt::clock(s.ut, day_hours_) : "--", 2.8f, palette.INK, clockplate.centerx(),
                clockplate.y + 3.6 * u, Anchor::Center);
         const bool is_stale = stale(s, now), flight = s.state == State::Flight;
         struct Alert {
@@ -826,7 +838,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
         screw(c, p.x + .9 * u, p.bottom() - .9 * u, sr, 2.7),
             screw(c, p.right() - .9 * u, p.bottom() - .9 * u, sr, 1.1);
         if (steam_art) steam_art->panel(p, 1.7 * u);
-        if ((screen == FLIGHT || screen == COCKPIT)) {
+        if ((screen == FLIGHT || screen == COCKPIT || screen == MECHJEB)) {
             label(c, "UNIVERSAL TIME", 1.5f, g.ut_x, 1.1 * u);
             instrument_window(c, g.ut_x, g.ut_y, g.ut);
             static const char* names[] = {"YR", "DAY", "HR", "MIN", "SEC"};
@@ -844,7 +856,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
     // name plate: engraved white on black, uppercase
     const double room = p.w - 3.6 * u;
     std::string title, line2;
-    if ((screen == FLIGHT || screen == COCKPIT)) {
+    if ((screen == FLIGHT || screen == COCKPIT || screen == MECHJEB)) {
         title = upper(s.vessel.empty() ? "Unnamed vessel" : s.vessel);
         line2 = upper(s.body) + "   \xC2\xB7   " + upper(fmt::situation(s.situation));
     } else if (screen == VAB && s.ship) {
@@ -858,7 +870,7 @@ void ApolloSkin::header(Canvas& c, bool art, const Snapshot& s, double now, int 
     float tu = fit(c, {title}, 3.6f, room), lu = fit(c, {line2}, 2.1f, room);
     label(c, title, std::max(tu, 2.0f), p.x + 1.8 * u, p.y + 1.1 * u, Anchor::TopLeft, palette.INK, false);
     label(c, line2, std::max(lu, 1.4f), p.x + 1.8 * u, p.y + 5.3 * u, Anchor::TopLeft, palette.DIM_INK, false);
-    if ((screen == FLIGHT || screen == COCKPIT)) {
+    if ((screen == FLIGHT || screen == COCKPIT || screen == MECHJEB)) {
         std::string clock = fmt::clock(s.ut, day_hours_);
         clock.erase(std::remove_if(clock.begin(), clock.end(), [](char ch) { return ch == 'Y' || ch == 'D'; }),
                     clock.end());

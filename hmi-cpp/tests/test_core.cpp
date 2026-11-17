@@ -24,6 +24,8 @@
 #include "keyboard.hpp"
 #include "krpc.hpp"
 #include "log.hpp"
+#include "mechjeb.hpp"
+#include "mechjebinput.hpp"
 #include "model.hpp"
 #include "navmath.hpp"
 #include "net.hpp"
@@ -2112,8 +2114,11 @@ TEST(ctrl_plus_and_minus_step_the_flight_scene_without_moving_the_throttle) {
     kb.up(ctrl, 5);
     CHECK_EQ(kb.down(KeyEvent{Key::Plus}, 6).flight_scene, 0);  // "+" alone is not a KSP flight key
     CHECK(step_scene(FlightScene::Instruments, 1) == FlightScene::Cockpit);
-    CHECK(step_scene(FlightScene::Cockpit, 1) == FlightScene::Instruments);
-    CHECK(step_scene(FlightScene::Instruments, -1) == FlightScene::Cockpit);
+    CHECK(step_scene(FlightScene::Cockpit, 1) == FlightScene::MechJeb);
+    CHECK(step_scene(FlightScene::MechJeb, 1) == FlightScene::Instruments);
+    CHECK(step_scene(FlightScene::Instruments, -1) == FlightScene::MechJeb);
+    CHECK(parse_flight_scene("mechjeb") == FlightScene::MechJeb);
+    CHECK_EQ(std::string(flight_scene_name(FlightScene::MechJeb)), "mechjeb");
     CHECK(parse_flight_scene("cockpit") == FlightScene::Cockpit);
     CHECK(parse_flight_scene("panel") == FlightScene::Cockpit);
     CHECK(parse_flight_scene("instruments") == FlightScene::Instruments);
@@ -2326,6 +2331,303 @@ TEST(krpc_client_serializes_calls_from_two_threads) {
     std::thread a(run, 0), b(run, 100000);
     a.join(), b.join();
     CHECK_EQ(wrong.load(), 0);
+}
+
+
+// ================================================================================================ MechJeb scene
+namespace {
+std::string mechjeb_fixture() {
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/tests/data/mechjeb_report_v1.txt", std::ios::binary);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+Snapshot mechjeb_snapshot(const std::string& text) {
+    Snapshot s;
+    s.state = State::Flight;
+    auto r = parse_mechjeb_report(text);
+    if (r) s.mechjeb = std::make_shared<const MechJebReport>(std::move(*r));
+    return s;
+}
+std::string replace_line(std::string text, const std::string& key, const std::string& value) {
+    const size_t at = text.find("\n" + key + "=");
+    const size_t end = text.find('\n', at + 1);
+    return text.replace(at + 1, end - at - 1, key + "=" + value);
+}
+}  // namespace
+
+TEST(mechjeb_report_v1_parses_the_shared_fixture) {
+    std::string error;
+    const std::string text = mechjeb_fixture();
+    CHECK(!text.empty());
+    auto r = parse_mechjeb_report(text, &error);
+    CHECK(r.has_value());
+    if (!r) return;
+    CHECK(r->ok());
+    CHECK_EQ(r->rev, 42u);
+    CHECK_EQ(r->version, "2.15.3.0");
+    CHECK_EQ(*r->text("ascent.status"), "Awaiting liftoff");  // percent-decoded
+    CHECK_EQ(*r->number("ascent.altitude"), 80000.0);
+    CHECK_EQ(*r->number("thrust.min_throttle"), 0.05);
+    CHECK(*r->flag("ascent.force_roll"));
+    CHECK(!*r->flag("ascent.limit_qa"));
+    CHECK(!r->number("ascent.no_such_key"));  // missing = unknown, never zero
+    CHECK(!r->flag("ascent.altitude"));       // 80000 is not a flag
+    // every key the page shows is in the fixture
+    for (const MjField& f : mj_fields()) CHECK(r->has(f.key));
+    // CRLF, unknown keys and an empty line are fine; the demo source serves the same values
+    std::string crlf;
+    for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
+    auto r2 = parse_mechjeb_report(crlf + "\nlanding.future_key=1\n");
+    CHECK(r2 && r2->values.size() == r->values.size() + 1 && *r2->number("ascent.altitude") == 80000.0);
+    CHECK_EQ(std::string(demo_mechjeb_text()), text);
+    CHECK(demo_mechjeb_report() && demo_mechjeb_report()->values == r->values);
+}
+
+TEST(mechjeb_report_states_and_rejections) {
+    auto missing = parse_mechjeb_report("v=1 rev=3 mj=missing\n");
+    CHECK(missing && missing->status == MechJebReport::Status::Missing && missing->values.empty());
+    auto nocore = parse_mechjeb_report("v=1 rev=4 mj=nocore version=2.15.3.0\n");
+    CHECK(nocore && nocore->status == MechJebReport::Status::NoCore && nocore->version == "2.15.3.0");
+    auto err = parse_mechjeb_report("v=1 rev=5 mj=error:core%20not%20ready\n");
+    CHECK(err && err->status == MechJebReport::Status::Error && err->error == "core not ready");
+    std::string why;
+    CHECK(!parse_mechjeb_report("", &why) && !why.empty());
+    CHECK(!parse_mechjeb_report("v=2 rev=1 mj=ok\n", &why) && why.find("version") != std::string::npos);
+    CHECK(!parse_mechjeb_report("v=1 mj=ok\n", &why));
+    CHECK(!parse_mechjeb_report("v=1 rev=1\n", &why));
+    CHECK(!parse_mechjeb_report("v=1 rev=1 mj=sleepy\n", &why));
+    CHECK(!parse_mechjeb_report("v=1 rev=1 mj=ok\nnot a pair\n", &why));
+    auto nan = parse_mechjeb_report("v=1 rev=1 mj=ok\nascent.altitude=nan\n");
+    CHECK(nan && !nan->number("ascent.altitude"));
+    bool ok = true;
+    CHECK_EQ(percent_decode("a%2", &ok), "a%2");
+    CHECK(!ok);
+    CHECK_EQ(percent_decode("T%2D10%25", &ok), "T-10%");
+    CHECK(ok);
+}
+
+TEST(mechjeb_fields_format_step_and_validate) {
+    const MjField& alt = *mj_field("ascent.altitude");
+    CHECK_EQ(mj_format(alt, 80000), "80.0");
+    CHECK_EQ(mj_wire(*mj_si(alt, 85.5)), "85500");
+    CHECK(std::fabs(mj_step(alt, 80000, 1, false) - 81000) < 1e-6);
+    CHECK(std::fabs(mj_step(alt, 80000, -1, true) - 70000) < 1e-6);  // right click: ten steps
+    CHECK(std::fabs(mj_step(alt, 500, -1, true)) < 1e-9);            // clamped to the range
+    const MjField& shape = *mj_field("ascent.classic.turn_shape_exponent");
+    CHECK_EQ(mj_format(shape, 0.4), "40");
+    CHECK_EQ(mj_wire(mj_step(shape, 0.4, 1, false)), "0.45");
+    CHECK(!mj_si(shape, 101));
+    const MjField& stage = *mj_field("ascent.last_stage");
+    CHECK(!mj_si(stage, 1.5));  // whole numbers only
+    CHECK(mj_si(stage, 3) && *mj_si(stage, 3) == 3);
+    CHECK_EQ(mj_format(*mj_field("ascent.inclination"), -0.01), "0.0");  // never "-0.0"
+    CHECK_EQ(mj_pattern(alt), "88888.8");
+    CHECK_EQ(mj_pattern(*mj_field("ascent.inclination")), "8888.8");
+    for (const MjField& f : mj_fields()) {
+        CHECK(f.key && *f.label);
+        if (f.flag) continue;
+        CHECK(f.step > 0 && f.max > f.min && f.scale > 0);
+        CHECK(mj_format(f, f.max / f.scale).size() <= mj_pattern(f).size());
+        CHECK(mj_format(f, f.min / f.scale).size() <= mj_pattern(f).size());
+    }
+    CHECK(!mj_field("nope"));
+    CHECK_EQ(std::string(MJ_MODULES[0].title), "ASCENT GUIDANCE");
+    CHECK(MJ_MODULES[0].live);
+    CHECK_EQ(std::string(MJ_MODULES[MJ_MODULE_COUNT - 1].title), "SMART A.S.S.");
+    for (int i = 1; i < MJ_MODULE_COUNT; ++i) CHECK(!MJ_MODULES[i].live);
+}
+
+TEST(mechjeb_keypad_types_edits_and_validates) {
+    Keypad k;
+    const MjField& alt = *mj_field("ascent.altitude");
+    k.open(alt, 80000.0);
+    CHECK(k.is_open() && k.fresh() && k.text() == "80.0");
+    k.type('1');  // the first digit replaces the shown value
+    k.type('2'), k.type('.'), k.type('.'), k.type('5');
+    CHECK_EQ(k.text(), "12.5");
+    k.backspace();
+    CHECK_EQ(k.text(), "12.");
+    k.type('-');
+    CHECK_EQ(k.text(), "-12.");
+    CHECK(!k.accept());  // below the range
+    CHECK(k.error().find("RANGE") == 0);
+    k.type('-');
+    CHECK_EQ(*k.accept(), 12000.0);
+    k.open(alt, 80000.0);
+    k.backspace();  // a fresh value is cleared at once
+    CHECK(k.text().empty());
+    CHECK(!k.accept() && k.error() == "TYPE A VALUE");
+    k.type('.');
+    CHECK_EQ(k.text(), "0.");
+    for (int i = 0; i < 20; ++i) k.type('9');
+    CHECK(k.text().size() <= Keypad::MAX_CHARS);
+    k.open(*mj_field("ascent.last_stage"), std::nullopt);  // unknown value: empty entry
+    CHECK(k.text().empty());
+    k.type('2'), k.type('.'), k.type('5');
+    CHECK(!k.accept() && k.error() == "WHOLE NUMBERS ONLY");
+    k.close();
+    CHECK(!k.is_open());
+}
+
+TEST(mechjeb_clicks_send_settings_and_wait_for_the_report) {
+    const std::string text = mechjeb_fixture();
+    const Snapshot s = mechjeb_snapshot(text);
+    MechJebInput in;
+    CHECK(in.page() == MjPage::Menu);
+    // phase 2 modules do nothing but blink; Ascent Guidance opens its page, < MECHJEB returns
+    CHECK(in.press({MjControl::Module, 3}, s, 0).commands.empty());
+    CHECK(in.page() == MjPage::Menu && in.feedback("module:3", 0) == CockpitInput::Feedback::Rejected);
+    in.press({MjControl::Module, 0}, s, 0);
+    CHECK(in.page() == MjPage::Ascent);
+    // + on the altitude: one MechJebSet with the SI value, "sent" until the report carries it
+    auto p = in.press({MjControl::Plus, 0, "ascent.altitude"}, s, 1);
+    CHECK_EQ(p.commands.size(), size_t(1));
+    CHECK(p.commands[0].kind == Command::MechJebSet && p.commands[0].key == "ascent.altitude" &&
+          p.commands[0].text == "81000");
+    p = in.press({MjControl::Minus, 0, "ascent.max_aoa"}, s, 1, true);
+    CHECK_EQ(p.commands[0].text, "0");  // 5 - 10, clamped at 0
+    in.update(s, 1.5);
+    CHECK(in.feedback("ascent.altitude", 1.5) == CockpitInput::Feedback::Sent);
+    CHECK(in.busy(1.5));
+    in.update(mechjeb_snapshot(replace_line(text, "ascent.altitude", "81000")), 2);
+    CHECK(in.feedback("ascent.altitude", 2) == CockpitInput::Feedback::None);  // confirmed
+    in.update(s, 4.2);  // max_aoa never changed: rejected after the timeout
+    CHECK(in.feedback("ascent.max_aoa", 4.2) == CockpitInput::Feedback::Rejected);
+    // a flag click writes the other state; the path selector writes ascent.path
+    p = in.press({MjControl::Flag, 0, "ascent.force_roll"}, s, 5);
+    CHECK(p.commands[0].key == "ascent.force_roll" && p.commands[0].text == "0");
+    p = in.press({MjControl::Path, 2}, s, 5);
+    CHECK(p.commands[0].key == "ascent.path" && p.commands[0].text == "2");
+    // the plugin's refusal ends the change at once, with a notice
+    Snapshot refused = s;
+    refused.mechjeb_reply = MechJebReply{1, "ascent.path", "invalid value"};
+    in.update(refused, 5.2);
+    CHECK(in.feedback("path:2", 5.2) == CockpitInput::Feedback::Rejected);
+    CHECK_EQ(in.notice(5.2), "ASCENT PATH: INVALID VALUE");
+    in.update(refused, 5.3);  // the same reply is not counted twice
+    CHECK(in.notice(20).empty());
+    // unknown values cannot be stepped, toggled or typed; without MechJeb nothing acts
+    const Snapshot unknown = mechjeb_snapshot(replace_line(text, "ascent.turn_roll", "nan"));
+    CHECK(in.press({MjControl::Plus, 0, "ascent.turn_roll"}, unknown, 6).commands.empty());
+    Snapshot none = s;
+    none.mechjeb.reset();
+    CHECK(in.press({MjControl::Plus, 0, "ascent.altitude"}, none, 6).commands.empty());
+    CHECK(in.press({MjControl::Flag, 0, "ascent.force_roll"}, mechjeb_snapshot("v=1 rev=1 mj=missing\n"), 6).commands.empty());
+    // the tabs change the scene; the page is kept by reset()
+    CHECK(in.press({MjControl::Tab, 1}, s, 7).scene == FlightScene::Cockpit);
+    in.reset();
+    CHECK(in.page() == MjPage::Ascent && !in.busy(7));
+    in.press({MjControl::Back}, s, 7);
+    CHECK(in.page() == MjPage::Menu);
+}
+
+TEST(mechjeb_engage_needs_arm_and_keypad_sets_values) {
+    const std::string text = mechjeb_fixture();
+    const Snapshot off = mechjeb_snapshot(replace_line(text, "ascent.enabled", "0"));
+    MechJebInput in;
+    in.set_page(MjPage::Ascent);
+    const MjControl engage{MjControl::Action, int(MjAction::Engage)};
+    CHECK(in.press(engage, off, 0).commands.empty());  // not armed: the ARM lamp blinks
+    CHECK(in.feedback("arm", 0) == CockpitInput::Feedback::Rejected);
+    in.press({MjControl::Arm}, off, 1);
+    CHECK(in.armed(1) && std::fabs(in.armed_left(1) - MechJebInput::ARM_WINDOW) < 1e-9);
+    auto p = in.press(engage, off, 2);
+    CHECK(p.commands.size() == 1 && p.commands[0].kind == Command::MechJebAction && p.commands[0].key == "ascent.engage");
+    CHECK(!in.armed(2));  // one engage per arming
+    CHECK(in.press(engage, off, 2.5).commands.empty());
+    in.update(mechjeb_snapshot(text), 3);  // ascent.enabled=1 confirms it
+    CHECK(in.feedback("action:0", 3) == CockpitInput::Feedback::None);
+    in.press({MjControl::Arm}, off, 10);
+    in.update(off, 15.1);
+    CHECK(!in.armed(15.1));  // the window closes by itself
+    // DISENGAGE and ABORT TIMED LAUNCH need no arming
+    CHECK_EQ(in.press({MjControl::Action, int(MjAction::Disengage)}, off, 16).commands[0].key, "ascent.disengage");
+    CHECK_EQ(in.press({MjControl::Action, int(MjAction::AbortTimedLaunch)}, off, 16).commands[0].key,
+             "ascent.abort_timed_launch");
+    CHECK(in.press({MjControl::Action, int(MjAction::LaunchRendezvous)}, off, 16).commands.empty());
+    CHECK(mj_action_needs_arm(MjAction::LaunchTargetPlane));
+    // a click on a value opens the keypad; the keyboard types into it; Escape only closes it
+    in.press({MjControl::Value, 0, "ascent.inclination"}, off, 20);
+    CHECK(in.keypad().is_open() && in.keypad().key() == "ascent.inclination");
+    CHECK(in.press({MjControl::Plus, 0, "ascent.altitude"}, off, 20).commands.empty());  // modal
+    MechJebPress typed;
+    KeyEvent six{Key::Digit, 6}, five{Key::Digit, 5};
+    CHECK(in.key(six, off, 20, typed));
+    CHECK(in.key(KeyEvent{Key::Period}, off, 20, typed));
+    CHECK(in.key(five, off, 20, typed));
+    CHECK(in.key(KeyEvent{Key::Minus}, off, 20, typed));
+    CHECK(!in.key(KeyEvent{Key::W}, off, 20, typed));  // other keys stay KSP keys
+    KeyEvent scene{Key::Minus};
+    scene.ctrl = true;
+    CHECK(!in.key(scene, off, 20, typed));  // Ctrl+"-" still changes the scene
+    CHECK_EQ(in.keypad().text(), "-6.5");
+    CHECK(in.key(KeyEvent{Key::Enter}, off, 21, typed));
+    CHECK(!in.keypad().is_open());
+    CHECK(typed.commands.size() == 1 && typed.commands[0].key == "ascent.inclination" && typed.commands[0].text == "-6.5");
+    in.press({MjControl::Value, 0, "ascent.altitude"}, off, 22);
+    CHECK(in.press({MjControl::Pad, 9}, off, 22).commands.empty());
+    CHECK(in.key(KeyEvent{Key::Escape}, off, 22, typed));  // closes the keypad, never quits the HMI
+    CHECK(!in.keypad().is_open());
+    CHECK(!in.key(KeyEvent{Key::Escape}, off, 22, typed));  // closed: Escape is the HMI's own again
+    in.press({MjControl::Value, 0, "ascent.altitude"}, off, 23);
+    for (int k : {1, 2, 0}) in.press({MjControl::Pad, k}, off, 23);
+    p = in.press({MjControl::Pad, PAD_SET}, off, 23);
+    CHECK(p.commands.size() == 1 && p.commands[0].text == "120000");
+    in.press({MjControl::Value, 0, "ascent.altitude"}, off, 24);
+    in.press({MjControl::Pad, PAD_CANCEL}, off, 24);
+    CHECK(!in.keypad().is_open());
+}
+
+TEST(mechjeb_poller_fetches_on_revision_change_and_commands_reach_krpc) {
+    std::atomic<uint32_t> revision{7};
+    std::atomic<int> mode{0};  // 0 serve, 1 no procedure, 2 malformed
+    std::atomic<int> reports{0};
+    std::mutex m;
+    std::vector<std::string> args_seen;
+    const std::string good = mechjeb_fixture();
+    FakeServer server([&](const std::string& proc, const std::vector<std::string>& args) -> FakeResult {
+        if (mode == 1) return {"", false, "No such procedure MechJebRevision"};
+        if (proc == "MechJebRevision") return {pb::enc_uint32(revision)};
+        if (proc == "MechJebReport") return ++reports, FakeResult{pb::enc_string(mode == 2 ? "v=9 rev=1 mj=ok\n" : good)};
+        if (proc == "MechJebSet" || proc == "MechJebAction") {
+            std::lock_guard<std::mutex> lock(m);
+            for (const auto& a : args) args_seen.push_back(pb::dec_string(a));
+            return {pb::enc_string(args.size() == 2 && pb::dec_string(args[0]) == "ascent.enabled" ? "read only" : "ok")};
+        }
+        return {"", false, "no such procedure " + proc};
+    });
+    krpc::Client::Options o;
+    o.address = "127.0.0.1";
+    o.rpc_port = server.rpc_port;
+    o.stream_port = server.stream_port;
+    krpc::Client c(o);
+    MechJebPoller poller(0.5, 2.0);
+    auto r = poller.poll(c, 0);
+    CHECK(r && r->ok() && poller.problem().empty());
+    CHECK(poller.poll(c, 0.2) == r);  // within the period: no call at all
+    CHECK(poller.poll(c, 0.6) == r);  // same revision: no new report
+    CHECK_EQ(reports.load(), 1);
+    revision = 8;
+    CHECK(poller.poll(c, 1.2) != r);
+    CHECK_EQ(reports.load(), 2);
+    mode = 1;
+    CHECK(!poller.poll(c, 1.8) && !poller.problem().empty());  // no data, never fake values
+    mode = 0;
+    CHECK(!poller.poll(c, 2.5));  // retried after 2 s only
+    CHECK(poller.poll(c, 3.9));
+    mode = 2, revision = 9;
+    CHECK(!poller.poll(c, 4.5) && poller.problem().find("version") != std::string::npos);
+    Command set{Command::MechJebSet};
+    set.key = "ascent.altitude", set.text = "90000";
+    CHECK_EQ(send_mechjeb(c, set), "ok");
+    set.key = "ascent.enabled", set.text = "0";
+    CHECK_EQ(send_command(c, set, 7, "flight"), "MechJeb ascent.enabled=0: read only");
+    Command act{Command::MechJebAction};
+    act.key = "ascent.engage";
+    CHECK_EQ(send_mechjeb(c, act), "ok");
+    std::lock_guard<std::mutex> lock(m);
+    CHECK((args_seen == std::vector<std::string>{"ascent.altitude", "90000", "ascent.enabled", "0", "ascent.engage"}));
 }
 
 int main(int argc, char** argv) {

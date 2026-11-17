@@ -48,8 +48,16 @@ Source map
      - Remote KSP keyboard and cockpit panel clicks: Commands, held state, ARM / guards, click confirmation.
      - No SDL; the display thread only queues Commands, the telemetry thread sends them.
    * - ``cockpit.*``
-     - Cockpit panel layout, hit test and composition over a skin's ``CockpitPainter``.
+     - Cockpit panel layout, hit test and composition over a skin's ``CockpitPainter``; the shared scene ribbon.
      - One layout for every skin; materials stay in each skin.
+   * - ``mechjeb.*`` / ``mechjebinput.*``
+     - MechJeb report v1 parser (``KSPHMIFlight.MechJebReport``); fields, steps, keypad, ARM and click
+       confirmation of the MechJeb scene.
+     - No SDL; a missing key is unknown, never 0. Unknown keys are ignored, other versions rejected.
+   * - ``mechjebpage.*``
+     - MechJeb menu and Ascent Guidance page layout, hit test, keypad overlay and composition over a skin's
+       ``CockpitPainter``.
+     - One layout per screen size, page and ascent path; no values drawn without a report.
    * - ``shipreport.*``
      - VAB ship report model and parser (format v1 from ``KSPHMI.ShipReport``), percent decoding, labels.
      - Reject unknown versions and malformed fields; ignore unknown line kinds (later phases).

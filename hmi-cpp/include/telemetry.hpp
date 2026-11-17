@@ -52,6 +52,8 @@ public:
     virtual void hold(const Held&) {}
     /// Whether the cockpit panel scene is on screen (display thread): its extra kRPC streams exist only then.
     virtual void set_cockpit(bool) {}
+    /// Whether the MechJeb scene is on screen (display thread): MechJeb is polled only then.
+    virtual void set_mechjeb(bool) {}
 
 protected:
     explicit Source(const char* name);
@@ -125,6 +127,34 @@ private:
     std::string problem_;
 };
 
+/// The MechJeb scene over kRPC: KSPHMIFlight.MechJebRevision() every `period` seconds, MechJebReport() only when
+/// the revision changes. A server error (no such procedure: KSPSerialIO.Hmi.dll without MechJeb support, scene
+/// changing) or a report that does not parse clears the report (the scene says "no data") and is retried after
+/// `retry_seconds`, logged once per reason. Link errors (krpc::ConnectionError) propagate.
+class MechJebPoller {
+public:
+    explicit MechJebPoller(double period = 0.5, double retry_seconds = 5.0)
+        : period_(period), retry_seconds_(retry_seconds) {}
+    std::shared_ptr<const MechJebReport> poll(krpc::Client& c, double now);
+    /// Forget the report (scene hidden, new vessel session, new connection).
+    void reset();
+    /// Why there is no report ("" while there is one or before the first poll).
+    const std::string& problem() const { return problem_; }
+    int fetches = 0;  ///< MechJebReport calls made (tests)
+
+private:
+    void fail(const std::string& why, double now, bool retry);
+    double period_, retry_seconds_;
+    std::shared_ptr<const MechJebReport> report_;
+    std::optional<uint32_t> revision_;
+    double next_ = -1e9;
+    std::string problem_;
+};
+
+/// KSPHMIFlight.MechJebSet(key, text) or MechJebAction(key) for a MechJeb command: the plugin's reply ("ok",
+/// "unknown key", "read only", "invalid value", "unavailable"). Errors propagate.
+std::string send_mechjeb(krpc::Client& c, const Command& cmd);
+
 class KrpcSource : public Source {
 public:
     struct Options {
@@ -143,6 +173,7 @@ public:
     void command(const Command& c) override;
     void hold(const Held& h) override;
     void set_cockpit(bool shown) override;
+    void set_mechjeb(bool shown) override;
 
 protected:
     void run() override;
@@ -161,6 +192,9 @@ protected:
     void command_loop(krpc::Client& conn, uint64_t vessel, uint64_t control, const std::atomic<bool>& stop);
     /// Send one command and log what happened, with its time in the queue and in kRPC.
     void send_one(krpc::Client& conn, const Command& cmd, uint64_t vessel, const std::string& scene, uint64_t control);
+    /// A MechJeb command: logged with its reply and timing ("mechjeb: ... -> ok (queued 2 ms, kRPC 48 ms)"); the
+    /// reply is published with the next snapshot (Snapshot::mechjeb_reply).
+    void send_mechjeb_one(krpc::Client& conn, const Command& cmd);
 
     Options options_;
     double period_;
@@ -180,6 +214,9 @@ private:
     bool sender_active_ = false;        ///< in flight the command thread sends commands_ (input_mutex_)
     Held held_;                      ///< held keys as the display thread last saw them (input_mutex_)
     std::atomic<bool> cockpit_{false};  ///< the cockpit panel scene is shown: follow() keeps CockpitStreams
+    std::atomic<bool> mechjeb_{false};  ///< the MechJeb scene is shown: follow() polls MechJeb
+    MechJebPoller mechjeb_poller_;
+    std::optional<MechJebReply> mechjeb_reply_;  ///< the plugin's last MechJeb reply (input_mutex_)
     Held sent_;                      ///< held keys last sent (telemetry thread)
     double nudged_at_ = -1;          ///< last NudgeThrottle, -1 while no throttle key is held
     std::string held_problem_;       ///< last held-key error logged

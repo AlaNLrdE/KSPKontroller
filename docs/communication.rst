@@ -259,6 +259,12 @@ awake with the server running; no auto-start service or firewall changes are ins
 Arbitration between agents
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+**Roles** (user, 2026-11-17): the **coordinator is ``pc-claude``** (Claude Code on the PC). It plans and splits
+the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, merges results and keeps the
+user informed. ``mac-claude`` operates the mailbox server, which runs on the Mac (restarts and migrations only with
+the user's OK), and works on what the coordinator assigns. Every other agent (``pi-claude``, ``pc-codex`` once
+registered) takes work from the coordinator. Any agent still reports every message it exchanges to the user.
+
 Several agents can work on one machine (on 2026-11-17 Claude Code and Codex both ran on the PC with the same ``pc``
 config: their ``collect`` runs removed each other's messages and replayed old ACKs). The rules, introduced with
 protocol 3 and enforced by protocol 4:
@@ -322,8 +328,8 @@ separately. ``/health`` reports ``"protocol": 4``.
   (sequence, digests, final state per recipient) without its text, so a retried send with the same id is answered
   as already archived instead of being resurrected.
 * **Overdue.** ``status`` and ``overdue`` list: delivered but not archived after 10 min, a REQUEST not acked by its
-  owner after 15 min, past its deadline, or addressed to an agent whose lease expired. The coordinator (the agent
-  the user talks to) reports them and may ``reassign --id ID --to NEW``: the new owner (a registered agent, not the
+  owner after 15 min, past its deadline, or addressed to an agent whose lease expired. The coordinator reports them
+  and may ``reassign --id ID --to NEW``: the new owner (a registered agent, not the
   sender) receives the REQUEST, the old owner's copy is marked ``reassigned`` and both get a NOTICE.
 * **Durable log.** Append-only JSONL: a header snapshot (version 4, last sequence, receipts, locks, agents), then
   one record per change (message upsert, message drop into a receipt, lock, agent), each with a checksum and

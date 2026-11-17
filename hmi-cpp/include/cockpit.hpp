@@ -17,6 +17,13 @@
 
 namespace ksphmi {
 
+/// The scene ribbon below the header (cockpit panel and MechJeb scenes): a tab per FlightScene.
+struct RibbonLayout {
+    Rect ribbon;
+    std::array<Rect, FLIGHT_SCENES> tabs{};
+};
+RibbonLayout ribbon_layout(const Canvas& c);
+
 /// Where everything of the panel goes, in pixels, from the screen size alone (same for every skin).
 struct CockpitLayout {
     Rect ribbon, attitude, staging, recovery, systems, groups, strip;
@@ -90,6 +97,9 @@ struct CockpitView {
     const CockpitInput* input = nullptr;
     double now = 0;
 };
+
+/// The ribbon with its captions and tabs, `shown` lit (art: ribbon, captions and unlit tabs; live: the lit tab).
+void paint_ribbon(Canvas& c, bool art, FlightScene shown, CockpitPainter& p);
 
 /// Draw the panel below the skin's own header: the art pass (`art` true) or the live pass.
 void paint_cockpit(Canvas& c, bool art, const Snapshot& s, const CockpitView& view, CockpitPainter& p);
