@@ -55,6 +55,8 @@ add_library(ksphmi_core STATIC
   src/keyboard.cpp
   src/krpc.cpp
   src/log.cpp
+  src/mechjeb.cpp
+  src/mechjebinput.cpp
   src/navmath.cpp
   src/net.cpp
   src/netinfo.cpp
@@ -82,6 +84,7 @@ add_library(ksphmi_ui STATIC
   src/fbdev.cpp
   src/flightdeck.cpp
   src/gameskin.cpp
+  src/mechjebpage.cpp
   src/navball.cpp
   src/orbitart.cpp
   src/png.cpp

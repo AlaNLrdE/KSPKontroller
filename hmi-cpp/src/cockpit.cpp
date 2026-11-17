@@ -82,6 +82,30 @@ void sas_icon(Canvas& c, int mode, double cx, double cy, double r, Color ink) {
 }  // namespace
 
 // ============================================================================================ layout
+RibbonLayout ribbon_layout(const Canvas& c) {
+    const double u = c.u, W = c.w, m = 2.5 * u;
+    RibbonLayout r;
+    r.ribbon = Rect::f(m, 12 * u, W - 2 * m, 2.8 * u);
+    const double tw = 16 * u, th = 2.2 * u, ty = r.ribbon.y + .3 * u, gap = u;
+    const double x0 = W / 2 - (FLIGHT_SCENES * tw + (FLIGHT_SCENES - 1) * gap) / 2;
+    for (int i = 0; i < FLIGHT_SCENES; ++i) r.tabs[size_t(i)] = Rect::f(x0 + i * (tw + gap), ty, tw, th);
+    return r;
+}
+
+void paint_ribbon(Canvas& c, bool art, FlightScene shown, CockpitPainter& p) {
+    const RibbonLayout r = ribbon_layout(c);
+    const double u = c.u;
+    if (art) {
+        c.rounded_rect(r.ribbon, float(.5 * u), p.key_fill());
+        p.text(c, "< CTRL -", 1.5f, p.key_ink(), r.ribbon.x + 1.2 * u, r.ribbon.centery(), Anchor::MidLeft);
+        p.text(c, "CTRL + >", 1.5f, p.key_ink(), r.ribbon.right() - 1.2 * u, r.ribbon.centery(), Anchor::MidRight);
+    }
+    for (int i = 0; i < FLIGHT_SCENES; ++i) {
+        const Ctl tab = ctl_at(Ctl::TabInstruments, i);
+        p.lamp(c, r.tabs[size_t(i)], ctl_legend(tab), static_cast<FlightScene>(i) == shown ? Lamp::White : Lamp::Off, art);
+    }
+}
+
 CockpitLayout cockpit_layout(const Canvas& c) {
     const double u = c.u, W = c.w, m = 2.5 * u, g = 1.8 * u;
     CockpitLayout l;
@@ -95,13 +119,10 @@ CockpitLayout cockpit_layout(const Canvas& c) {
     auto caption = [&](const std::string& text, float units, double x, double y, Anchor a) {
         l.captions.push_back({text, units, x, y, a});
     };
-    // Ribbon: which flight scene is shown, and the two tabs (also clickable).
-    l.ribbon = R(m, 12 * u, W - 2 * m, 2.8 * u);
-    const double tw = 16 * u, th = 2.2 * u, ty = l.ribbon.y + .3 * u;
-    l.face[at(Ctl::TabInstruments)] = R(W / 2 - tw - .5 * u, ty, tw, th);
-    l.face[at(Ctl::TabCockpit)] = R(W / 2 + .5 * u, ty, tw, th);
-    l.captions.push_back({"< CTRL -", 1.5f, l.ribbon.x + 1.2 * u, double(l.ribbon.centery()), Anchor::MidLeft, true});
-    l.captions.push_back({"CTRL + >", 1.5f, l.ribbon.right() - 1.2 * u, double(l.ribbon.centery()), Anchor::MidRight, true});
+    // Ribbon: which flight scene is shown, and a tab per scene (also clickable; paint_ribbon draws it).
+    const RibbonLayout ribbon = ribbon_layout(c);
+    l.ribbon = ribbon.ribbon;
+    for (int i = 0; i < FLIGHT_SCENES; ++i) l.face[at(ctl_at(Ctl::TabInstruments, i))] = ribbon.tabs[size_t(i)];
 
     const double IN = 4.6 * u;  // below a group frame's title (the KSP skins' title bars are the tallest)
     const double T = 16.5 * u, colw = (W - 2 * m - 2 * g) / 3;
@@ -338,8 +359,8 @@ void paint_cockpit(Canvas& c, bool art, const Snapshot& s, const CockpitView& v,
     const bool armed = in && in->armed(now);
     auto face = [&](Ctl id) -> const Rect& { return l.face[at(id)]; };
 
+    paint_ribbon(c, art, FlightScene::Cockpit, p);
     if (art) {
-        c.rounded_rect(l.ribbon, float(.5 * u), p.key_fill());
         p.frame(c, l.attitude, "ATTITUDE CONTROL");
         p.frame(c, l.staging, "STAGING & ABORT");
         p.frame(c, l.recovery, "RECOVERY");
@@ -351,10 +372,6 @@ void paint_cockpit(Canvas& c, bool art, const Snapshot& s, const CockpitView& v,
         for (int i = 0; i < CTL_COUNT; ++i)
             if (l.key[size_t(i)].w > 0) p.keycap(c, l.key[size_t(i)], ctl_key(static_cast<Ctl>(i)));
     }
-
-    // Ribbon tabs
-    p.lamp(c, face(Ctl::TabInstruments), ctl_legend(Ctl::TabInstruments), Lamp::Off, art);
-    p.lamp(c, face(Ctl::TabCockpit), ctl_legend(Ctl::TabCockpit), Lamp::White, art);
 
     // Switches: name lamp lit while on, lever up/down, grey when the vessel has no such part.
     auto switch_cell = [&](Ctl id, std::optional<bool> on, std::optional<bool> fitted) {

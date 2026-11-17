@@ -967,6 +967,8 @@ std::string send_command(Client& c, const Command& cmd, uint64_t vessel, const s
             }
             return fmt::str("%d parachute%s cut", n, n == 1 ? "" : "s");
         }
+        case Command::MechJebSet:
+        case Command::MechJebAction: return name + ": " + send_mechjeb(c, cmd);
         case Command::ToggleMap: {  // kRPC: Map enters the map view, any other mode only leaves it
             const uint64_t camera = object(c, sc("get_Camera"));
             const bool map = get_int(c, sc("Camera_get_Mode", {obj(camera)})) == CAMERA_MAP;
@@ -1027,6 +1029,59 @@ std::shared_ptr<const VesselView> VesselViewPoller::poll(Client& c, double now) 
         fail(short_error(e), now);
     }
     return view_;
+}
+
+// ================================================================================================ MechJebPoller
+std::string send_mechjeb(Client& c, const Command& cmd) {
+    if (cmd.kind == Command::MechJebSet)
+        return get_string(c, Call{"KSPHMIFlight", "MechJebSet", {pb::enc_string(cmd.key), pb::enc_string(cmd.text)}});
+    return get_string(c, Call{"KSPHMIFlight", "MechJebAction", {pb::enc_string(cmd.key)}});
+}
+
+void MechJebPoller::reset() {
+    report_.reset();
+    revision_.reset();
+    next_ = -1e9;
+    problem_.clear();
+}
+
+void MechJebPoller::fail(const std::string& why, double now, bool retry) {
+    if (why != problem_) log::info(LOG, "mechjeb: no data (" + why + ")");
+    problem_ = why;
+    report_.reset();
+    revision_.reset();
+    next_ = now + (retry ? retry_seconds_ : period_);
+}
+
+std::shared_ptr<const MechJebReport> MechJebPoller::poll(Client& c, double now) {
+    if (now < next_) return report_;
+    next_ = now + period_;
+    try {
+        const uint32_t revision = pb::dec_uint32(c.invoke(Call{"KSPHMIFlight", "MechJebRevision", {}}).data);
+        if (report_ && revision_ && *revision_ == revision) return report_;
+        ++fetches;
+        const std::string text = get_string(c, Call{"KSPHMIFlight", "MechJebReport", {}});
+        std::string error;
+        auto parsed = parse_mechjeb_report(text, &error);
+        if (!parsed) {
+            fail("report rejected: " + error, now, true);
+            return nullptr;
+        }
+        if (!report_ || report_->status != parsed->status || !problem_.empty()) {
+            static const char* const states[] = {"ok", "missing", "nocore", "error"};
+            log::info(LOG, fmt::str("mechjeb: report revision %u, %s%s%s", parsed->rev,
+                                    states[static_cast<int>(parsed->status)], parsed->version.empty() ? "" : ", MechJeb ",
+                                    parsed->version.c_str()));
+        }
+        problem_.clear();
+        revision_ = revision;
+        report_ = std::make_shared<const MechJebReport>(std::move(*parsed));
+    } catch (const RpcError& e) {  // no such procedure (KSPSerialIO.Hmi.dll without MechJeb support), scene changing
+        fail(short_error(e), now, true);
+    } catch (const pb::DecodeError& e) {
+        fail(std::string("bad reply: ") + e.what(), now, true);
+    }
+    return report_;
 }
 
 // ================================================================================================ ShipReportPoller
@@ -1147,6 +1202,11 @@ void KrpcSource::command(const Command& c) {
 }
 
 void KrpcSource::send_one(Client& conn, const Command& cmd, uint64_t vessel, const std::string& scene, uint64_t control) {
+    if (cmd.kind == Command::MechJebSet || cmd.kind == Command::MechJebAction) {
+        if (vessel) send_mechjeb_one(conn, cmd);
+        else log::info(LOG, "key " + command_name(cmd) + " ignored in scene '" + scene + "'");
+        return;
+    }
     const double start = monotonic();
     try {
         const std::string what = send_command(conn, cmd, vessel, scene, control);
@@ -1158,6 +1218,31 @@ void KrpcSource::send_one(Client& conn, const Command& cmd, uint64_t vessel, con
     } catch (const pb::DecodeError& e) {
         log::warning(LOG, "key " + command_name(cmd) + " not applied: " + short_error(e));
     }
+}
+
+void KrpcSource::send_mechjeb_one(Client& conn, const Command& cmd) {
+    // The plugin answers every MechJeb command; the reply goes into the next snapshot, so the scene shows a refusal
+    // at once instead of waiting for its confirmation timeout.
+    const double start = monotonic();
+    std::string reply;
+    try {
+        reply = send_mechjeb(conn, cmd);
+        log::info(LOG, fmt::str("mechjeb: %s -> %s (queued %.0f ms, kRPC %.0f ms)", command_name(cmd).c_str(),
+                                reply.c_str(), cmd.queued > 0 ? (start - cmd.queued) * 1000 : 0.0,
+                                (monotonic() - start) * 1000));
+    } catch (const RpcError& e) {  // no such procedure (older KSPSerialIO.Hmi.dll), scene changing
+        reply = short_error(e);
+        log::warning(LOG, "mechjeb: " + command_name(cmd) + " not applied: " + reply);
+    } catch (const pb::DecodeError& e) {
+        reply = short_error(e);
+        log::warning(LOG, "mechjeb: " + command_name(cmd) + " not applied: " + reply);
+    }
+    std::lock_guard<std::mutex> lock(input_mutex_);
+    MechJebReply r;
+    r.seq = mechjeb_reply_ ? mechjeb_reply_->seq + 1 : 1;
+    r.target = cmd.key;
+    r.reply = reply;
+    mechjeb_reply_ = r;
 }
 
 void KrpcSource::command_loop(Client& conn, uint64_t vessel, uint64_t control, const std::atomic<bool>& stop) {
@@ -1189,6 +1274,10 @@ void KrpcSource::hold(const Held& h) {
 
 void KrpcSource::set_cockpit(bool shown) {
     if (cockpit_.exchange(shown) != shown) wake();
+}
+
+void KrpcSource::set_mechjeb(bool shown) {
+    if (mechjeb_.exchange(shown) != shown) wake();
 }
 
 void KrpcSource::send_inputs(Client& conn, uint64_t vessel, const std::string& scene) {
@@ -1425,6 +1514,7 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
     } stop_guard{*this, stop_sender, sender};
     log::info(LOG, "following " + name + " around " + body_name);
     vessel_view_.reset();
+    mechjeb_poller_.reset();
     auto d = [&](const std::string& key) { return pb::dec_double(c.stream(streams.id(key)).data); };
     while (!stopping()) {
         // Also a liveness probe: throws when the socket is gone (0 = left flight).
@@ -1485,6 +1575,14 @@ void KrpcSource::follow(Client& c, uint64_t vessel) {
                 optional_step([&] { s.cockpit = cockpit->sample(now); }, [&] { cockpit.reset(), cockpit_retry = now + 2; });
         } else {
             cockpit.reset();
+        }
+        if (mechjeb_.load()) {  // one Revision call every 0.5 s, the report only when it changed
+            s.mechjeb = mechjeb_poller_.poll(c, monotonic());
+            s.mechjeb_problem = mechjeb_poller_.problem();
+            std::lock_guard<std::mutex> lock(input_mutex_);
+            s.mechjeb_reply = mechjeb_reply_;
+        } else {
+            mechjeb_poller_.reset();
         }
         s.received = monotonic();
         publish(std::move(s));
@@ -1614,6 +1712,7 @@ Snapshot DemoSource::sample(double ut) const {
     panel.next_known = true;
     panel.warp_rate = 1;
     s.cockpit = panel;
+    s.mechjeb = demo_mechjeb_report();  // the shared fixture's values (--demo --flight-scene mechjeb)
     s.orbit_state = OrbitState{position, velocity, mu, Axes{{1, 0, 0}, {0, 0, 1}}};
     s.maneuver_orbit = demo_maneuver(a, e, mu);
     s.received = monotonic();

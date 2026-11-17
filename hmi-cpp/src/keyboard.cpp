@@ -45,6 +45,8 @@ std::string command_name(const Command& c) {
         }
         case Command::DeployChutes: return "deploy parachutes";
         case Command::CutChutes: return "cut parachutes";
+        case Command::MechJebSet: return "MechJeb " + c.key + "=" + c.text;
+        case Command::MechJebAction: return "MechJeb " + c.key;
     }
     return "?";
 }

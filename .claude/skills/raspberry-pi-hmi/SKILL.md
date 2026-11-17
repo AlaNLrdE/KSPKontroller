@@ -365,3 +365,9 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - Never use `M_PI` in hmi-cpp: MSYS2 UCRT64 (the native Windows build) does not define it; use the project's `PI`.
 - MechJeb on the shared install is 2.15.3 (MechJeb2.dll, MechJebLib.dll; no KRPC.MechJeb): the MechJeb scene reads it
   through our own KSPHMIFlight procedures by reflection (docs/hmi.rst "MechJeb scene").
+- A new member of an aggregate such as `Command` or `MjControl` needs a default initializer (`std::string key{};`):
+  clang's -Wmissing-field-initializers otherwise warns at every `{Command::Kind, value}` brace in the code base.
+- Apollo/Steampunk frame titles sit on the frame line, a few pixels above the frame rect: an overlay (the MechJeb
+  keypad) needs an opaque backdrop about 1u larger than its frame, and text-containment tests must use that backdrop.
+- The macOS KSPHMI_SHOTS / --screenshot runs are the quick review loop: `build/hmi-cpp/ksphmi --demo --skin S
+  --flight-scene mechjeb --mechjeb-page ascent --size 1024x768 --screenshot X.png` catches cramped 4:3 layouts.

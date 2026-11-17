@@ -93,8 +93,12 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
    * - Ctrl+0
      - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
    * - Ctrl+"+" / Ctrl+"-"
-     - next / previous flight scene: instruments or the clickable :ref:`cockpit panel <hmi-cockpit>`. The "+" of
-       a Spanish layout, "=" of a US one and the keypad +/- all work; the chord never ramps the throttle
+     - next / previous flight scene: instruments, the clickable :ref:`cockpit panel <hmi-cockpit>` or the
+       :ref:`MechJeb scene <hmi-mechjeb>`. The "+" of a Spanish layout, "=" of a US one and the keypad +/- all work;
+       the chord never ramps the throttle
+   * - 0-9, ``.``, ``-``, Backspace, Enter, Esc
+     - while the MechJeb scene's numeric keypad is open: type into it, delete, SET, CANCEL (Esc then only closes the
+       keypad and never quits the HMI)
    * - Esc
      - quit the HMI (``q`` is roll left; on macOS Cmd+Q also quits)
 
@@ -456,6 +460,62 @@ Keys map to MechJeb 2.15.3 members (reflected on the shared install, 2026-11-17)
 
 GravityTurn-only settings (pitch at turn start, intermediate apoapsis, hold time) are added as ``ascent.gt.*`` once
 their 2.15.3 members are confirmed by reflection, under the same rule.
+
+MechJeb scene: HMI
+^^^^^^^^^^^^^^^^^^
+
+``FlightScene::MechJeb`` is the third scene of the cycle (``--flight-scene mechjeb``, ``[display] flight_scene``)
+and has the third ribbon tab; the ribbon (``ribbon_layout`` / ``paint_ribbon`` in ``src/cockpit.cpp``) is shared with
+the cockpit panel. ``--mechjeb-page ascent`` opens on the Ascent Guidance page instead of the menu (screenshots).
+
+**Model** (``include/mechjeb.hpp``, core): ``parse_mechjeb_report`` reads report v1: the first line's ``v``,
+``rev``, ``mj`` and ``version``; every other line one ``key=value``, percent-decoded; CRLF and unknown keys are
+accepted, any other version or a line without ``=`` rejects the report. ``MechJebReport::number`` / ``flag`` return
+nothing for a missing key, text or ``nan``: a control without a value shows an empty window or an unlit lamp, never
+0. ``demo_mechjeb_report()`` serves the fixture's values to ``--demo`` (a core test keeps it equal to the fixture).
+
+**Controls** (``include/mechjebinput.hpp``, core, no SDL): ``mj_fields()`` gives each key its label, display unit
+and scale (km, %, degrees), step, decimals and range. ``MechJebInput`` keeps the page (menu / Ascent Guidance) for
+as long as the HMI runs; leaving the scene disarms, closes the keypad and forgets pending changes, never the page.
+A click becomes ``Command::MechJebSet`` (``key``, SI ``text``) or ``Command::MechJebAction`` in the same queue and
+command thread as the keys. Steppers move one step (Shift: ten; the left Shift key also ramps the throttle in
+flight, so prefer the right one), clamped to the range and rounded to the field's decimals; flags write the other
+state; the path selector writes ``ascent.path``. ENGAGE AUTOPILOT and the two timed launches need ARM first (5 s,
+one action per arming); DISENGAGE and ABORT TIMED LAUNCH do not. A change shows "sent" until a report carries the
+value (``ascent.enabled`` for engage/disengage), "rejected" after 3 s without it, and at once when the plugin's
+reply is not ``ok``: ``KrpcSource`` publishes the last reply in ``Snapshot::mechjeb_reply``, and the page shows it
+for 5 s (``ALTITUDE: INVALID VALUE``). A click on a value opens the keypad (``Keypad``): its first digit replaces
+the shown value, ``-`` toggles the sign, DEL / CANCEL / SET; SET checks the range (and whole numbers) before
+sending and otherwise says why. While it is open it is modal, and the physical keys 0-9, ``.``, ``-``,
+Backspace, Enter and Esc type into it (Esc only closes it); every other key stays a KSP key.
+
+**Pages** (``include/mechjebpage.hpp``, ``src/mechjebpage.cpp``): ``mechjeb_layout`` places everything from the
+screen size, page and ascent path alone, ``mechjeb_hit`` finds the control under a click (only keypad keys while
+it is open) and ``paint_mechjeb`` draws it with the skin's ``CockpitPainter``: Classic cards, Apollo lamp tiles
+and segment windows, Steampunk bulbs and brass, the KSP 1 / KSP 2 buttons. The menu is a 3 x 3 grid of module
+tiles in the approved order (Ascent Guidance first, the phase 2 modules veiled as "PHASE 2 · COMING LATER", Smart
+A.S.S. last). The Ascent Guidance page has a page bar (**< MECHJEB**, title, MechJeb's state) and the groups
+TARGET ORBIT, ASCENT PATH (CLASSIC / GRAVITY TURN / PVG and the chosen path's settings), GUIDANCE, THRUST,
+STAGING & FINISH and LAUNCH (ARM, ENGAGE AUTOPILOT, DISENGAGE, the timed launches, status with ``T-``, and the
+flight's apoapsis, periapsis, altitude and vertical speed from the snapshot). Without data (``mj=missing``,
+``nocore``, ``error``, or no report: an older plugin, the scene just opened) the bar says so, every setting is
+veiled and no value is drawn. Apollo and the KSP skins cache the static art per screen size, page and path.
+
+**Telemetry**: ``Source::set_mechjeb`` tells the telemetry thread whether the scene is shown; only then
+``MechJebPoller`` calls ``KSPHMIFlight.MechJebRevision`` every 0.5 s and ``MechJebReport`` only for a new revision
+(one or two calls per 0.5 s, never a loop per setting). A kRPC error or a rejected report clears the report (the
+scene says "no data" and why) and is retried after 5 s, logged once per reason (``mechjeb: no data (...)``); a new
+report state is logged as ``mechjeb: report revision N, ok, MechJeb 2.15.3.0``, each command as ``mechjeb:
+MechJeb ascent.altitude=90000 -> ok (queued 1 ms, kRPC 48 ms)``.
+
+Tests: ``mechjeb_report_*``, ``mechjeb_fields_format_step_and_validate``, ``mechjeb_keypad_*``,
+``mechjeb_clicks_send_settings_and_wait_for_the_report``, ``mechjeb_engage_needs_arm_and_keypad_sets_values``,
+``mechjeb_poller_fetches_on_revision_change_and_commands_reach_krpc`` (core);
+``mechjeb_layout_fits_every_screen_and_every_control_is_hit`` (both pages, every path, the keypad, at 1260x840,
+1920x1080, 2520x1680, 2940x1846 and 1024x768) and ``mechjeb_renders_inside_its_groups_in_every_skin`` (render).
+``KSPHMI_SHOTS=DIR`` writes ``SKIN_mechjeb_menu.png``, ``SKIN_mechjeb_ascent.png`` and ``SKIN_mechjeb_keypad.png``;
+``--demo --flight-scene mechjeb`` shows the fixture's values. ``tools/kspsim`` simulates MechJeb
+(``KrpcTest.test_mechjeb_procedures``, :doc:`simulator`).
 
 VESSEL panel
 ------------

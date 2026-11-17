@@ -49,11 +49,14 @@ std::optional<int> observe(Ctl c, const Snapshot& s) {
 
 }  // namespace
 
-const char* flight_scene_name(FlightScene s) { return s == FlightScene::Cockpit ? "cockpit" : "instruments"; }
+const char* flight_scene_name(FlightScene s) {
+    return s == FlightScene::Cockpit ? "cockpit" : s == FlightScene::MechJeb ? "mechjeb" : "instruments";
+}
 
 std::optional<FlightScene> parse_flight_scene(const std::string& name) {
     if (name == "instruments") return FlightScene::Instruments;
     if (name == "cockpit" || name == "panel") return FlightScene::Cockpit;
+    if (name == "mechjeb") return FlightScene::MechJeb;
     return std::nullopt;
 }
 
@@ -111,6 +114,7 @@ const char* ctl_legend(Ctl c) {
         case Ctl::Quickload: return "QUICK LOAD";
         case Ctl::TabInstruments: return "INSTRUMENTS";
         case Ctl::TabCockpit: return "COCKPIT PANEL";
+        case Ctl::TabMechJeb: return "MECHJEB";
         default: return "?";
     }
 }
@@ -180,6 +184,7 @@ CockpitPress CockpitInput::press(Ctl c, const Snapshot& s, double now) {
     };
     if (c == Ctl::TabInstruments) return r.scene = FlightScene::Instruments, r;
     if (c == Ctl::TabCockpit) return r.scene = FlightScene::Cockpit, r;
+    if (c == Ctl::TabMechJeb) return r.scene = FlightScene::MechJeb, r;
     if (between(c, Ctl::Mode0, Ctl::Mode9)) {
         send({Command::SasMode, SAS_MODES_HMI[ctl_offset(c, Ctl::Mode0)].krpc});
         return r;

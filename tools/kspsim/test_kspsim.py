@@ -561,6 +561,66 @@ class KrpcTest(unittest.TestCase):
             conn.close()
             server.stop()
 
+    def test_mechjeb_procedures(self):
+        """The HMI MechJeb scene's procedures (hmi-cpp/src/telemetry.cpp MechJebPoller, send_mechjeb): the report
+        starts as the shared fixture, MechJebSet validates like the plugin, actions change ascent.enabled/status."""
+        import krpc
+        from kspsim.krpcserver import KrpcServer
+        from kspsim.mechjeb import fixture_values
+
+        sim = Simulator("orbit")
+        server = KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)
+        server.start()
+        conn = krpc.connect(name="test", address="127.0.0.1", rpc_port=server.rpc_port, stream_port=server.stream_port)
+        try:
+            names = {"MechJebRevision": "mech_jeb_revision", "MechJebReport": "mech_jeb_report",
+                     "MechJebSet": "mech_jeb_set", "MechJebAction": "mech_jeb_action"}
+
+            def call(name, *args):
+                return getattr(conn.ksphmi_flight, names[name])(*args)
+
+            with open(os.path.join(ROOT, "hmi-cpp", "tests", "data", "mechjeb_report_v1.txt"), encoding="utf-8") as f:
+                fixture = f.read().replace("\r\n", "\n")
+            self.assertEqual(call("MechJebReport"), fixture)  # byte for byte at start
+            self.assertEqual(fixture_values()[1]["ascent.status"], "Awaiting liftoff")
+            rev = call("MechJebRevision")
+            self.assertEqual(rev, 42)
+            self.assertEqual(call("MechJebSet", "ascent.altitude", "90000"), "ok")
+            self.assertEqual(call("MechJebRevision"), rev + 1)
+            self.assertIn("\nascent.altitude=90000\n", call("MechJebReport"))
+            self.assertEqual(call("MechJebSet", "ascent.altitude", "90000"), "ok")
+            self.assertEqual(call("MechJebRevision"), rev + 1)  # unchanged text: same revision
+            self.assertEqual(call("MechJebSet", "ascent.classic.turn_shape_exponent", "0.45"), "ok")
+            self.assertIn("\nascent.classic.turn_shape_exponent=0.45\n", call("MechJebReport"))
+            self.assertEqual(call("MechJebSet", "ascent.no_such", "1"), "unknown key")
+            self.assertEqual(call("MechJebSet", "ascent.enabled", "0"), "read only")
+            for key, value in (("ascent.altitude", "abc"), ("ascent.altitude", "nan"), ("ascent.force_roll", "2"),
+                               ("ascent.path", "3"), ("ascent.last_stage", "1.5")):
+                self.assertEqual(call("MechJebSet", key, value), "invalid value", (key, value))
+            self.assertEqual(call("MechJebSet", "ascent.path", "2"), "ok")
+            self.assertEqual(call("MechJebAction", "ascent.disengage"), "ok")
+            self.assertIn("\nascent.enabled=0\n", call("MechJebReport"))
+            self.assertEqual(call("MechJebAction", "ascent.launch_rendezvous"), "ok")
+            report = call("MechJebReport")
+            self.assertIn("\nascent.enabled=1\n", report)
+            self.assertIn("\nascent.t_minus=30\n", report)
+            self.assertIn("\nascent.status=Launching%20to%20rendezvous\n", report)
+            self.assertEqual(call("MechJebAction", "ascent.abort_timed_launch"), "ok")
+            self.assertIn("\nascent.t_minus=0\n", call("MechJebReport"))
+            self.assertEqual(call("MechJebAction", "ascent.fly_me_to_the_mun"), "unknown key")
+            sim.mechjeb.set_state("nocore")
+            self.assertEqual(call("MechJebReport"), "v=1 rev=%d mj=nocore version=2.15.3.0\n" % sim.mechjeb.revision)
+            self.assertEqual(call("MechJebSet", "ascent.altitude", "80000"), "unavailable")
+            sim.mechjeb.set_state("missing")
+            self.assertTrue(call("MechJebReport").endswith("mj=missing\n"))
+            self.assertEqual(call("MechJebAction", "ascent.engage"), "unavailable")
+            sim.set_scene("vab")
+            with self.assertRaises(Exception):
+                call("MechJebRevision")
+        finally:
+            conn.close()
+            server.stop()
+
     def test_krpc_client_end_to_end(self):
         import krpc
         from kspsim.krpcserver import KrpcServer

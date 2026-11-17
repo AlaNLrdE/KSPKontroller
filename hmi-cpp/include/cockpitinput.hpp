@@ -18,11 +18,11 @@
 
 namespace ksphmi {
 
-/// The two flight scenes, cycled with Ctrl+"+" / Ctrl+"-".
-enum class FlightScene { Instruments, Cockpit };
-constexpr int FLIGHT_SCENES = 2;
+/// The three flight scenes, cycled with Ctrl+"+" / Ctrl+"-".
+enum class FlightScene { Instruments, Cockpit, MechJeb };
+constexpr int FLIGHT_SCENES = 3;
 const char* flight_scene_name(FlightScene s);
-/// "instruments" or "cockpit" ("panel" too); nothing for any other text.
+/// "instruments", "cockpit" ("panel" too) or "mechjeb"; nothing for any other text.
 std::optional<FlightScene> parse_flight_scene(const std::string& name);
 /// `step` scenes forward (negative: back), cyclically.
 FlightScene step_scene(FlightScene s, int step);
@@ -37,7 +37,7 @@ enum class Ctl {
     Gear, Lights, Brakes, Solar, Antennas, Radiators, CargoBays, Intakes,
     Group1, Group2, Group3, Group4, Group5, Group6, Group7, Group8, Group9, Group10,
     ThrottleFull, ThrottleCut, WarpDown, WarpStop, WarpUp, Map, Quicksave, Quickload,
-    TabInstruments, TabCockpit,
+    TabInstruments, TabCockpit, TabMechJeb,
     Count
 };
 constexpr int CTL_COUNT = static_cast<int>(Ctl::Count);
