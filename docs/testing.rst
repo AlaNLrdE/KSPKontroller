@@ -187,6 +187,25 @@ For Pi testing, inspect service restart counts, output selection, unblank state 
 the user what the physical screen shows. A running service or saved PNG cannot prove that the display
 is visible. Measure render optimizations on the target using the same resolution and output path.
 
+Link latency (UDP context vs kRPC)
+----------------------------------
+
+``tools/latency/udp_vs_krpc.py`` (Python stdlib only) compares, one after the other, the round trip of
+the UDP 50002 context request, kRPC ``get_UT`` calls (``--vessel`` adds ``get_ActiveVessel`` and
+``Vessel_get_Name``) and a 10 Hz ``get_UT`` stream (interval, UT step and relative age). Requests are
+paced (20/s, one UDP request outstanding, 500 ms timeout) so the plugin's four-datagrams-per-frame
+reader is never flooded; both paths are answered from Unity's frame loop, so the RTT is frame-bound.
+Summaries print n, median, p90, p99, max, stdev, mean successive difference and timeouts; raw samples
+go to ``build/latency/<UTC time>_<label>.json`` and ``.csv``. In a game session, on the Pi::
+
+   python3 tools/latency/udp_vs_krpc.py --host Alan-TR.local --label flight --fps 60
+   python3 tools/latency/udp_vs_krpc.py --host Alan-TR.local --label space_center --paths udp --fps 60
+
+``--fps`` is KSP's frame rate noted by hand. Without the game, ``tools/latency/local_sim.py`` serves
+kspsim on 127.0.0.1:51000/51001 and UDP 51002 only (it refuses 50000-50003 and never broadcasts, so
+the deployed HMI cannot discover it); ``python3 -m unittest tools/latency/test_udp_vs_krpc.py``
+runs the statistics tests and an end-to-end check on ephemeral ports.
+
 Documentation checks
 --------------------
 
