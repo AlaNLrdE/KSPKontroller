@@ -49,6 +49,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 
 ## Working with agents (learned from the ksp-workbench project)
 
+- **Coordinator: `pc-claude`** (Claude Code on the PC, user 2026-11-17): it plans, assigns owners and locks,
+  watches `overdue`, reassigns and merges. `mac-claude` runs the Mac mailbox server and takes assigned work like
+  `pi-claude` and `pc-codex`; requests from the user to another agent are reported to the coordinator.
 - **Delegate and stay available** (user, 2026-11-17): every agent on the mailbox bus that receives new work (from
   the user or another agent) delegates it right away to other agents (`kspcontroller-dev` subagents in their own
   worktrees, or an addressed mailbox REQUEST to another agent) and stays free to schedule further work in parallel.
