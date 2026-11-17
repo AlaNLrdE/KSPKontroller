@@ -79,5 +79,60 @@ class BoardResultTest(unittest.TestCase):
                 self.assertEqual(failed, status != "PASS" or exit_code != 0)
 
 
+class HmiScreenTest(unittest.TestCase):
+    """hmi: screen judges the output the HMI logged: fb0/blank for fbdev, HDMI connectors for SDL KMSDRM."""
+    KMSDRM = "screen_2520x1680_(SDL_KMSDRM_/_opengl)"
+    FBDEV = "screen_2520x1680_(fbdev_/dev/fb0_16_bpp)"
+    HDMI_ON = "card0-HDMI-A-1:connected:On,card0-HDMI-A-2:disconnected:Off,"
+
+    def status(self, state="active", **env):
+        return verify.hmi_screen_status(env, state)
+
+    def test_kmsdrm_with_blanked_fb0_and_lit_hdmi_passes(self):
+        result = self.status(fbblank="4", screenline=self.KMSDRM, drm=self.HDMI_ON)
+        self.assertEqual(result[0], "PASS", result[1])
+        self.assertIn("card0-HDMI-A-1", result[1])
+
+    def test_kmsdrm_with_dpms_off_fails(self):
+        result = self.status(fbblank="4", screenline=self.KMSDRM, drm="card0-HDMI-A-1:connected:Off,")
+        self.assertEqual(result[0], "FAIL")
+        self.assertIn("dpms", result[1])
+
+    def test_kmsdrm_without_connected_hdmi_fails(self):
+        drm = "card0-HDMI-A-1:disconnected:Off,card0-HDMI-A-2:disconnected:Off,"
+        for value in (drm, ""):
+            with self.subTest(drm=value):
+                result = self.status(fbblank="4", screenline=self.KMSDRM, drm=value)
+                self.assertEqual(result[0], "FAIL")
+                self.assertIn("no HDMI connector is connected", result[1])
+
+    def test_kmsdrm_problem_only_warns_when_service_is_down(self):
+        result = self.status("inactive", screenline=self.KMSDRM, drm="")
+        self.assertEqual(result[0], "WARN")
+
+    def test_fbdev_keeps_blank_rule(self):
+        self.assertEqual(self.status(fbblank="4", screenline=self.FBDEV, drm=self.HDMI_ON)[0], "FAIL")
+        self.assertEqual(self.status(fbblank="0", screenline=self.FBDEV, drm=self.HDMI_ON)[0], "PASS")
+
+    def test_unknown_output_warns_with_raw_values(self):
+        result = self.status(fbblank="4", screenline="", drm=self.HDMI_ON)
+        self.assertEqual(result[0], "WARN")
+        self.assertIn("fb0/blank=4", result[1])
+        self.assertIn("HDMI-A-1", result[1])
+
+    def test_nothing_probed_reports_nothing(self):
+        self.assertIsNone(self.status())
+
+    def test_check_hmi_reports_screen_from_ssh_probe(self):
+        stdout = "\n".join(["active", "0", "fbblank=4", "screenline=" + self.KMSDRM, "drm=" + self.HDMI_ON]) + "\n"
+        process = mock.Mock(stdout=stdout, stderr="", returncode=0)
+        with mock.patch.object(verify.subprocess, "run", return_value=process), \
+             mock.patch.object(verify, "results", []):
+            verify.check_hmi({})
+            screen = [r for r in verify.results if r[1] == "hmi: screen"]
+        self.assertEqual(len(screen), 1)
+        self.assertEqual(screen[0][0], "PASS", screen[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()

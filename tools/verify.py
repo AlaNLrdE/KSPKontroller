@@ -784,6 +784,42 @@ def kiosk_problems(env):
     return missing
 
 
+def hmi_screen_status(env, state):
+    """(status, detail) for 'hmi: screen' from the Pi probe, or None when there is nothing to judge.
+
+    The output comes from the HMI's latest 'screen WxH (<kind>)' journal line (spaces sent as '_'). fbdev output:
+    a blanked fb0 (4 = powered down) hides every frame while the service and its log look healthy. SDL output
+    (KMSDRM) leaves fb0/blank at 4 by design, so the screen is judged by the HDMI connectors' status and dpms."""
+    blank = env.get("fbblank", "")
+    line = env.get("screenline", "").replace("_", " ")
+    connectors = [c.split(":") for c in env.get("drm", "").split(",") if c.count(":") == 2]
+    m = re.search(r"screen (\d+x\d+) \((SDL [^ )]+|fbdev)", line)
+    if m and m.group(2) == "fbdev":
+        if blank and blank != "0":
+            return ("FAIL" if state == "active" else "WARN",
+                    "fbdev output, framebuffer blanked (fb0/blank=%s): nothing shows; the HMI unblanks it, "
+                    "redeploy or restart it" % blank)
+        if blank == "0":
+            return ("PASS", "fbdev output, framebuffer on")
+        return ("WARN", "fbdev output but fb0/blank unreadable")
+    if m:
+        size, driver = m.group(1), m.group(2)
+        connected = [c for c in connectors if c[1] == "connected"]
+        lit = [c for c in connected if c[2] == "On"]
+        bad = "FAIL" if state == "active" else "WARN"
+        if lit:
+            return ("PASS", "%s %s on %s (connected, dpms On)" % (driver, size, ", ".join(c[0] for c in lit)))
+        if connected:
+            return (bad, "%s output but HDMI dpms is %s on %s: the display is powered down"
+                    % (driver, "/".join(c[2] for c in connected), ", ".join(c[0] for c in connected)))
+        return (bad, "%s output but no HDMI connector is connected (%s): check the cable, or the monitor was "
+                "off at boot" % (driver, env.get("drm") or "no connectors found"))
+    if not (line or blank or connectors):
+        return None
+    return ("WARN", "unknown HMI output (screen line %r, fb0/blank=%s, drm=%s): ./ci hmi_logs"
+            % (line or "none", blank or "?", env.get("drm") or "?"))
+
+
 def check_hmi(ctx):
     """Local C++ test build is current, then (if the Pi answers over SSH) its service state and the kRPC address."""
     # Only check that ./ci test_hmi ran after the last source change: the native Windows build (MSYS2,
@@ -810,6 +846,11 @@ def check_hmi(ctx):
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
              "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
              "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"; "
+             # The output the running HMI chose (its 'screen WxH (<kind>)' line) and every HDMI connector's state
+             "echo \"screenline=$(journalctl --user -u ksphmi.service -b --no-pager -o cat 2>/dev/null "
+             "| grep -E 'screen [0-9]+x[0-9]+ \\(' | tail -n 1 | tr -s ' \\t' '__')\"; "
+             "echo \"drm=$(for c in /sys/class/drm/card*-HDMI-*; do test -r $c/status && printf '%s:%s:%s,' "
+             "${c##*/} $(cat $c/status) $(cat $c/dpms 2>/dev/null || echo unknown); done)\"; "
              "echo \"cursorblink=$(cat /sys/class/graphics/fbcon/cursor_blink 2>/dev/null)\"; "
              "echo \"cursorrule=$(test -f /etc/tmpfiles.d/ksphmi-cursor.conf && echo yes || echo no)\"; "
              "echo \"linger=$(loginctl show-user $(id -un) -p Linger --value)\"; "
@@ -850,13 +891,9 @@ def check_hmi(ctx):
         report("WARN", "hmi: kRPC address", "seed %s differs from this PC %s; HMI discovers KSP via UDP 50002" % (addr, client))
     elif addr:
         report("PASS", "hmi: kRPC address", addr)
-    # A blanked framebuffer (4 = powered down) hides every frame while the service and its log look healthy
-    blank = env.get("fbblank", "")
-    if blank and blank != "0":
-        report("FAIL" if state == "active" else "WARN", "hmi: screen",
-               "framebuffer blanked (fb0/blank=%s): nothing shows; the HMI unblanks it, redeploy or restart it" % blank)
-    elif blank == "0":
-        report("PASS", "hmi: screen", "framebuffer on")
+    screen = hmi_screen_status(env, state)
+    if screen:
+        report(screen[0], "hmi: screen", screen[1])
     # The text console's cursor blinks over the frames unless fbcon's blinking is off (root only, docs/hmi.rst).
     # The live value alone is not enough: it reads 0 while fbcon's cursor timer happens to be stopped, and the
     # blinking comes back after a reboot or console output; only the tmpfiles rule makes it stick.

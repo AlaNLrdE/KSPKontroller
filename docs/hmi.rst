@@ -252,7 +252,10 @@ With fbdev selected, SDL draws into an ARGB8888 software surface and only change
 ``KSPHMI_OUTPUT=fbdev`` forces it; ``KSPHMI_OUTPUT=sdl SDL_VIDEODRIVER=kmsdrm`` selects SDL output.
 The framebuffer can be left *blanked* (``/sys/class/graphics/fb0/blank`` = 4, powered down; it happened after
 the kmsdrm attempts): frames are then written but nothing shows, while the HMI log looks healthy. The HMI
-unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s; ``./ci verify`` checks the value.
+unblanks it (``FBIOBLANK`` ioctl, no root needed) at start and every 30 s. ``./ci verify`` (``hmi: screen``)
+reads the output from the HMI's latest ``screen WxH (...)`` journal line: for fbdev it checks that value;
+for SDL KMSDRM ``fb0/blank`` stays 4 by design, so it checks that an HDMI connector
+(``/sys/class/drm/card*-HDMI-*``) is ``connected`` with ``dpms`` ``On``; an unknown output is a warning.
 The console underneath (fbcon, tty1) still blinks its cursor into the framebuffer between frames; only
 root can turn that off, hence the tmpfiles rule below. With blinking off the cursor is never redrawn and the
 next frame covers it. The waiting screens show this display's own address (the one it uses to reach the
