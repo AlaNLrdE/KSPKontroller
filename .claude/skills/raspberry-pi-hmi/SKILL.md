@@ -49,6 +49,8 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 - `/sys/class/graphics/fb0/blank` = 4 (powered down) hides every frame while the service and kRPC link look
   healthy: the user saw a dark screen for an hour. The HMI unblanks with the `FBIOBLANK` ioctl (no root) at start
   and every 30 s; `check_hmi` reports it.
+- Under SDL KMSDRM fb0/blank stays 4 (normal, not a fault): `hmi: screen` picks the output from the journal's
+  `screen WxH (SDL ...|fbdev ...)` line and, for SDL, checks `/sys/class/drm/card*-HDMI-*` status/dpms instead.
 - The text console (fbcon, tty1) blinks its cursor into the framebuffer. Only root can stop it: tmpfiles rule
   `w /sys/class/graphics/fbcon/cursor_blink - - - - 0` in `/etc/tmpfiles.d/ksphmi-cursor.conf`. The live
   `cursor_blink` value is no proof: it reads 0 whenever fbcon's timer is stopped (e.g. after an unblank).
