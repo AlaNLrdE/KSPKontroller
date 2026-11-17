@@ -1021,7 +1021,11 @@ hmi_deploy_lock() {
   local me state
   me="$(hostname 2>/dev/null || echo unknown) pid $$ at $(date '+%F %T')"
   state="$(hmi_ssh "mkdir -p ~/ksphmi; l=~/ksphmi/.deploy.lock
-    if [ -d \$l ] && [ \$((\$(date +%s) - \$(stat -c %Y \$l))) -gt 1800 ]; then echo stale; rm -rf \$l; fi
+    # GNU stat on the Pi (and Git Bash); BSD stat when the tests run this on macOS. An unknown age counts as new:
+    # never take over a lock that may be live.
+    now=\$(date +%s); t=\$now
+    if [ -d \$l ]; then t=\$(stat -c %Y \$l 2>/dev/null || stat -f %m \$l 2>/dev/null || echo \$now); fi
+    if [ -d \$l ] && [ \$((now - \${t:-\$now})) -gt 1800 ]; then echo stale; rm -rf \$l; fi
     if mkdir \$l 2>/dev/null; then echo '$me' > \$l/owner; echo locked; else echo \"busy \$(cat \$l/owner 2>/dev/null)\"; fi" </dev/null)" ||
     die "cannot reach '$HMI_HOST' over SSH"
   case "$state" in

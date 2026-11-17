@@ -346,6 +346,7 @@ hmi_kiosk() { record kiosk; }
             (build / name).write_text('#!/bin/sh\necho ran %s >> "$HOME/ran"\nexit %d\n' % (name, code), newline='\n')
         bin_dir.mkdir()
         (bin_dir / 'python3').write_text('#!/bin/sh\necho "python3 $*" >> "$HOME/ran"\n', newline='\n')
+        (bin_dir / 'python3').chmod(0o755)  # macOS/Linux skip a non-executable file on PATH (Git Bash does not)
         (home / 'ksphmi/cpp/build').mkdir(parents=True)
         (home / 'ksphmi/cpp/config.toml').write_text('old config', newline='\n')
         (home / 'ksphmi/cpp/build/ksphmi').write_text('old binary', newline='\n')
@@ -362,6 +363,7 @@ hmi_kiosk() { record kiosk; }
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         ran = (pi.parent / 'ran').read_text().splitlines()
         self.assertEqual(ran[:2], ['ran ksphmi_tests', 'ran ksphmi_render_tests'])
+        self.assertIn('python3 -B tests/test_setup_kiosk.py', ran)  # the fake, never this machine's python3
         self.assertIn('python3 tests/test_screenshots.py', ' '.join(ran).replace('-B ', ''))
         self.assertIn('ran ksphmi', (pi / 'cpp/build/ksphmi').read_text())
         self.assertEqual((pi / 'cpp/build/ksphmi.prev').read_text(), 'old binary')
@@ -427,6 +429,9 @@ hmi_sysroot_unpack() { record unpack; mkdir -p "$HMI_PI_SYSROOT"; }
             stale = run_bash(script + 'hmi_deploy_lock\nhmi_deploy_unlock\n', env)
             self.assertEqual(stale.returncode, 0, stale.stdout + stale.stderr)
             self.assertIn('older than 30 minutes', stale.stdout)
+            for run in (first, busy, stale):  # stat/date flags must work on GNU and BSD (macOS)
+                self.assertNotIn('syntax error', run.stdout + run.stderr)
+                self.assertNotIn('illegal option', run.stdout + run.stderr)
 
 
 if __name__ == '__main__':
