@@ -138,9 +138,12 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   with `poll: No error`. Keep stdin available for piped tar transfers; do not blindly retry deployments.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
   the repo). Anything needing `sudo` there is run by the user. `hmi-cpp/` is LF (`.gitattributes`), not CRLF.
-- The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). The Pi builds it:
-  `./ci deploy_hmi` copies it to `~/ksphmi/cpp`, runs cmake/ctest there and restarts `ksphmi.service`. On this PC
-  `./ci build_hmi`/`hmi`/`test_hmi` run inside WSL (no Windows C++ toolchain). Tests and tools stay Python.
+- The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). **Cross-compile it,
+  never build on the Pi** (user, 2026-11-17: the Pi compiles far slower than the PC): the PC (WSL aarch64 cross
+  toolchain against a sysroot synced from the Pi's own SDL2/SDL2_ttf packages) or, failing that, the Mac builds
+  `ksphmi` and its test binaries; `./ci deploy_hmi` copies them with scp under the `pi-deploy` lock, runs the test
+  binaries on the Pi and restarts `ksphmi.service` only if they pass. Building on the Pi stays a fallback only
+  when no cross build is available, and only under `pi-deploy`. Tests and tools stay Python.
 - The HMI is always full screen at the display's native pixel size on every platform (user, 2026-11-15): no size settings, `ALLOW_HIGHDPI` on macOS, and a window/display size change rebuilds Canvas and Display. `--size` is for off-screen frames only; `--windowed` only for the virtual-desktop test harnesses. Boot ready file: Linux only.
 - HMI keyboard = remote KSP keyboard with KSP's default bindings (user, 2026-11-15; docs/hmi.rst). T/R in the VAB go through KSPHMI.Press into EditorNavigation; Ctrl+1/2 pick the skin (1-0 are action groups), Esc quits (Q is roll). Held axes and throttle go through KSPHMIFlight into the plugin, never kRPC Control axes/throttle: those cannot yield to the board's joystick and kRPC's throttle stays latched. The frame loop only queues commands: kRPC calls stay on the telemetry thread.
 - HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.
