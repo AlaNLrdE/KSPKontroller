@@ -25,6 +25,7 @@ Running it
    ./ci sim --headless           # no window, one status line every 2 s
    ./ci sim --node 250,900       # a 250 m/s prograde maneuver node 900 s ahead (the HMI's dashed orbit)
    ./ci sim --scene vab --ship heavy  # start in the VAB with a sample editor ship (KSPHMI service)
+   ./ci sim --redux-orbit        # also answer KSP 2 Redux's KSP2ORB1 orbit report on UDP 50003
    ./ci test_sim                 # tests, also part of ./ci verify
 
 The first time Python listens on the LAN, Windows asks whether to allow it: allow it on **private** networks,

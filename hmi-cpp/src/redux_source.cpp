@@ -89,6 +89,45 @@ std::string key_name(const Command& c, int& value) {
     return "";
 }
 
+// KSP2ORB1 tokens: single spaces, printable ASCII, no empty token (no leading, trailing or doubled space).
+std::vector<std::string> orbit_tokens(const std::string& body) {
+    std::vector<std::string> tokens;
+    size_t start = 0;
+    for (;;) {
+        const size_t end = body.find(' ', start);
+        std::string token = body.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (token.empty()) throw std::runtime_error("Empty orbit report token");
+        for (char c : token)
+            if (static_cast<unsigned char>(c) <= 32 || static_cast<unsigned char>(c) >= 127)
+                throw std::runtime_error("Invalid orbit report character");
+        tokens.push_back(std::move(token));
+        if (end == std::string::npos) return tokens;
+        start = end + 1;
+    }
+}
+
+// A C# "R" invariant number (1000.5, -358.8, 1E-05): decimal digits, sign, point and exponent only; finite.
+double orbit_number(const std::string& token) {
+    if (token.size() > 40 || token.find_first_not_of("0123456789+-.eE") != std::string::npos)
+        throw std::runtime_error("Invalid orbit report number");
+    std::istringstream in(token);
+    in.imbue(std::locale::classic());
+    double value = 0;
+    if (!(in >> value) || in.peek() != std::char_traits<char>::eof() || !std::isfinite(value))
+        throw std::runtime_error("Invalid orbit report number");
+    return value;
+}
+
+bool orbit_flag(const std::string& token) {
+    if (token != "0" && token != "1") throw std::runtime_error("Invalid orbit report flag");
+    return token == "1";
+}
+
+int orbit_digit(const std::string& token, int most) {
+    if (token.size() != 1 || token[0] < '0' || token[0] > char('0' + most)) throw std::runtime_error("Invalid orbit report count");
+    return token[0] - '0';
+}
+
 std::string number(double v) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
@@ -273,11 +312,131 @@ std::optional<std::optional<std::string>> redux_text_exchange(net::socket_t fd, 
     });
 }
 
+std::optional<std::optional<ReduxOrbit>> redux_orbit_exchange(net::socket_t fd, const std::string& nonce, double timeout) {
+    return exchange(fd, "KSP2ORB1 " + nonce, timeout, [&](const std::string& packet) -> std::optional<std::optional<ReduxOrbit>> {
+        return decode_redux_orbit(packet, nonce);
+    });
+}
+
 std::optional<std::string> redux_ack_exchange(net::socket_t fd, const std::string& request, const std::string& prefix,
                                               const std::string& nonce, double timeout) {
     return exchange(fd, request, timeout, [&](const std::string& packet) -> std::optional<std::string> {
         return decode_redux_ack(packet, prefix, nonce);
     });
+}
+
+std::optional<ReduxOrbit> parse_redux_orbit(const std::string& body) {
+    if (body.size() > 4096) throw std::runtime_error("Oversized orbit report");
+    if (body == "-") return std::nullopt;
+    const std::vector<std::string> t = orbit_tokens(body);
+    size_t at = 0;
+    auto need = [&](size_t count) {
+        if (t.size() < at + count) throw std::runtime_error("Truncated orbit report");
+    };
+    auto real = [&] { return orbit_number(t[at++]); };
+    auto vec = [&] {
+        Vec3 v;
+        v.x = real(), v.y = real(), v.z = real();
+        return v;
+    };
+    need(10);
+    ReduxOrbit o;
+    o.ut = real();
+    o.body = unhex(t[at++]);
+    o.mu = real();
+    o.position = vec();
+    o.velocity = vec();
+    const int mask = orbit_digit(t[at++], 7);
+    if (o.body.empty() || !(o.mu > 0)) throw std::runtime_error("Invalid orbit report body");
+    if ((mask & 4) && !(mask & 2)) throw std::runtime_error("Closest approach without a target");
+    if (mask & 1) {
+        need(8);
+        ManeuverOrbit m;
+        m.ut = real();
+        m.soi = real();  // <= 0 = unbounded, as in the model
+        m.position = vec();
+        m.velocity = vec();
+        o.maneuver = m;
+    }
+    if (mask & 2) {
+        need(9);
+        TargetOrbit target;
+        target.name = unhex(t[at++]);
+        target.body = orbit_flag(t[at++]);
+        target.radius = real();
+        target.position = vec();
+        target.velocity = vec();
+        if (target.radius < 0) throw std::runtime_error("Invalid orbit report target radius");
+        o.target = target;
+    }
+    if (mask & 4) {
+        need(8);
+        ClosestApproach a;
+        a.ut = real();
+        a.planned = orbit_flag(t[at++]);
+        a.vessel = vec();
+        a.target = vec();
+        o.approach = a;
+    }
+    need(1);
+    const int n = orbit_digit(t[at++], 4);
+    if (t.size() != at + 15 * size_t(n)) throw std::runtime_error("Orbit report token count");
+    for (int i = 0; i < n; ++i) {
+        Encounter e;
+        e.body = unhex(t[at++]);
+        e.radius = real();
+        e.mu = real();
+        e.soi = real();
+        e.ut = real();
+        e.planned = orbit_flag(t[at++]);
+        e.center = vec();
+        e.position = vec();
+        e.velocity = vec();
+        if (e.body.empty() || !(e.mu > 0) || e.radius < 0) throw std::runtime_error("Invalid orbit report encounter");
+        o.encounters.push_back(std::move(e));
+    }
+    return o;
+}
+
+std::optional<ReduxOrbit> decode_redux_orbit(const std::string& packet, const std::string& nonce) {
+    const std::string header = "KSP2ORB1 " + nonce + " ";
+    if (packet.size() > 4096 || packet.compare(0, header.size(), header) != 0) throw std::runtime_error("Invalid orbit report header");
+    return parse_redux_orbit(packet.substr(header.size()));
+}
+
+void apply_redux_orbit(Snapshot& s, const ReduxOrbit& report, const Axes& axes) {
+    s.orbit_state = OrbitState{report.position, report.velocity, report.mu, axes};
+    s.maneuver_orbit = report.maneuver;
+    s.target_orbit = report.target;
+    s.approach = report.approach;
+    s.encounters = report.encounters;
+}
+
+void ReduxOrbitTracker::received(std::optional<ReduxOrbit> report, const std::string& vessel, double now) {
+    report_ = std::move(report);
+    vessel_ = vessel;
+    at_ = now;
+}
+
+void ReduxOrbitTracker::apply(Snapshot& s, double now) {
+    if (report_ && (now - at_ > STALE || vessel_ != s.vessel || report_->body != s.body)) report_.reset();
+    if (!report_) return;
+    // Fixed per vessel/body as in the kRPC source; a degenerate state (no r x v yet) is not kept.
+    if (!axes_ || axes_vessel_ != s.vessel || axes_body_ != report_->body) {
+        if (!unit(cross(report_->position, report_->velocity))) {
+            apply_redux_orbit(s, *report_, view_axes(report_->position, report_->velocity));
+            return;
+        }
+        axes_ = view_axes(report_->position, report_->velocity);
+        axes_vessel_ = s.vessel, axes_body_ = report_->body;
+    }
+    apply_redux_orbit(s, *report_, *axes_);
+}
+
+void ReduxOrbitTracker::reset() {
+    report_.reset();
+    axes_.reset();
+    next_ = 0;
 }
 
 ReduxSource::ReduxSource(KrpcSource::Options options, bool fallback)
@@ -350,12 +509,14 @@ void ReduxSource::run() {
     // yet at boot never needs a restart; the kRPC fallback keeps running meanwhile (user, 2026-11-16).
     const char* address = std::getenv("KSPHMI_REDUX_ADDRESS");
     const std::string host = address ? address : options_.address;
+    const char* port_text = std::getenv("KSPHMI_REDUX_PORT");  // loopback tests; the game always uses 50003
+    const int port = port_text && std::atoi(port_text) > 0 && std::atoi(port_text) < 65536 ? std::atoi(port_text) : REDUX_PORT;
     net::Fd socket;
     std::string endpoint;  // the address the socket is connected to
     double next_resolve = 0;
     std::string resolve_problem;
     auto open_endpoint = [&] {
-        auto remote = net::resolve_ipv4(host, REDUX_PORT);
+        auto remote = net::resolve_ipv4(host, port);
         if (!remote) {
             if (resolve_problem != "dns") log::warning(LOG, "Redux address does not resolve yet: " + host);
             resolve_problem = "dns";
@@ -384,7 +545,7 @@ void ReduxSource::run() {
         krpc_ = krpc.get();
         krpc_->set_cockpit(cockpit_);
     }
-    log::info(LOG, "KSP 2 Redux UDP source at " + host + ":" + std::to_string(REDUX_PORT) + (fallback_ ? ", kRPC fallback" : ""));
+    log::info(LOG, "KSP 2 Redux UDP source at " + host + ":" + std::to_string(port) + (fallback_ ? ", kRPC fallback" : ""));
     uint64_t sequence = 0;
     double last_redux = -1e9;
     bool version2 = false, linked = false, in_vab = false, in_flight = false;
@@ -394,6 +555,8 @@ void ReduxSource::run() {
     std::shared_ptr<const VesselView> view;
     double view_at = -1e9, next_view = 0;
     std::string view_problem;
+    ReduxOrbitTracker orbit;
+    std::string orbit_problem = "none yet";
     while (!stopping()) {
         const double started = now();
         // While Redux is silent, look the address up again: every 3 s before the first socket, every 10 s after.
@@ -456,6 +619,25 @@ void ReduxSource::run() {
                     shape.reset();
                     view.reset();
                 } else if (view && now() - view_at <= 2) reply->snapshot.vessel_view = view;
+                // ORBIT state vectors about once a second in flight. No reply (beta.13 or older, stale game data) or
+                // "-" only leaves ORBIT on its scalar view; the snapshot itself never depends on it.
+                if (!in_flight) {
+                    orbit.reset();
+                    orbit_problem = "none yet";  // log the state again at the next flight
+                } else {
+                    if (orbit.due(now())) {
+                        orbit.sent(now());
+                        auto report = redux_orbit_exchange(socket.get(), std::to_string(++sequence), 0.05);
+                        if (report) orbit.received(*report, reply->snapshot.vessel, now());
+                        const std::string why = !report ? "no answer (plugin older than beta.14?)" : !*report ? "no orbit data in the game" : "";
+                        if (why != orbit_problem) {
+                            if (why.empty()) log::info(LOG, "orbit report received: ORBIT draws the KSP 2 state vectors");
+                            else log::warning(LOG, "orbit report unavailable: " + why);
+                        }
+                        orbit_problem = why;
+                    }
+                    orbit.apply(reply->snapshot, now());
+                }
                 publish(std::move(reply->snapshot));
                 last_redux = now();
                 if (!linked) {
@@ -477,6 +659,7 @@ void ReduxSource::run() {
                 commands_.clear();
             }
             version2 = in_vab = in_flight = false;
+            orbit.reset();
             shape.reset();
             view.reset();
             if (krpc) publish(*krpc->latest());
