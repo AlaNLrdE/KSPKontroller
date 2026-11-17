@@ -20,8 +20,27 @@ import urllib.parse
 import urllib.request
 import uuid
 
-PEERS = ('mac', 'pc')
+PEERS = ('mac', 'pc')  # legacy host identities; protocol 3 adds one identity per agent
 MAX_BODY = 16384
+PROTOCOL = 3
+# An identity is a host, optionally with the agent on it: mac, pc, pi, pc-claude, pc-codex, mac-claude ...
+# Every agent uses its own identity and config (own cursor, history and handled files); two agents never share one.
+IDENTITY = re.compile(r'^(mac|pc|pi)(-[a-z0-9]{1,20})?$')
+LOCK_NAME = re.compile(r'^[a-z0-9][a-z0-9._-]{0,39}$')
+LOCK_TTL = (60, 14400)
+
+
+def valid_identity(name):
+    return isinstance(name, str) and bool(IDENTITY.match(name))
+
+
+class LockBusy(ValueError):
+    """A shared resource lock is held by another agent."""
+    def __init__(self, lock):
+        super().__init__('lock %s is held by %s until %s (%s)' % (
+            lock['name'], lock['holder'], datetime.fromtimestamp(lock['expires'], timezone.utc).isoformat(),
+            lock['reason']))
+        self.lock = lock
 
 
 def write_json(path, value):
@@ -60,6 +79,7 @@ class Journal:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.condition = threading.Condition()
         self.messages, self.ids, self.receipts = [], {}, {}
+        self.locks = {}  # name -> {name, holder, reason, since, expires}: shared resources (protocol 3)
         self.last_seq = 0
         if self.path.exists():
             raw = self.path.read_bytes()
@@ -67,8 +87,9 @@ class Journal:
             for line in raw.splitlines(keepends=True):
                 try:
                     item = json.loads(line)
-                    if not good and item.get('mailbox_version') == 2:
+                    if not good and item.get('mailbox_version') in (2, 3):
                         self.last_seq, self.receipts = item['last_seq'], item['receipts']
+                        self.locks = item.get('locks', {})
                     else:
                         if item['seq'] <= previous:
                             raise ValueError('non-increasing sequence')
@@ -95,17 +116,18 @@ class Journal:
                     digest=digest({key: item[key] for key in ('sender', 'to', 'text')}))
 
     def persist(self):
-        header = dict(mailbox_version=2, last_seq=self.last_seq, receipts=self.receipts)
+        header = dict(mailbox_version=PROTOCOL, last_seq=self.last_seq, receipts=self.receipts, locks=self.locks)
         replace_text(self.path, ''.join(json.dumps(item, ensure_ascii=False) + '\n'
                                        for item in [header] + self.messages))
 
     def append(self, data):
         sender, recipient = data.get('sender'), data.get('to')
         body, message_id = data.get('text'), data.get('id')
-        if (sender not in PEERS or recipient not in PEERS or sender == recipient
+        if (not valid_identity(sender) or not valid_identity(recipient) or sender == recipient
                 or not isinstance(body, str) or not body.strip() or len(body) > 8000
                 or not isinstance(message_id, str) or len(message_id) > 80 or not message_id):
-            raise ValueError('sender/to must be different mac/pc peers; text 1..8000 characters; id required')
+            raise ValueError('sender/to must be different identities (mac, pc, pi or HOST-AGENT such as pc-codex); '
+                             'text 1..8000 characters; id required')
         with self.condition:
             if message_id in self.receipts:
                 old = self.receipts[message_id]
@@ -146,6 +168,50 @@ class Journal:
                 raise
             del self.ids[item['id']]
             return dict(removed=True, seq=seq)
+
+    def _prune(self, now):
+        expired = [name for name, lock in self.locks.items() if lock['expires'] <= now]
+        for name in expired:
+            del self.locks[name]
+        return bool(expired)
+
+    def lock(self, action, name, holder, ttl=None, reason='', now=None):
+        """Acquire (or renew, by the same holder), release or list shared-resource locks. A lock held by another
+        agent raises LockBusy; it expires by itself after its TTL, so a crashed agent cannot block for ever."""
+        now = time.time() if now is None else now
+        with self.condition:
+            changed = self._prune(now)
+            if action == 'list':
+                if changed:
+                    self.persist()
+                return sorted(self.locks.values(), key=lambda l: l['name'])
+            if not isinstance(name, str) or not LOCK_NAME.match(name) or not valid_identity(holder):
+                raise ValueError('lock name [a-z0-9._-] up to 40 characters and a valid holder identity required')
+            old = dict(self.locks)
+            current = self.locks.get(name)
+            if action == 'acquire':
+                if not isinstance(ttl, (int, float)) or not LOCK_TTL[0] <= ttl <= LOCK_TTL[1]:
+                    raise ValueError('ttl must be %d..%d seconds' % LOCK_TTL)
+                if not isinstance(reason, str) or not reason.strip() or len(reason) > 200:
+                    raise ValueError('reason 1..200 characters required')
+                if current and current['holder'] != holder:
+                    raise LockBusy(current)
+                self.locks[name] = dict(name=name, holder=holder, reason=reason,
+                                        since=current['since'] if current else now, expires=now + ttl)
+                result = dict(self.locks[name], acquired=True)
+            elif action == 'release':
+                if current and current['holder'] != holder:
+                    raise LockBusy(current)
+                self.locks.pop(name, None)
+                result = dict(name=name, released=current is not None)
+            else:
+                raise ValueError('lock action must be acquire, release or list')
+            try:
+                self.persist()
+            except OSError:
+                self.locks = old
+                raise
+            return result
 
     def events(self, after, wait):
         deadline = time.monotonic() + wait
@@ -198,7 +264,10 @@ def make_server(host, port, journal, token, artifact_dir=None):
                     return self.reply(404, {'error': 'artifact not found'})
                 return self.reply(200, path.read_bytes(), 'application/octet-stream')
             if url.path == '/health':
-                return self.reply(200, {'ok': True, 'messages': len(journal.messages), 'protocol': 2, 'last_seq': journal.last_seq})
+                return self.reply(200, {'ok': True, 'messages': len(journal.messages), 'protocol': PROTOCOL,
+                                        'last_seq': journal.last_seq})
+            if url.path == '/locks':
+                return self.reply(200, {'locks': journal.lock('list', None, None)})
             if url.path != '/events':
                 return self.reply(404, {'error': 'not found'})
             try:
@@ -214,7 +283,7 @@ def make_server(host, port, journal, token, artifact_dir=None):
         def do_POST(self):
             if not self.authorized():
                 return
-            if self.path not in ('/messages', '/archive'):
+            if self.path not in ('/messages', '/archive', '/locks'):
                 return self.reply(404, {'error': 'not found'})
             try:
                 length = int(self.headers.get('Content-Length', '0'))
@@ -225,8 +294,13 @@ def make_server(host, port, journal, token, artifact_dir=None):
                     raise ValueError('expected object')
                 if self.path == '/archive':
                     result = journal.remove(data.get('seq'), data.get('peer'), data.get('digest'))
+                elif self.path == '/locks':
+                    result = journal.lock(data.get('action'), data.get('name'), data.get('holder'),
+                                          data.get('ttl'), data.get('reason', ''))
                 else:
                     result = journal.append(data)
+            except LockBusy as e:
+                return self.reply(409, {'error': str(e), 'lock': e.lock})
             except (ValueError, TypeError) as e:
                 return self.reply(400, {'error': str(e)})
             self.reply(200, result)
@@ -384,7 +458,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     init = sub.add_parser('init')
     init.add_argument('--url', required=True)
-    init.add_argument('--peer', choices=PEERS, required=True)
+    init.add_argument('--peer', required=True, help='This agent\'s own identity: mac, pc, pi or HOST-AGENT (pc-codex)')
     init.add_argument('--token')
     serve = sub.add_parser('serve')
     serve.add_argument('--bind', default='127.0.0.1',
@@ -393,7 +467,7 @@ def main(argv=None):
     serve.add_argument('--journal', default='build/agent-mailbox/shared.jsonl')
     serve.add_argument('--artifacts', default='build/agent-mailbox/evidence')
     send = sub.add_parser('send')
-    send.add_argument('--to', choices=PEERS, required=True)
+    send.add_argument('--to', required=True, help='Recipient identity: one agent (pc-claude), or a legacy host (pc)')
     content = send.add_mutually_exclusive_group(required=True)
     content.add_argument('--text')
     content.add_argument('--file', type=Path)
@@ -408,6 +482,13 @@ def main(argv=None):
     sub.add_parser('pending', help='List unhandled messages even if watch/inbox already delivered them')
     done = sub.add_parser('done', help='Mark the oldest pending message handled after its work/result is complete')
     done.add_argument('--seq', type=int, required=True)
+    locker = sub.add_parser('lock', help='Acquire or release a shared-resource lock (pi-deploy, ksp-gamedata, '
+                                         'board-flash, push-main) before using that resource')
+    locker.add_argument('action', choices=('acquire', 'release'))
+    locker.add_argument('name')
+    locker.add_argument('--ttl', type=int, default=1800, help='Seconds until it expires by itself (60..14400)')
+    locker.add_argument('--reason', default='')
+    sub.add_parser('locks', help='List held locks with holder, reason and expiry')
     watch = sub.add_parser('watch')
     watch.add_argument('--once', action='store_true', help='Exit when an incoming message arrives; re-arm after handling it')
     args = parser.parse_args(argv)
@@ -415,6 +496,8 @@ def main(argv=None):
     if args.command == 'init':
         if config_path.exists():
             parser.error('configuration already exists; use another path instead of rotating a live token')
+        if not valid_identity(args.peer):
+            parser.error('identity must be mac, pc, pi or HOST-AGENT such as pc-codex')
         parsed = urllib.parse.urlsplit(args.url)
         if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.query or parsed.fragment:
             parser.error('expected an HTTP(S) server URL without credentials or query')
@@ -430,7 +513,24 @@ def main(argv=None):
             server.serve_forever()
         finally:
             server.server_close()
+    elif args.command == 'lock':
+        try:
+            result = request(config, '/locks', dict(action=args.action, name=args.name, holder=config['peer'],
+                                                    ttl=args.ttl, reason=args.reason))
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+            detail = json.loads(error.read() or b'{}')
+            error.close()
+            raise ValueError(detail.get('error', 'lock busy'))
+        print(json.dumps(result))
+    elif args.command == 'locks':
+        for lock in request(config, '/locks')['locks']:
+            print('LOCK {name} held by {holder} until {until}: {reason}'.format(
+                until=datetime.fromtimestamp(lock['expires'], timezone.utc).isoformat(), **lock))
     elif args.command == 'send':
+        if not valid_identity(args.to):
+            parser.error('recipient must be mac, pc, pi or HOST-AGENT such as pc-codex')
         body = args.text if args.text is not None else args.file.read_text(encoding='utf-8')
         item = request(config, '/messages', {'id': args.id or str(uuid.uuid4()), 'sender': config['peer'],
                                            'to': args.to, 'text': body})
