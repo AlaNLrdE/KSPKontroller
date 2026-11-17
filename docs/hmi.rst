@@ -388,19 +388,74 @@ vessel), so MechJeb stays an optional mod: without it the scene says so and show
 * ``string MechJebSet(string key, string value)``: ``ok``, ``unknown key``, ``read only``, ``invalid value`` or
   ``unavailable`` (no MechJeb / no core). Keys and units are the report's.
 * ``string MechJebAction(string action)``: ``ascent.engage``, ``ascent.disengage``, ``ascent.launch_rendezvous``,
-  ``ascent.launch_target_plane``, ``ascent.abort_timed_launch``, ``all.disengage``; same replies.
+  ``ascent.launch_target_plane``, ``ascent.abort_timed_launch``, ``all.disengage``; same replies. Actions and
+  settings are applied on Unity's thread (kRPC runs procedures there).
 
 **Report format v1** (fixture ``hmi-cpp/tests/data/mechjeb_report_v1.txt``, shared by the plugin's format tests,
 the HMI parser and kspsim). The first line is ``v=1 rev=N mj=STATE`` plus ``version=X`` when installed; ``mj`` is
 ``ok``, ``missing`` (MechJeb not installed), ``nocore`` (no MechJeb part or core on the vessel) or
 ``error:TEXT``. Every other line is one ``key=value``; a key the installed MechJeb lacks is omitted and its control
-stays unknown, never zero. Values are numbers in SI units (metres, m/s, degrees, pascals, fractions 0-1, flags 0/1)
-or percent-encoded text. Read-only: ``ascent.enabled``, ``ascent.status``, ``ascent.launch_mode`` (``normal``,
-``rendezvous``, ``target_plane``, ``unknown``) and the ``ascent.classic.auto_turn_*_altitude/velocity`` results.
-Groups: ``ascent.*`` (target orbit, ``path`` 0 Classic / 1 GravityTurn / 2 PVG, roll, AoA, corrective steering,
-finish options), ``ascent.classic.*``, ``ascent.gt.*``, ``ascent.pvg.*``, ``thrust.*`` (MechJeb's thrust
-controller, shared by every autopilot) and ``staging.autostage_limit``. Unknown keys are ignored by readers, so
-later modules add lines without a new version.
+stays unknown, never zero. Values are numbers in SI units (metres, m/s, seconds, degrees, pascals, fractions 0-1,
+flags 0/1) or percent-encoded text. Readers ignore unknown keys, so later modules add lines without a new version.
+
+Keys map to MechJeb 2.15.3 members (reflected on the shared install, 2026-11-17): ``AS`` is
+``MechJebCore.AscentSettings`` (``MechJebModuleAscentSettings``), ``TC`` ``MechJebCore.Thrust``
+(``MechJebModuleThrustController``), ``SC`` ``MechJebCore.Staging`` (``MechJebModuleStagingController``), ``AP``
+``MechJebCore.Ascent`` (``MechJebModuleAscentBaseAutopilot``). ``Editable*`` fields carry their SI value in
+``.Val``; the display multiplier only scales ``.Text``. RO = read only.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Keys
+     - MechJeb 2.15.3 member
+   * - ``ascent.enabled`` (RO), ``ascent.status`` (RO, text), ``ascent.t_minus`` (RO, s)
+     - ``AP`` enabled state, ``AP.Status``, ``AP.TMinus``
+   * - ``ascent.path`` (0 Classic, 1 GravityTurn, 2 PVG)
+     - ``AS.AscentTypeInteger``
+   * - ``ascent.altitude``, ``ascent.inclination``, ``ascent.lan``
+     - ``AS.DesiredOrbitAltitude``, ``AS.DesiredInclination``, ``AS.DesiredLan``
+   * - ``ascent.launch_phase_angle``, ``ascent.launch_lan_difference``, ``ascent.warp_count_down``
+     - ``AS.LaunchPhaseAngle``, ``AS.LaunchLANDifference``, ``AS.WarpCountDown``
+   * - ``ascent.classic.auto``, ``ascent.classic.auto_turn_start_altitude`` (RO)
+     - ``AS.AutoPath``, ``AS.AutoTurnStartAltitude``
+   * - ``ascent.classic.turn_start_altitude`` / ``_velocity``, ``turn_end_altitude``, ``turn_end_angle``,
+       ``turn_shape_exponent``
+     - ``AS.TurnStartAltitude``, ``TurnStartVelocity``, ``TurnEndAltitude``, ``TurnEndAngle``,
+       ``TurnShapeExponent`` (GravityTurn uses the same start altitude / velocity)
+   * - ``ascent.pvg.desired_apoapsis``, ``desired_attach_alt``, ``desired_fpa``, ``pitch_start_velocity``,
+       ``pitch_rate``
+     - ``AS.DesiredApoapsis``, ``DesiredAttachAlt``, ``DesiredFPA``, ``PitchStartVelocity``, ``PitchRate``
+   * - ``ascent.force_roll``, ``vertical_roll``, ``turn_roll``, ``roll_altitude``
+     - ``AS.ForceRoll``, ``VerticalRoll``, ``TurnRoll``, ``RollAltitude``
+   * - ``ascent.limit_aoa``, ``max_aoa``, ``limit_qa``, ``max_qa`` (Pa·deg)
+     - ``AS.LimitAoA``, ``MaxAoA``, ``LimitQaEnabled``, ``LimitQa``
+   * - ``ascent.corrective_steering``, ``corrective_steering_gain``
+     - ``AS.CorrectiveSteering``, ``CorrectiveSteeringGain``
+   * - ``ascent.autostage``, ``last_stage``, ``autodeploy_solar_panels``, ``autodeploy_antennas``,
+       ``skip_circularization``
+     - ``AS.Autostage`` (property), ``LastStage``, ``AutodeploySolarPanels``, ``AutoDeployAntennas``,
+       ``SkipCircularization``
+   * - ``thrust.limit_q`` / ``max_q``, ``limit_overheat``, ``limit_acceleration`` / ``max_acceleration``,
+       ``limit_throttle`` / ``max_throttle``, ``limit_min_throttle`` / ``min_throttle``, ``smooth_throttle``
+     - ``TC.LimitDynamicPressure`` / ``MaxDynamicPressure``, ``LimitToPreventOverheats``, ``LimitAcceleration`` /
+       ``MaxAcceleration``, ``LimitThrottle`` / ``MaxThrottle``, ``LimiterMinThrottle`` / ``MinThrottle``,
+       ``SmoothThrottle``
+   * - ``thrust.prevent_flameout`` / ``flameout_safety_pct``, ``prevent_unstable_ignition``,
+       ``differential_throttle``
+     - ``TC.LimitToPreventFlameout`` / ``FlameoutSafetyPct``, ``LimitToPreventUnstableIgnition``,
+       ``DifferentialThrottle``
+   * - ``staging.autostage_limit``, ``pre_delay``, ``post_delay``, ``clamp_thrust_pct``, ``autostaging_once``
+     - ``SC.AutostageLimit``, ``AutostagePreDelay``, ``AutostagePostDelay``, ``ClampAutoStageThrustPct``,
+       ``AutostagingOnce``
+   * - ``staging.hot_staging`` / ``hot_staging_lead_time``, ``drop_solids`` / ``drop_solids_lead_time``
+     - ``SC.HotStaging`` / ``HotStagingLeadTime``, ``DropSolids`` / ``DropSolidsLeadTime``
+   * - ``staging.fairing_max_q``, ``fairing_min_altitude``, ``fairing_max_flux``
+     - ``SC.FairingMaxDynamicPressure``, ``FairingMinAltitude``, ``FairingMaxAerothermalFlux``
+
+GravityTurn-only settings (pitch at turn start, intermediate apoapsis, hold time) are added as ``ascent.gt.*`` once
+their 2.15.3 members are confirmed by reflection, under the same rule.
 
 VESSEL panel
 ------------
