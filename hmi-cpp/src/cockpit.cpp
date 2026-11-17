@@ -72,7 +72,7 @@ void sas_icon(Canvas& c, int mode, double cx, double cy, double r, Color ink) {
             line(-.45, -.45, .45, .45), line(.45, -.45, -.45, .45);
             break;
         default:  // NODE: open bowl with two horns and a dot
-            c.arc(float(cx), float(cy - .1 * r), float(.85 * r), M_PI, 2 * M_PI, w, ink);
+            c.arc(float(cx), float(cy - .1 * r), float(.85 * r), PI, 2 * PI, w, ink);
             line(-.85, -.1, -1.05, -.65), line(.85, -.1, 1.05, -.65);
             dot(.17);
             break;
