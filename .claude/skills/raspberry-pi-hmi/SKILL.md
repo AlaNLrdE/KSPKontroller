@@ -24,15 +24,29 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 
 ## Deploy and check
 
-- Only one machine deploys at a time: Mac and PC both run `./ci deploy_hmi` against the same `~/ksphmi/cpp.new`
+- Only one machine deploys at a time: Mac and PC both run `./ci deploy_hmi` against the same `~/ksphmi/cpp.next`
   and build directory. Two runs at once (2026-11-16) mixed trees and objects (tests SegFault, `tar: Cannot mkdir`).
-  Announce the deploy on the mailbox and wait for the other agent's ACK first.
+  `deploy_hmi` now refuses to start while `~/ksphmi/.deploy.lock` is held (taken over after 30 min). Still take the
+  mailbox `pi-deploy` lock first.
+- Cross build, never on the Pi (2026-11-17, docs/building.rst "Cross-compiling the Pi HMI"): `./ci hmi_sysroot`
+  copies about 60 MB from the Pi into build/pi-sysroot (only when its dpkg list changes), and `./ci build_hmi_pi`
+  builds in WSL with Ubuntu's cross g++ 13 and Ninja, both unpacked without root (WSL here has no sudo). Measured:
+  22 s cold, 6 s for one .cpp, 4 s no-op, against minutes on the Pi. Keep the WSL build tree on ext4
+  (~/.cache/ksphmi-cross/...): on /mnt/c the same build took 108 s cold and 26 s as a no-op.
+- Cross gotchas: Debian 13's `asm/*.h` links point into usr/lib/linux/uapi, and `libm.so` is a linker script naming
+  libmvec.so.1. The sysroot needs both, plus a `lib -> usr/lib` link. g++ 13's own libstdc++ headers are used;
+  its binaries need at most GLIBCXX_3.4.30 (the Pi has 3.4.33), and the readelf ABI check guards that.
+  The relocated unpacked binutils need `LD_LIBRARY_PATH=<root>/usr/lib/x86_64-linux-gnu` (libctf).
+- `wsl.exe` drops the Linux side's stderr when both streams are redirected to a file from Git Bash (`> f 2>&1`).
+  Through a pipe or a terminal it arrives. Do not trust a missing error in a captured log of `hmi_in_wsl`.
 - On macOS `deploy_hmi` packs with `COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata`: bsdtar's AppleDouble
   `._*` files stayed in `cpp.new` after `mv cpp.new/*`, so `rmdir cpp.new` failed the copy.
 
 1. `./ci test_hmi` (native MSYS2 here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
-   command), copy to `~/ksphmi/cpp`, `cmake` Release + `cmake --build -j4` + `ctest` **on the Pi** (a failure stops
-   before the restart, the old binary keeps running), install the unit, restart. It requires `active` **and**
+   command), Pi lock, cross build, copy to `~/ksphmi/cpp.next`, test programs + kiosk/screenshot tests **on the Pi**
+   (a failure stops before the swap and the restart, and the old binary keeps running), swap into `~/ksphmi/cpp`
+   (`build/ksphmi.prev` kept), install the unit, restart. The on-Pi CMake build happens only without a cross
+   compiler (WARN). It requires `active` **and**
    `NRestarts=0` after 8 s: `Restart=always` makes a crash loop look `active` at a glance.
 2. `./ci verify` -> `hmi:` lines: views and resources, local ctest build current, service, C++ unit (ExecStart,
    no leftover `ksphmi-cpp.service`), kRPC address (= this PC as the Pi sees it), screen (framebuffer not

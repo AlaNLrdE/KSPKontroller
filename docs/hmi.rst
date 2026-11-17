@@ -1199,10 +1199,13 @@ Deploy
 
 #. checks the apt packages above and lingering on the Pi (prints the one-time ``sudo`` command if missing) and
    warns when the console cursor rule is missing;
-#. copies ``hmi-cpp/`` (``CMakeLists.txt``, ``config.toml``, ``src``, ``tests``, ``systemd``) to ``~/ksphmi/cpp``,
-   replacing everything there except ``build/`` (kept so CMake rebuilds incrementally);
-#. on the Pi: ``cmake -S . -B build -DCMAKE_BUILD_TYPE=Release``, ``cmake --build build -j4`` and ``ctest`` in
-   ``build``. A failure stops here and the running service keeps its old binary;
+#. takes the Pi's deploy lock (``~/ksphmi/.deploy.lock``: one ``deploy_hmi`` at a time, from the Mac or the PC);
+#. cross-compiles ``ksphmi`` and its test programs here (``./ci build_hmi_pi``, see :doc:`building`; the Pi never
+   compiles), copies them with the ``hmi-cpp/`` files (``config.toml``, ``assets``, ``systemd``, ``tests``,
+   sources) to ``~/ksphmi/cpp.next`` and runs the C++ tests and the kiosk and screenshot tests there. Only when
+   they pass does it replace ``~/ksphmi/cpp``, keeping the previous binary as ``build/ksphmi.prev``. A failure
+   stops here and the running service keeps its old binary. Without a cross compiler it warns and builds on
+   the Pi instead (``cmake`` Release, ``-j4``, ``ctest``), which is much slower;
 #. writes ``~/ksphmi/env``, disables and removes a leftover ``ksphmi-cpp.service`` (the trial unit) and the old
    Python ``~/ksphmi/app`` and ``~/ksphmi/venv``, installs ``hmi-cpp/systemd/ksphmi.service`` into
    ``~/.config/systemd/user``, enables and restarts it;
@@ -1358,8 +1361,9 @@ Commands
 ``./ci hmi``                Same against KSP on this PC (``--address`` for another one)
 ``./ci build_hmi``          Build into ``build/hmi-cpp`` (``build/hmi-cpp-win`` with MSYS2 on Windows)
 ``./ci test_hmi [--sim]``   Build and run ctest; ``--sim`` adds the run against ``tools/kspsim``
-``./ci deploy_hmi``         Copy ``hmi-cpp`` to ``~/ksphmi/cpp``, build and test it on the Pi, install and
-                            restart the ``ksphmi`` user service, print its log
+``./ci build_hmi_pi``       Cross-compile it for the Pi into ``build/hmi-cpp-pi`` (``./ci hmi_sysroot`` first)
+``./ci deploy_hmi``         Cross-build, test the binaries on the Pi in ``~/ksphmi/cpp.next``, swap them into
+                            ``~/ksphmi/cpp``, restart the ``ksphmi`` user service, print its log
 ``./ci hmi_logs [N]``       Last N lines of the service log on the Pi
 ``./ci verify``             ``hmi:`` lines: views and resources, local test build current, service state and
                             unit, kRPC address still this PC, screen, cursor, kiosk, Pi render budget
