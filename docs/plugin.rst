@@ -270,6 +270,9 @@ part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has n
   so kRPC assigns one and cannot clash with another mod's.
 * ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
   ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.
+* ``MechJebFormat`` (plain C#) holds the MechJeb report format v1 (:doc:`hmi`, *MechJeb scene*): the keys, their
+  kinds and read-only marks, the actions, the report text and the parsing of set values. The same test project
+  checks it against ``hmi-cpp/tests/data/mechjeb_report_v1.txt``.
 
 Stage values come from ``DeltaVStageInfo``. The situation and body are the delta-v app's own
 (``DeltaVGlobals.fetch.deltaVAppValues``: ``body``, ``situation``), and each stage's delta-v and TWR are picked the
