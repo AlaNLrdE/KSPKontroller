@@ -7,6 +7,11 @@ import tempfile
 import time
 import unittest
 
+try:  # the daemon is a Pi (Linux) service: it locks with fcntl, which Windows lacks
+    import fcntl  # noqa: F401
+except ImportError:
+    raise unittest.SkipTest('agent_daemon.py runs on Linux only (fcntl)')
+
 spec = importlib.util.spec_from_file_location('agent_daemon', Path(__file__).with_name('agent_daemon.py'))
 daemon = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(daemon)
