@@ -63,12 +63,6 @@ struct Rows {
 };
 
 /// `s` cut with "..." until it fits `room` pixels at `units` (the painter may still shrink it a little).
-std::string shorten(Canvas& c, std::string s, float units, double room) {
-    if (c.text_width(c.font(units), s) <= room * 1.4) return s;  // the painter fits up to ~1.7x by shrinking; Apollo letter-spaces
-    while (s.size() > 4 && c.text_width(c.font(units), s + "...") > room * 1.4) s.pop_back();
-    return s + "...";
-}
-
 }  // namespace
 
 // ============================================================================================ layout
@@ -361,7 +355,7 @@ void paint_mechjeb(Canvas& c, bool art, const Snapshot& s, const MechJebView& v,
             // One line when it fits, else two (split at the space nearest the middle), each shortened with "..."
             // if MechJeb's text is longer still: the status never leaves its group.
             const float units = 1.7f, small = 1.4f;
-            if (c.text_width(c.font(units), status) <= l.status.w) {
+            if (p.measure(c, status, units) <= l.status.w) {
                 p.text(c, status, units, color, l.status.x, l.status.centery(), Anchor::MidLeft, l.status.w);
             } else {
                 size_t cut = status.size() / 2;
@@ -370,7 +364,7 @@ void paint_mechjeb(Canvas& c, bool art, const Snapshot& s, const MechJebView& v,
                 else if (after != std::string::npos) cut = after;
                 const std::string lines[2] = {status.substr(0, cut), cut < status.size() ? status.substr(cut + 1) : ""};
                 for (int i = 0; i < 2; ++i)
-                    p.text(c, shorten(c, lines[i], small, l.status.w), small, color, l.status.x,
+                    p.text(c, shorten_to(p, c, lines[i], small, l.status.w), small, color, l.status.x,
                            l.status.y + l.status.h * (i ? .75 : .25), Anchor::MidLeft, l.status.w);
             }
             if (in) {

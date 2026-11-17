@@ -582,11 +582,17 @@ public:
         }
     }
     void frame(Canvas& c, const Rect& r, const std::string& title) override { panel_frame(c, r, title); }
+    int measure(Canvas& c, const std::string& s, float units) override { return spaced_width(c, s, units, .06f); }
     void text(Canvas& c, const std::string& s, float units, Color color, double x, double y, Anchor a,
               double room) override {
         if (s.empty()) return;
-        const float size = room > 0 ? std::min(units, fit(c, {s}, units, room)) : units;
-        label(c, s, std::max(.8f, size), x, y, a, color, false, .06f);
+        float size = room > 0 ? std::max(.8f, std::min(units, fit(c, {s}, units, room))) : units;
+        std::string shown = s;
+        if (room > 0) {  // the letter-spaced width as label() draws it must fit, on every rasteriser
+            while (size > .8f && measure(c, shown, size) > room) size -= .05f;
+            shown = shorten_to(*this, c, shown, size, room);
+        }
+        label(c, shown, size, x, y, a, color, false, .06f);
     }
     void lamp(Canvas& c, const Rect& r, const std::string& legend, Lamp lit, bool art) override {
         const double u = c.u;

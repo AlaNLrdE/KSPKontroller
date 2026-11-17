@@ -70,9 +70,12 @@ public:
 
     /// A group frame with its title (art).
     virtual void frame(Canvas& c, const Rect& r, const std::string& title) = 0;
-    /// Text in the skin's lettering, fitted into `room` pixels when room > 0.
+    /// Text in the skin's lettering, fitted into `room` pixels when room > 0: shrunk, then shortened with "..."
+    /// so it never exceeds `room` whatever the font rasteriser (FreeType versions differ between machines).
     virtual void text(Canvas& c, const std::string& s, float units, Color color, double x, double y, Anchor a,
                       double room = 0);
+    /// Width in pixels of `s` at `units` exactly as text() draws it (letter spacing, typeface).
+    virtual int measure(Canvas& c, const std::string& s, float units) { return c.text_width(c.font(units), s); }
     /// A backlit lamp or push button: art draws the housing and unlit legend, live the lit face (when `lit` is
     /// not Off) with its legend. The legend is fitted inside the face.
     virtual void lamp(Canvas& c, const Rect& r, const std::string& legend, Lamp lit, bool art) = 0;
@@ -91,6 +94,9 @@ public:
     /// Click feedback around a control (live): "sent" outline, "rejected" amber outline.
     virtual void feedback(Canvas& c, const Rect& r, CockpitInput::Feedback f, double now);
 };
+
+/// `s` shortened with "..." until measure(s, units) fits `room` (unchanged when it already fits).
+std::string shorten_to(CockpitPainter& p, Canvas& c, std::string s, float units, double room);
 
 /// The input state the live pass shows (armed, open guards, feedback); null in the art pass or without clicks.
 struct CockpitView {

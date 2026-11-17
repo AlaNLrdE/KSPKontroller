@@ -251,15 +251,27 @@ Color CockpitPainter::lamp_color(Lamp l) const {
     }
 }
 
+std::string shorten_to(CockpitPainter& p, Canvas& c, std::string s, float units, double room) {
+    if (room <= 0 || p.measure(c, s, units) <= room) return s;
+    while (!s.empty() && p.measure(c, s + "...", units) > room) {
+        size_t end = s.size() - 1;
+        while (end > 0 && (static_cast<unsigned char>(s[end]) & 0xc0) == 0x80) --end;  // whole UTF-8 characters
+        s.resize(end);
+    }
+    return s.empty() ? s : s + "...";
+}
+
 void CockpitPainter::text(Canvas& c, const std::string& s, float units, Color color, double x, double y, Anchor a,
                           double room) {
     if (s.empty()) return;
     float size = units;
+    std::string shown = s;
     if (room > 0) {
-        const int w = c.text_width(c.font(units), s);
+        const int w = measure(c, s, units);
         if (w > room) size = std::max(.8f, float(units * room / std::max(1, w)));
+        shown = shorten_to(*this, c, s, size, room);
     }
-    c.text(s, size, color, x, y, a);
+    c.text(shown, size, color, x, y, a);
 }
 
 void CockpitPainter::lever(Canvas& c, const Rect& r, std::optional<bool> on, bool fitted, bool art) {
