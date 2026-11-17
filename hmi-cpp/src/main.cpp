@@ -576,21 +576,25 @@ int run(int argc, char** argv) {
                         send(cockpit_input.release(tick));
                     } else if (ev.type == SDL_MOUSEMOTION) {
                         out.cursor_moved(tick);
-                    } else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT) {
+                    } else if (ev.type == SDL_MOUSEBUTTONDOWN &&
+                               (ev.button.button == SDL_BUTTON_LEFT || ev.button.button == SDL_BUTTON_RIGHT)) {
                         // A click on the cockpit panel (a touch screen's synthesized mouse events too) acts like
-                        // the control's KSP key: same Command, same queue.
+                        // the control's KSP key: same Command, same queue. A right click only steps a MechJeb
+                        // - / + by ten (user, 2026-11-17: Shift would also ramp the throttle); elsewhere it does
+                        // nothing.
                         out.cursor_moved(tick);
+                        const bool right = ev.button.button == SDL_BUTTON_RIGHT;
                         const auto [x, y] = out.to_canvas(ev.button.x, ev.button.y);
-                        const std::optional<MjControl> mj = display->mechjeb_hit(x, y);
+                        std::optional<MjControl> mj = display->mechjeb_hit(x, y);
+                        if (mj && right && mj->kind != MjControl::Minus && mj->kind != MjControl::Plus) mj.reset();
                         if (mj && shown) {
-                            const bool shift = (SDL_GetModState() & KMOD_SHIFT) != 0;  // ten steps per - / +
-                            const MechJebPress press = mechjeb_input.press(*mj, *shown, tick, shift);
+                            const MechJebPress press = mechjeb_input.press(*mj, *shown, tick, right);
                             log::info(LOG, "click: mechjeb " + mj->id());
                             send(press.commands);
                             if (press.scene) set_scene(*press.scene);
                             last = nullptr;
                         }
-                        const std::optional<Ctl> hit = display->cockpit_hit(x, y);
+                        const std::optional<Ctl> hit = right ? std::nullopt : display->cockpit_hit(x, y);
                         if (hit && shown) {
                             const CockpitPress press = cockpit_input.press(*hit, *shown, tick);
                             log::info(LOG, std::string("click: ") + ctl_legend(*hit));

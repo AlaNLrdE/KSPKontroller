@@ -110,9 +110,9 @@ std::string mj_wire(double si) {
     return s == "-0" ? "0" : s;
 }
 
-double mj_step(const MjField& f, double si, int direction, bool shift) {
+double mj_step(const MjField& f, double si, int direction, bool coarse) {
     const double grid = std::pow(10.0, f.decimals);
-    double d = si * f.scale + direction * f.step * (shift ? 10 : 1);
+    double d = si * f.scale + direction * f.step * (coarse ? 10 : 1);
     d = std::clamp(d, f.min, f.max);
     d = std::round(d * grid) / grid;
     return d / f.scale;
@@ -270,7 +270,7 @@ void MechJebInput::reject(const std::string& id, const std::string& why, double 
     if (!why.empty()) notice_ = why, notice_until_ = now + NOTICE_TIME;
 }
 
-MechJebPress MechJebInput::press(const MjControl& c, const Snapshot& s, double now, bool shift) {
+MechJebPress MechJebInput::press(const MjControl& c, const Snapshot& s, double now, bool coarse) {
     MechJebPress r;
     const MechJebReport* mj = s.mechjeb && s.mechjeb->ok() ? s.mechjeb.get() : nullptr;
     switch (c.kind) {
@@ -310,7 +310,7 @@ MechJebPress MechJebInput::press(const MjControl& c, const Snapshot& s, double n
         case MjControl::Plus: {
             const std::optional<double> v = mj->number(c.key);
             if (!f || f->flag || !v) return reject(c.id(), "", now), r;  // unknown: nothing to step from
-            send_set(c.id(), *f, mj_step(*f, *v, c.kind == MjControl::Plus ? 1 : -1, shift), now, r);
+            send_set(c.id(), *f, mj_step(*f, *v, c.kind == MjControl::Plus ? 1 : -1, coarse), now, r);
             break;
         }
         case MjControl::Value:

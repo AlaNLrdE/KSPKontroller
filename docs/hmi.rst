@@ -485,8 +485,9 @@ nothing for a missing key, text or ``nan``: a control without a value shows an e
 and scale (km, %, degrees), step, decimals and range. ``MechJebInput`` keeps the page (menu / Ascent Guidance) for
 as long as the HMI runs; leaving the scene disarms, closes the keypad and forgets pending changes, never the page.
 A click becomes ``Command::MechJebSet`` (``key``, SI ``text``) or ``Command::MechJebAction`` in the same queue and
-command thread as the keys. Steppers move one step (Shift: ten; the left Shift key also ramps the throttle in
-flight, so prefer the right one), clamped to the range and rounded to the field's decimals; flags write the other
+command thread as the keys. Steppers move one step per left click and ten per right click (not Shift: the left
+Shift key ramps the throttle in flight; user, 2026-11-17), clamped to the range and rounded to the field's decimals;
+a right click anywhere else does nothing; flags write the other
 state; the path selector writes ``ascent.path``. ENGAGE AUTOPILOT and the two timed launches need ARM first (5 s,
 one action per arming); DISENGAGE and ABORT TIMED LAUNCH do not. A change shows "sent" until a report carries the
 value (``ascent.enabled`` for engage/disengage), "rejected" after 3 s without it, and at once when the plugin's

@@ -2412,7 +2412,7 @@ TEST(mechjeb_fields_format_step_and_validate) {
     CHECK_EQ(mj_format(alt, 80000), "80.0");
     CHECK_EQ(mj_wire(*mj_si(alt, 85.5)), "85500");
     CHECK(std::fabs(mj_step(alt, 80000, 1, false) - 81000) < 1e-6);
-    CHECK(std::fabs(mj_step(alt, 80000, -1, true) - 70000) < 1e-6);  // Shift: ten steps
+    CHECK(std::fabs(mj_step(alt, 80000, -1, true) - 70000) < 1e-6);  // right click: ten steps
     CHECK(std::fabs(mj_step(alt, 500, -1, true)) < 1e-9);            // clamped to the range
     const MjField& shape = *mj_field("ascent.classic.turn_shape_exponent");
     CHECK_EQ(mj_format(shape, 0.4), "40");

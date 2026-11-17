@@ -6,7 +6,7 @@
 // reported: a changed setting shows "sent" until the next report carries it, and "rejected" when the plugin
 // refuses it (unknown key, read only, invalid value) or no report confirms it within CONFIRM_TIMEOUT. ENGAGE (and
 // the two timed launches, which engage the autopilot too) needs ARM first, in the cockpit panel's 5 s window.
-// Values are typed on an on-screen keypad (Keypad) or stepped with - / + (Shift: ten steps).
+// Values are typed on an on-screen keypad (Keypad) or stepped with - / + (right click: ten steps).
 #pragma once
 
 #include <map>
@@ -30,7 +30,7 @@ struct MjField {
     bool flag;          ///< a 0/1 lamp toggle; the rest is unused
     const char* unit = "";
     double scale = 1;   ///< display value per SI unit (km: 0.001, %: 100)
-    double step = 1;    ///< display units per - / + click (Shift: x10)
+    double step = 1;    ///< display units per - / + click (right click: x10)
     int decimals = 0;
     double min = 0, max = 0;  ///< display units, inclusive
     bool integer = false;
@@ -47,9 +47,9 @@ std::string mj_pattern(const MjField& f);
 std::optional<double> mj_si(const MjField& f, double display);
 /// The SI text sent with MechJebSet ("80000", "0.4").
 std::string mj_wire(double si);
-/// One - / + click from the SI value `si`: `direction` -1 or +1 steps (x10 with Shift), clamped to the range and
+/// One - / + click from the SI value `si`: `direction` -1 or +1 steps (x10 with `coarse`), clamped to the range and
 /// rounded to the field's decimals.
-double mj_step(const MjField& f, double si, int direction, bool shift);
+double mj_step(const MjField& f, double si, int direction, bool coarse);
 
 /// The module tiles of the menu, in the approved order: Ascent Guidance (live) first, Smart A.S.S. last.
 struct MjModule {
@@ -127,8 +127,9 @@ public:
     MjPage page() const { return page_; }
     void set_page(MjPage p) { page_ = p; }
 
-    /// Mouse button down on `c` with the snapshot shown at that moment; `shift`: ten steps per - / +.
-    MechJebPress press(const MjControl& c, const Snapshot& s, double now, bool shift = false);
+    /// Mouse button down on `c` with the snapshot shown at that moment; `coarse` (a right click): ten steps per
+    /// - / +. Not Shift: the left Shift key ramps the throttle in flight.
+    MechJebPress press(const MjControl& c, const Snapshot& s, double now, bool coarse = false);
     /// A key while the keypad is open: digits, '.', '-', Backspace, Enter (SET) and Escape (CANCEL) type into it.
     /// False (not consumed) for any other key or when the keypad is closed.
     bool key(const KeyEvent& e, const Snapshot& s, double now, MechJebPress& out);
