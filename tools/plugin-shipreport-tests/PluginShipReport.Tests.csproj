@@ -7,5 +7,6 @@
   <ItemGroup>
     <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\ShipReportFormat.cs" Link="ShipReportFormat.cs" />
     <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\VesselViewFormat.cs" Link="VesselViewFormat.cs" />
+    <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\MechJebFormat.cs" Link="MechJebFormat.cs" />
   </ItemGroup>
 </Project>

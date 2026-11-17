@@ -83,6 +83,7 @@
     <Compile Include="HmiService.cs" />
     <Compile Include="HmiFlightService.cs" />
     <Compile Include="VesselViewFormat.cs" />
+    <Compile Include="MechJebFormat.cs" />
     <Compile Include="VesselViewReport.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

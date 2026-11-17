@@ -185,6 +185,89 @@ internal static class Program
               "degenerate input");
     }
 
+    /// <summary>The MechJeb report v1 against the fixture the Pi parser and kspsim share.</summary>
+    private static void MechJeb(string root)
+    {
+        string fixture = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "mechjeb_report_v1.txt")).Replace("\r\n", "\n");
+        string[] lines = fixture.TrimEnd('\n').Split('\n');
+        var values = new List<KeyValuePair<string, string>>();
+        for (int i = 1; i < lines.Length; ++i)
+        {
+            int eq = lines[i].IndexOf('=');
+            values.Add(new KeyValuePair<string, string>(lines[i].Substring(0, eq), lines[i].Substring(eq + 1)));
+        }
+        bool sameKeys = values.Count == MechJebFormat.Keys.Count;
+        for (int i = 0; sameKeys && i < values.Count; ++i) sameKeys = values[i].Key == MechJebFormat.Keys[i].Key;
+        Check(sameKeys, "MechJeb keys differ from mechjeb_report_v1.txt (names or order)");
+        var readOnly = new List<string>();
+        foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys) if (k.ReadOnly) readOnly.Add(k.Key);
+        Check(string.Join(",", readOnly.ToArray()) ==
+              "ascent.enabled,ascent.status,ascent.t_minus,ascent.classic.auto_turn_start_altitude", "MechJeb read-only keys");
+        Check(MechJebFormat.Find("ascent.status").Kind == MechJebFormat.Kind.Text && MechJebFormat.Find("nope") == null,
+              "MechJeb find");
+
+        // Every fixture value is what the formatter writes for it (flags, integers and numbers re-formatted).
+        bool reformats = true;
+        foreach (KeyValuePair<string, string> kv in values)
+        {
+            MechJebFormat.KeyInfo k = MechJebFormat.Find(kv.Key);
+            if (k == null) { reformats = false; continue; }
+            double n;
+            if (MechJebFormat.Parse(k, kv.Value, out n) != "ok") { reformats = false; Console.WriteLine("  parse " + kv.Key); continue; }
+            string again = k.Kind == MechJebFormat.Kind.Text ? kv.Value
+                         : k.Kind == MechJebFormat.Kind.Flag ? MechJebFormat.Flag(n != 0) : MechJebFormat.Number(n);
+            if (again != kv.Value) { reformats = false; Console.WriteLine("  reformat " + kv.Key + "=" + again); }
+        }
+        Check(reformats, "MechJeb fixture values round trip through Parse and the formatters");
+        values[1] = new KeyValuePair<string, string>("ascent.status", MechJebFormat.Text("Awaiting liftoff"));
+        string text = MechJebFormat.Report(42, "ok", "2.15.3.0", values);
+        Check(text == fixture, "MechJeb report differs from mechjeb_report_v1.txt:\n" + text);
+
+        Check(MechJebFormat.Report(7, "missing", null, new List<KeyValuePair<string, string>>()) == "v=1 rev=7 mj=missing\n",
+              "MechJeb missing report");
+        Check(MechJebFormat.Report(8, "error:Bad thing=1", "2.15.3.0", new List<KeyValuePair<string, string>>()) ==
+              "v=1 rev=8 mj=error:Bad%20thing%3D1 version=2.15.3.0\n", "MechJeb error text is encoded");
+
+        Check(MechJebFormat.Number(0) == "0" && MechJebFormat.Number(-0.0) == "0", "MechJeb zero and negative zero");
+        Check(MechJebFormat.Number(1e-7) == "0" && MechJebFormat.Number(-1e-7) == "0", "MechJeb below 6 decimals");
+        Check(MechJebFormat.Number(80000) == "80000" && MechJebFormat.Number(0.4) == "0.4" &&
+              MechJebFormat.Number(1.0) == "1" && MechJebFormat.Number(-2.5) == "-2.5", "MechJeb trimmed numbers");
+        Check(MechJebFormat.Number(1.0 / 3) == "0.333333" && MechJebFormat.Number(2.0 / 3) == "0.666667", "MechJeb 6 decimals");
+        Check(MechJebFormat.Number(double.NaN) == "nan" && MechJebFormat.Number(double.PositiveInfinity) == "nan" &&
+              MechJebFormat.Number(double.NegativeInfinity) == "nan", "MechJeb non-finite numbers");
+        Check(MechJebFormat.Flag(true) == "1" && MechJebFormat.Flag(false) == "0", "MechJeb flags");
+        Check(MechJebFormat.Text("Awaiting liftoff") == "Awaiting%20liftoff" && MechJebFormat.Text("a=b,c%d") == "a%3Db%2Cc%25d" &&
+              MechJebFormat.Text("Señal") == "Se%C3%B1al" && MechJebFormat.Text("PVG_1.5-x") == "PVG_1.5-x" &&
+              MechJebFormat.Text(null) == "" && MechJebFormat.Text("a\nb") == "a%0Ab", "MechJeb text encoding");
+
+        var flag = MechJebFormat.Find("ascent.autostage");
+        var integer = MechJebFormat.Find("ascent.path");
+        var number = MechJebFormat.Find("ascent.altitude");
+        var status = MechJebFormat.Find("ascent.status");
+        double v;
+        Check(MechJebFormat.Parse(flag, "1", out v) == "ok" && v == 1 && MechJebFormat.Parse(flag, "true", out v) == "ok" && v == 1 &&
+              MechJebFormat.Parse(flag, "False", out v) == "ok" && v == 0 && MechJebFormat.Parse(flag, "0", out v) == "ok" && v == 0,
+              "MechJeb flag values");
+        Check(MechJebFormat.Parse(flag, "2", out v) == "invalid value" && MechJebFormat.Parse(flag, "", out v) == "invalid value" &&
+              MechJebFormat.Parse(flag, "yes", out v) == "invalid value", "MechJeb invalid flags");
+        Check(MechJebFormat.Parse(integer, "2", out v) == "ok" && v == 2 && MechJebFormat.Parse(integer, "-3", out v) == "ok" && v == -3 &&
+              MechJebFormat.Parse(integer, "2147483647", out v) == "ok", "MechJeb integers");
+        Check(MechJebFormat.Parse(integer, "1.5", out v) == "invalid value" &&
+              MechJebFormat.Parse(integer, "2147483648", out v) == "invalid value" &&
+              MechJebFormat.Parse(integer, "-2147483649", out v) == "invalid value" &&
+              MechJebFormat.Parse(integer, "nan", out v) == "invalid value" && MechJebFormat.Parse(integer, "x", out v) == "invalid value",
+              "MechJeb invalid integers");
+        Check(MechJebFormat.Parse(number, "80000", out v) == "ok" && v == 80000 && MechJebFormat.Parse(number, "-0.5", out v) == "ok" &&
+              v == -0.5 && MechJebFormat.Parse(number, "1e3", out v) == "ok" && v == 1000, "MechJeb numbers");
+        Check(MechJebFormat.Parse(number, "NaN", out v) == "invalid value" && MechJebFormat.Parse(number, "Infinity", out v) == "invalid value" &&
+              MechJebFormat.Parse(number, "1e999", out v) == "invalid value" && MechJebFormat.Parse(number, "1,5", out v) == "invalid value" &&
+              MechJebFormat.Parse(number, "", out v) == "invalid value" && MechJebFormat.Parse(number, null, out v) == "invalid value",
+              "MechJeb invalid numbers");
+        Check(MechJebFormat.Parse(status, "anything", out v) == "ok" && v == 0, "MechJeb text parse");
+        Check(MechJebFormat.Actions.Length == 6 && MechJebFormat.Actions[0] == "ascent.engage" &&
+              MechJebFormat.Actions[5] == "all.disengage", "MechJeb actions");
+    }
+
     private static int Main(string[] args)
     {
         string root = args.Length > 0 ? args[0] : Path.Combine("..", "..");
@@ -224,9 +307,10 @@ internal static class Program
         Situations();
         KerbinSeaLevel();
         Crew();
+        MechJeb(root);
 
         Console.WriteLine(failures == 0
-            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew, vessel view"
+            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew, vessel view, MechJeb"
             : failures + " failures");
         return failures == 0 ? 0 : 1;
     }
