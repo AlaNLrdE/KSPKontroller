@@ -21,6 +21,7 @@
 #include "config.hpp"
 #include "display.hpp"
 #include "log.hpp"
+#include "mechjebpage.hpp"
 #include "png.hpp"
 #include "orbitart.hpp"
 #include "navball.hpp"
@@ -1550,7 +1551,7 @@ TEST(cockpit_layout_fits_every_screen_without_overlaps) {
         for (int i = 0; i < CTL_COUNT; ++i) {
             const Rect& f = l.face[size_t(i)];
             if (f.w <= 0) check::fail(__FILE__, __LINE__, std::string("control without a place: ") + ctl_legend(Ctl(i)));
-            const bool tab = Ctl(i) == Ctl::TabInstruments || Ctl(i) == Ctl::TabCockpit;
+            const bool tab = Ctl(i) == Ctl::TabInstruments || Ctl(i) == Ctl::TabCockpit || Ctl(i) == Ctl::TabMechJeb;
             bool inside = tab ? l.ribbon.contains(f) : false;
             for (const Rect& b : blocks) inside = inside || b.contains(f);
             if (!inside) check::fail(__FILE__, __LINE__, std::string("control outside its group: ") + ctl_legend(Ctl(i)));
@@ -1583,7 +1584,7 @@ TEST(cockpit_renders_inside_its_groups_in_every_skin) {
                 if (r.bottom() <= l.ribbon.y) return;  // the skin's own header
                 bool inside = false;
                 for (const Rect& b : blocks) inside = inside || b.contains(r);
-                if (!inside) check::fail(__FILE__, __LINE__, std::string(skin) + ": text outside its group: " + t);
+                if (!inside) check::fail(__FILE__, __LINE__, std::string(skin) + ": text outside its group: " + t + " at " + std::to_string(r.x) + "," + std::to_string(r.y) + " " + std::to_string(r.w) + "x" + std::to_string(r.h));
             };
             Snapshot snap = demo(30);
             // Every live state at once: armed, open guards, a confirmed and a rejected click, long next stage,
@@ -1626,6 +1627,159 @@ TEST(cockpit_review_screenshots_on_request) {
         input.update(snap, 1.6);
         s.display->draw(snap, 1.65);
         CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_cockpit_clicks.png"));
+    }
+}
+
+namespace {
+/// The rects text may occupy in a MechJeb page: ribbon, page bar, groups (and the keypad when open).
+std::vector<Rect> mechjeb_blocks(const MechJebLayout& l) {
+    std::vector<Rect> b = {l.ribbon.ribbon, l.bar};
+    for (const auto& g : l.groups) b.push_back(g.rect);
+    return b;
+}
+}  // namespace
+
+TEST(mechjeb_layout_fits_every_screen_and_every_control_is_hit) {
+    for (const auto& size : {std::pair<int, int>{1260, 840}, {1920, 1080}, {2520, 1680}, {2940, 1846}, {1024, 768}}) {
+        Screen s(size.first, size.second);
+        const Rect screen(0, 0, size.first, size.second);
+        for (MjPage page : {MjPage::Menu, MjPage::Ascent})
+            for (int path = -1; path <= 2; ++path) {
+                const MechJebLayout l = mechjeb_layout(*s.canvas, page, path);
+                const std::vector<Rect> blocks = mechjeb_blocks(l);
+                for (const Rect& b : blocks) CHECK(screen.contains(b));
+                for (size_t i = 0; i < l.groups.size(); ++i) {
+                    CHECK(!l.groups[i].rect.collides(l.bar) && !l.groups[i].rect.collides(l.ribbon.ribbon));
+                    for (size_t j = i + 1; j < l.groups.size(); ++j) CHECK(!l.groups[i].rect.collides(l.groups[j].rect));
+                }
+                std::vector<Rect> placed;
+                for (const MjItem& item : l.items) {
+                    const std::string name = item.ctl.id();
+                    if (item.face.w <= 0 || item.face.h <= 0) check::fail(__FILE__, __LINE__, "control without a place: " + name);
+                    bool inside = false;
+                    for (const Rect& b : blocks) inside = inside || b.contains(item.face);
+                    if (!inside) check::fail(__FILE__, __LINE__, "control outside its group: " + name);
+                    if (item.ctl.kind != MjControl::Module)  // a module tile is its group
+                        for (const Rect& o : placed)
+                            if (o.collides(item.face)) check::fail(__FILE__, __LINE__, "controls overlap: " + name);
+                    if (item.ctl.kind != MjControl::Module) placed.push_back(item.face);
+                    const KeypadLayout none;
+                    const auto hit = mechjeb_hit(l, false, none, item.face.centerx(), item.face.centery());
+                    if (!hit || !(*hit == item.ctl)) check::fail(__FILE__, __LINE__, "not hit at its centre: " + name);
+                }
+                for (const Rect& r : l.flight)
+                    for (const Rect& f : placed) CHECK(!r.collides(f));
+                CHECK(!mechjeb_hit(l, false, KeypadLayout{}, 1, 1));  // the header is not a control
+                if (page == MjPage::Ascent) {
+                    int values = 0;
+                    for (const MjItem& item : l.items) values += item.ctl.kind == MjControl::Value;
+                    CHECK_EQ(values, path == 0 || path == 2 ? 17 : path == 1 ? 14 : 12);
+                }
+            }
+        // the keypad: inside the screen, its keys inside it, no overlaps, each one hit; nothing else while open
+        const KeypadLayout k = keypad_layout(*s.canvas);
+        CHECK(screen.contains(k.rect) && k.rect.contains(k.entry));
+        const MechJebLayout l = mechjeb_layout(*s.canvas, MjPage::Ascent, 0);
+        for (int i = 0; i < PAD_KEYS; ++i) {
+            const Rect& r = k.keys[size_t(i)];
+            CHECK(k.rect.contains(r) && !r.collides(k.entry));
+            for (int j = i + 1; j < PAD_KEYS; ++j) CHECK(!r.collides(k.keys[size_t(j)]));
+            const auto hit = mechjeb_hit(l, true, k, r.centerx(), r.centery());
+            CHECK(hit && hit->kind == MjControl::Pad && hit->index == i);
+        }
+        const Rect& back = l.items[size_t(FLIGHT_SCENES)].face;  // < MECHJEB, outside the keypad
+        CHECK(!mechjeb_hit(l, true, k, back.centerx(), back.centery()));
+    }
+}
+
+TEST(mechjeb_renders_inside_its_groups_in_every_skin) {
+    const std::pair<int, int> sizes[] = {{1260, 840}, {1920, 1080}, {2520, 1680}, {2940, 1846}, {1024, 768}};
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"})
+        for (const auto& size : sizes) {
+            Screen s(size.first, size.second, skin);
+            Display& d = *s.display;
+            MechJebInput input;
+            d.set_flight_scene(FlightScene::MechJeb);
+            d.set_mechjeb_input(&input);
+            Snapshot snap = demo(30);
+            CHECK(snap.mechjeb && snap.mechjeb->ok());
+            std::vector<Rect> blocks;
+            s.canvas->on_text = [&](const std::string& t, const Rect& r) {
+                if (r.bottom() <= ribbon_layout(*s.canvas).ribbon.y) return;  // the skin's own header
+                bool inside = false;
+                for (const Rect& b : blocks) inside = inside || b.contains(r);
+                if (!inside)
+                    check::fail(__FILE__, __LINE__, std::string(skin) + " " + std::to_string(size.first) +
+                                                        ": text outside its group: " + t + " at " + std::to_string(r.x) + "," + std::to_string(r.y) + " " + std::to_string(r.w) + "x" + std::to_string(r.h));
+            };
+            auto draw = [&](const Snapshot& sn, double now) {
+                blocks = mechjeb_blocks(mechjeb_layout(*s.canvas, input.page(), mechjeb_path(sn)));
+                if (input.keypad().is_open())  // its painted backdrop (Apollo writes frame titles on the frame line)
+                    blocks.push_back(keypad_layout(*s.canvas).rect.inflate(2 * s.canvas->u, 2 * s.canvas->u));
+                d.draw(sn, now);
+                CHECK(d.mechjeb_shown() && !d.cockpit_shown());
+            };
+            draw(snap, 1);  // menu
+            const MechJebLayout menu = mechjeb_layout(*s.canvas, MjPage::Menu, 0);
+            const MjItem& tile = menu.items[size_t(FLIGHT_SCENES)];
+            const auto hit = d.mechjeb_hit(tile.face.centerx(), tile.face.centery());
+            CHECK(hit && hit->kind == MjControl::Module && hit->index == 0);
+            input.press(*hit, snap, 1);
+            for (int path = 0; path <= 2; ++path) {  // every path, every live state
+                Snapshot sn = snap;
+                auto r = std::make_shared<MechJebReport>(*snap.mechjeb);
+                r->values["ascent.path"] = std::to_string(path);
+                r->values["ascent.status"] = "An extremely long autopilot status line that never fits on one line";
+                r->values["ascent.t_minus"] = "12";
+                r->values["ascent.altitude"] = "1e12";  // off the scale
+                r->values.erase("ascent.max_aoa");      // unknown
+                sn.mechjeb = r;
+                input.press({MjControl::Arm}, sn, 2), input.press({MjControl::Plus, 0, "ascent.inclination"}, sn, 2);
+                input.press({MjControl::Flag, 0, "ascent.limit_qa"}, sn, 0);
+                sn.mechjeb_reply = MechJebReply{uint32_t(path + 1), "ascent.limit_qa", "invalid value"};
+                input.update(sn, 2.1);
+                draw(sn, 2.2);
+            }
+            Snapshot bare = snap;  // no data, not installed, no core, error: veiled controls, no values
+            bare.mechjeb.reset();
+            bare.mechjeb_problem = "No such procedure KSPHMIFlight.MechJebRevision (an older KSPSerialIO.Hmi.dll)";
+            draw(bare, 3);
+            for (const char* head : {"v=1 rev=1 mj=missing\n", "v=1 rev=1 mj=nocore\n", "v=1 rev=1 mj=error:boom\n"}) {
+                Snapshot sn = snap;
+                sn.mechjeb = std::make_shared<const MechJebReport>(*parse_mechjeb_report(head));
+                draw(sn, 3);
+            }
+            input.press({MjControl::Value, 0, "ascent.altitude"}, snap, 4);
+            for (int k : {1, 2, 3, 4, 5, 6, 7, 8, 9}) input.press({MjControl::Pad, k}, snap, 4);
+            input.press({MjControl::Pad, PAD_SET}, snap, 4);  // out of range: the error line
+            draw(snap, 4);
+            input.reset();
+            s.canvas->on_text = nullptr;
+            d.set_flight_scene(FlightScene::Instruments);
+            d.draw(demo(30), 5);
+            CHECK(!d.mechjeb_shown() && !d.mechjeb_hit(tile.face.centerx(), tile.face.centery()));
+        }
+}
+
+TEST(mechjeb_review_screenshots_on_request) {
+    const char* dir = std::getenv("KSPHMI_SHOTS");
+    if (!dir) return;
+    for (const char* skin : {"classic", "apollo", "steampunk", "ksp1", "ksp2"}) {
+        Screen s(2520, 1680, skin);
+        MechJebInput input;
+        s.display->set_flight_scene(FlightScene::MechJeb);
+        s.display->set_mechjeb_input(&input);
+        const Snapshot snap = demo(1200);
+        s.display->draw(snap, 1);
+        CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_mechjeb_menu.png"));
+        input.set_page(MjPage::Ascent);
+        input.press({MjControl::Arm}, snap, 1), input.press({MjControl::Plus, 0, "ascent.altitude"}, snap, 1.2);
+        s.display->draw(snap, 1.6);
+        CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_mechjeb_ascent.png"));
+        input.press({MjControl::Value, 0, "ascent.altitude"}, snap, 2);
+        for (int k : {9, 5, int(PAD_POINT), 5}) input.press({MjControl::Pad, k}, snap, 2);
+        s.display->draw(snap, 2.1);
+        CHECK(save_png(s.surface, std::string(dir) + "/" + skin + "_mechjeb_keypad.png"));
     }
 }
 

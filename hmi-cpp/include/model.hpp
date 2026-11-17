@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "mechjeb.hpp"
 #include "shipreport.hpp"
 #include "vec.hpp"
 #include "vesselview.hpp"
@@ -92,6 +93,15 @@ struct Cockpit {
     std::optional<double> warp_rate;  ///< current time warp multiplier (1 = real time)
     const SwitchState& at(CockpitSwitch s) const { return switches[static_cast<size_t>(s)]; }
     SwitchState& at(CockpitSwitch s) { return switches[static_cast<size_t>(s)]; }
+};
+
+// ------------------------------------------------------------------------------------------- MechJeb scene
+/// The plugin's reply to the last MechJebSet / MechJebAction the HMI sent ("ok", "unknown key", "read only",
+/// "invalid value", "unavailable" or a kRPC error); `seq` grows with every reply.
+struct MechJebReply {
+    uint32_t seq = 0;
+    std::string target;  ///< the key or action it answers
+    std::string reply;
 };
 
 // ------------------------------------------------------------------------------------------- orbit view
@@ -244,6 +254,11 @@ struct Snapshot {
     std::shared_ptr<const VesselView> vessel_view;
     /// Flight only, while the cockpit panel scene is shown: switch states, parachutes, next stage (kRPC).
     std::optional<Cockpit> cockpit;
+    /// Flight only, while the MechJeb scene is shown: KSPHMIFlight.MechJebReport (null = no data: an older plugin,
+    /// the scene just opened, a kRPC error); `mechjeb_problem` says why.
+    std::shared_ptr<const MechJebReport> mechjeb;
+    std::string mechjeb_problem;
+    std::optional<MechJebReply> mechjeb_reply;
     double received = 0;  ///< monotonic seconds when the sample was taken
 };
 

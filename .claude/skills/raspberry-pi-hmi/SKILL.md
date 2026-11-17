@@ -374,3 +374,9 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   inc)` -> (time, inclination), countdown + `DesiredInclination.Val = inclination`; abort clears the four
   `LaunchingTo*` and `TimedLaunch`. Launching does not engage the autopilot. `set_AscentType` also calls
   `DisableAscentModules`: write the path through the property, not `AscentTypeInteger`.
+- A new member of an aggregate such as `Command` or `MjControl` needs a default initializer (`std::string key{};`):
+  clang's -Wmissing-field-initializers otherwise warns at every `{Command::Kind, value}` brace in the code base.
+- Apollo/Steampunk frame titles sit on the frame line, a few pixels above the frame rect: an overlay (the MechJeb
+  keypad) needs an opaque backdrop about 1u larger than its frame, and text-containment tests must use that backdrop.
+- The macOS KSPHMI_SHOTS / --screenshot runs are the quick review loop: `build/hmi-cpp/ksphmi --demo --skin S
+  --flight-scene mechjeb --mechjeb-page ascent --size 1024x768 --screenshot X.png` catches cramped 4:3 layouts.

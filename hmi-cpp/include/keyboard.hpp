@@ -22,6 +22,7 @@ enum class Key {
     LeftShift, LeftCtrl,                    // throttle up / down (held)
     Digit,                                  // 0-9: action groups; Ctrl+1-5 skins, Ctrl+0 VESSEL view; Alt+digit SAS modes
     Plus, Minus,                            // Ctrl+"+" / Ctrl+"-": next / previous flight scene
+    Enter,                                  // only the MechJeb keypad uses it (SET)
     Escape, Quit,                           // Esc and q close the HMI
 };
 
@@ -39,6 +40,7 @@ struct Command {
         ToggleSas, ToggleRcs, Stage, ToggleGear, ToggleLights, SetBrakes, Abort, ActionGroup, SasMode,
         ThrottleFull, ThrottleCut, WarpUp, WarpDown, WarpStop, Quicksave, Quickload, ToggleMap,
         ToggleControl, SpeedMode, DeployChutes, CutChutes,  // cockpit panel controls (cockpitinput.hpp)
+        MechJebSet, MechJebAction,  // MechJeb scene (mechjebinput.hpp): KSPHMIFlight.MechJebSet(key, text) / Action(key)
     };
     Kind kind;
     /// SetBrakes: 1 on / 0 off; ActionGroup: kRPC group 0-9 (0 = group 10); SasMode: kRPC SASMode; ToggleControl:
@@ -49,7 +51,11 @@ struct Command {
     /// lamp shows).
     int set = -1;
     double queued = 0;  ///< monotonic time it was queued (latency log); not part of the command's identity
-    bool operator==(const Command& o) const { return kind == o.kind && value == o.value && set == o.set; }
+    /// MechJebSet: the report key and the SI value text; MechJebAction: the action name in `key`.
+    std::string key{}, text{};
+    bool operator==(const Command& o) const {
+        return kind == o.kind && value == o.value && set == o.set && key == o.key && text == o.text;
+    }
 };
 
 /// "SAS on/off toggle", "stage", ... for the log.

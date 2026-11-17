@@ -142,6 +142,15 @@ default), two parachutes (``Simulator.chutes``, kRPC ``ParachuteState``; ``SafeS
 below 500 m/s in the atmosphere, unsafe above 70 km), ``Control.Parachutes``, ``Get/SetActionGroup``,
 ``set_SpeedMode``, ``Part.Stage`` / ``Part.Title`` for the next stage and ``SpaceCenter.WarpRate``.
 
+For the HMI's MechJeb scene it serves ``KSPHMIFlight.MechJebRevision`` / ``MechJebReport`` / ``MechJebSet`` /
+``MechJebAction`` from a simulated MechJeb (``tools/kspsim/mechjeb.py``, ``Simulator.mechjeb``): the report starts
+byte for byte as the shared fixture ``hmi-cpp/tests/data/mechjeb_report_v1.txt`` (revision 42) and every changed
+value is a new revision. ``MechJebSet`` answers like the plugin: ``unknown key``, ``read only`` (``ascent.enabled``,
+``status``, ``t_minus``, ``classic.auto_turn_start_altitude``), ``invalid value`` (not a finite number, a flag
+other than 0/1, a path or stage out of range) or ``ok``. Actions change ``ascent.enabled`` / ``status`` (the
+timed launches also start a 30 s ``t_minus``, which ``abort_timed_launch`` clears). ``MechJebSim.set_state``
+switches to ``missing`` or ``nocore`` (then every call answers ``unavailable``).
+
 Not modelled: other bodies and sphere of influence changes, torque from RCS or reaction wheels (one fixed
 rotation rate), real targets (``target_*`` values only), electric charge use beyond a slow drain. A maneuver node has a fixed UT (it
 counts down) and prograde / normal / radial-out delta-v; its ``Node.orbit`` is the reported state coasted to

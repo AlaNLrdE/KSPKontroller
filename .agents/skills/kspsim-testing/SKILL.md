@@ -84,3 +84,10 @@ want COM5 and port 50000 (it checks).
 - Check simulator provenance before diagnosing the board. Root ci.cmd sim runs main, not a feature
   worktree. For a branch-only test give the complete PowerShell launcher path. A VAB log saying no
   telemetry sent means the old simulator idles the board, so button silence alone is not a hardware fault.
+
+- The krpc 0.7 Python client builds stubs for KSPHMIFlight from kspsim's services message: call the plugin
+  procedures as `conn.ksphmi_flight.mech_jeb_report()` (CamelCase to snake_case); `Client._invoke` here takes no
+  parameter names. kspsim's simulated MechJeb is `Simulator.mechjeb` (tools/kspsim/mechjeb.py, starts at the fixture).
+- End-to-end HMI check without the game: start `KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)` in a Python
+  script, write a temp config (`[krpc]` address/ports, `discovery = false`) and run `build/hmi-cpp/ksphmi --config
+  F --flight-scene mechjeb --screenshot X.png --seconds 4`; the HMI log lines prove the procedures were called.

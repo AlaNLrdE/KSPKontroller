@@ -230,6 +230,15 @@ def services_message(ksphmi: bool = True) -> K.Services:
             proc = flight.procedures.add(name=name)
             proc.return_type.code = K.Type.STRING
             proc.game_scenes.append(K.Procedure.FLIGHT)
+        # The MechJeb scene (report format v1, shared fixture): revision, report, settings and actions.
+        for name, code, params in (("MechJebRevision", K.Type.UINT32, ()), ("MechJebReport", K.Type.STRING, ()),
+                                   ("MechJebSet", K.Type.STRING, ("key", "value")),
+                                   ("MechJebAction", K.Type.STRING, ("action",))):
+            proc = flight.procedures.add(name=name)
+            proc.return_type.code = code
+            for param in params:
+                proc.parameters.add(name=param).type.code = K.Type.STRING
+            proc.game_scenes.append(K.Procedure.FLIGHT)
     sc = services.services.add(name="SpaceCenter")
     for cls in ("Vessel", "Orbit", "CelestialBody", "Flight", "ReferenceFrame", "Control", "Node", "DockingPort",
                 "Resources", "Stage", "Part", "Parts", "Parachute"):
@@ -470,6 +479,20 @@ class KrpcServer:
         if proc == "Throttle":
             with sim.lock:
                 return enc_float(sim.vessel.controls.throttle)
+        if proc == "MechJebRevision":
+            return varint(sim.mechjeb.revision)
+        if proc == "MechJebReport":
+            return enc_string(sim.mechjeb.report())
+        if proc == "MechJebSet":
+            key, value = read_string(args.get(0, b"\x00")), read_string(args.get(1, b"\x00"))
+            reply = sim.mechjeb.set(key, value)
+            log.info("MechJebSet %s=%s: %s", key, value, reply)
+            return enc_string(reply)
+        if proc == "MechJebAction":
+            action = read_string(args.get(0, b"\x00"))
+            reply = sim.mechjeb.action(action)
+            log.info("MechJebAction %s: %s", action, reply)
+            return enc_string(reply)
         values = [read_float(args.get(i, b"\x00" * 4)) for i in range(6)]
         if proc == "SetAxes":
             with sim.lock:

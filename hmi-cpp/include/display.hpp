@@ -13,6 +13,7 @@
 #include "canvas.hpp"
 #include "cockpitinput.hpp"
 #include "config.hpp"
+#include "mechjebinput.hpp"
 #include "model.hpp"
 #include "navball.hpp"
 #include "netinfo.hpp"
@@ -95,6 +96,20 @@ public:
     std::optional<Ctl> cockpit_hit(int x, int y) const;
     /// Classic skin's cockpit panel (header, then the shared composition with the Classic materials).
     void cockpit(const Snapshot& s, double now);
+
+    /// True when `s` is drawn as the MechJeb scene (in flight with that scene chosen).
+    bool mechjeb_scene(const Snapshot& s) const { return s.state == State::Flight && flight_scene_ == FlightScene::MechJeb; }
+    /// The MechJeb scene's page, arming, feedback and keypad; owned by the caller, may be null (the menu).
+    void set_mechjeb_input(const MechJebInput* input) { mechjeb_input_ = input; }
+    const MechJebInput* mechjeb_input() const { return mechjeb_input_; }
+    /// Whether the last draw() showed the MechJeb scene: only then do clicks hit its controls.
+    bool mechjeb_shown() const { return mechjeb_shown_; }
+    /// The MechJeb control under canvas pixel (x, y) of the last frame, if the scene was shown.
+    std::optional<MjControl> mechjeb_hit(int x, int y) const;
+    /// Classic skin's MechJeb scene.
+    void mechjeb(const Snapshot& s, double now);
+    /// The art cache key part of the MechJeb scene: page and ascent path.
+    std::string mechjeb_key(const Snapshot& s) const;
 
     Canvas& canvas() { return c_; }
     Navball& navball() { return navball_; }
@@ -216,6 +231,9 @@ private:
     FlightScene flight_scene_ = FlightScene::Instruments;
     const CockpitInput* cockpit_input_ = nullptr;
     bool cockpit_shown_ = false;
+    const MechJebInput* mechjeb_input_ = nullptr;
+    bool mechjeb_shown_ = false;
+    int mechjeb_path_ = -1;  ///< ascent path of the last MechJeb frame (its layout)
     std::unique_ptr<OrbitArt> orbit_art_;
     std::unique_ptr<OrbitArt> target_art_;  ///< the target body's own cached material
     std::unique_ptr<ApolloSkin> apollo_;
