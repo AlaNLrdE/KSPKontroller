@@ -667,7 +667,7 @@ def check_hmi_cpp_layout(ctx):
         if "hmi-cpp/assets/**/*.%s binary" % extension not in attributes:
             bad.append("HMI .%s assets need a binary Git attribute" % extension)
     # deploy_hmi tars a fixed list: a new top-level folder (include/ on 2026-11-14) broke the Pi build when missing.
-    m = re.search(r"tar -cf - ([^)]*)\)", read(os.path.join(ROOT, "ci")))
+    m = re.search(r"\btar\b[^|\n]*?-cf - ([^)]*)\)", read(os.path.join(ROOT, "ci")))  # options may precede -cf
     shipped = set(m.group(1).split()) if m else set()
     for name in sorted(os.listdir(HMI_DIR)):
         if os.path.isdir(os.path.join(HMI_DIR, name)) and name != "build" and name not in shipped:
@@ -748,7 +748,7 @@ def check_hmi_intro(ctx):
         problems.append("ksphmi-intro.sh default video path")
     if "--keep-open=always" not in script or "--input-ipc-server=\"$sock\"" not in script:
         problems.append("mpv must hold the last frame and serve the IPC socket")
-    if not re.search(r"tar -cf - [^|]*\bassets\b", read(os.path.join(ROOT, "ci"))):
+    if not re.search(r"\btar\b[^|\n]*?-cf - [^|]*\bassets\b", read(os.path.join(ROOT, "ci"))):
         problems.append("./ci deploy_hmi does not copy assets/")
     report("FAIL" if problems else "PASS", "hmi: boot intro",
            ", ".join(problems) if problems else "video asset, mpv install, unit, socket /run/%s/%s agree" %
