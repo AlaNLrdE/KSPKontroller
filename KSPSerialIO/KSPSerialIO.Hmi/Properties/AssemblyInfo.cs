@@ -10,8 +10,8 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCulture("")]
 [assembly: ComVisible(false)]
 [assembly: Guid("6a1c3e0f-5d2b-4c47-9a35-0e7f2b8d4c19")]
-[assembly: AssemblyVersion("0.19.7.3")]
-[assembly: AssemblyFileVersion("0.19.7.3")]
+[assembly: AssemblyVersion("0.19.8.0")]
+[assembly: AssemblyFileVersion("0.19.8.0")]
 // KSPAssembly lets other mods depend on this one. There is deliberately no KSPAssemblyDependency on kRPC: kRPC 0.7
 // declares no KSPAssembly attribute, so KSP could refuse to load this DLL even with kRPC installed.
 [assembly: KSPAssembly("KSPSerialIO.Hmi", 0, 19)]

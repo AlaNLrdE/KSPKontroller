@@ -268,6 +268,15 @@ part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has n
   ``KSPHMIFlight.VesselShape`` / ``VesselState`` only read it. ``VesselViewFormat`` (plain C#) holds the hull,
   the fuel and heat rules and text format v1 (:doc:`hmi`, *VESSEL panel*). No service ``Id`` is set,
   so kRPC assigns one and cannot clash with another mod's.
+* ``MechJebBridge`` (``KSPAddon`` for flight, 0.19.8.0) serves the HMI's MechJeb scene (:doc:`hmi`, *MechJeb
+  scene*) without referencing MechJeb: it finds ``MuMech.MechJebCore`` in ``AssemblyLoader.loadedAssemblies``,
+  takes the active vessel's master core from ``MuMech.VesselExtensions.GetMasterMechJeb`` and rebuilds the report
+  twice a second (and on the frame after a change) into ``MechJebCache``. ``KSPHMIFlight.MechJebRevision`` /
+  ``MechJebReport`` only read the cache; ``MechJebSet`` and ``MechJebAction`` run on Unity's thread and mark it
+  dirty. ``MechJebMembers`` (plain C#) holds the key to member map, the cached reflection accessors (``Editable*``
+  through ``.Val``) and the cache, tested by ``tools/plugin-shipreport-tests`` against the v1 fixture. The log says
+  ``mechjeb: <state> (MechJeb X)`` on each state change and ``mechjeb: <key>: ... has no <member>`` once per
+  member the installed MechJeb lacks.
 * ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
   ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.
 
