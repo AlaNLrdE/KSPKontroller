@@ -101,13 +101,16 @@ add_executable(ksphmi src/main.cpp)
 target_link_libraries(ksphmi PRIVATE ksphmi_ui)
 
 enable_testing()
+# Where the test programs read config.toml and tests/data: this source tree, or "." for binaries that run from a
+# copy of hmi-cpp in their working directory (./ci build_hmi_pi: the Pi runs them in ~/ksphmi/cpp.next).
+set(KSPHMI_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE STRING "config.toml and tests/data for the tests")
 add_executable(ksphmi_tests tests/test_core.cpp)
 target_link_libraries(ksphmi_tests PRIVATE ksphmi_core)
 add_test(NAME core COMMAND ksphmi_tests)
 
 add_executable(ksphmi_redux_tests tests/test_redux.cpp)
 target_link_libraries(ksphmi_redux_tests PRIVATE ksphmi_core)
-target_compile_definitions(ksphmi_redux_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(ksphmi_redux_tests PRIVATE KSPHMI_SOURCE_DIR="${KSPHMI_TEST_SOURCE_DIR}")
 add_test(NAME redux COMMAND ksphmi_redux_tests)
 
 # Boot intro hand-over against a fake mpv IPC socket (AF_UNIX: Linux only, a single skip test elsewhere).
@@ -118,8 +121,8 @@ add_test(NAME intro COMMAND ksphmi_intro_tests)
 add_executable(ksphmi_render_tests tests/test_render.cpp)
 target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)
 add_test(NAME render COMMAND ksphmi_render_tests)
-target_compile_definitions(ksphmi_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_definitions(ksphmi_render_tests PRIVATE KSPHMI_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_definitions(ksphmi_tests PRIVATE KSPHMI_SOURCE_DIR="${KSPHMI_TEST_SOURCE_DIR}")
+target_compile_definitions(ksphmi_render_tests PRIVATE KSPHMI_SOURCE_DIR="${KSPHMI_TEST_SOURCE_DIR}")
 target_compile_options(ksphmi_tests PRIVATE -Wno-missing-field-initializers)
 
 # setup-kiosk.sh edits the Pi's boot files with python3 (present on Raspberry Pi OS): test that part when we can.
