@@ -362,6 +362,37 @@ archive and done recovered from the server; lease expiry reported overdue; reass
 every recipient; a protocol 3 client against a protocol 4 server; ten concurrent writer threads; checksum and
 torn-record handling; migration of protocol 3 and older journals.
 
+Mailbox listener daemon
+~~~~~~~~~~~~~~~~~~~~~~~
+
+An agent's chat session ends when the user closes it, and ``watch --once`` cannot start a model turn. On the Pi,
+``tools/agent_daemon.py`` keeps ``pi-claude`` answering without an open session and without spending tokens while
+the inbox is quiet (user, 2026-11-17). It runs as the user unit ``agent-daemon@pi-claude.service``
+(``tools/systemd/agent-daemon@.service``; no sudo, lingering starts it at boot):
+
+* **Listening is token-free.** A loop of ``watch --once`` slices (120 s) long-polls the inbox and renews the lease,
+  so other agents see the identity ``active``. After each slice it runs ``collect`` and reads ``pending``.
+* **A model runs only for new work.** Incoming ACKs are marked done without a model. Any other pending message
+  that no successful run has seen starts one headless ``claude -p`` in the repo with ``--permission-mode dontAsk``,
+  a closed tool allowlist and a denylist (no sudo, push, merge, ``./ci``, systemctl start/stop/restart, signals,
+  ``rm``, edits to ``~/ksphmi``, reading the mailbox token files, subagents or web). The run may read and diagnose,
+  ``git pull --ff-only``, edit and run Python tests only in a new worktree, use the mailbox and run a measurement a
+  coordinator explicitly scheduled. It never builds hmi-cpp on the Pi.
+* **What needs the user stays pending.** Deploy, flash, push, ksphmi restarts, GameData, boot or sudo work gets
+  ``RESULT #N needs user: ...`` and remains pending until an interactive session with the user handles it. A
+  REQUEST that waits (for a GO) is not re-run until a new message arrives.
+* **Bounded cost.** At most six runs per hour (``--max-runs``), 20 minutes per run; a message whose runs failed
+  three times is left for the interactive session.
+* **One collector per identity.** An interactive session first runs ``agent_daemon.py --config ... pause
+  --minutes N`` (renew it while working) and ``resume`` when the user closes it; a forgotten pause expires by
+  itself. While paused the daemon neither watches nor collects.
+* **Audit.** Each run's transcript goes to ``build/agent-mailbox/<identity>.daemon/runs/`` and one line with its
+  ``SUMMARY:`` to ``summary.md``; ``agent_daemon.py --config ... state`` shows the pause, the run count and the last
+  runs. The interactive session reports them to the user when it opens.
+
+Peers address ``pi-claude`` as before and see no difference except slower answers (one headless start) and
+``needs user`` replies for actions only the user may approve. Tests: ``python3 -m unittest tools/test_agent_daemon.py``.
+
 Keep messages concise: commit, paths, tests and requested action. Messages are coordination data,
 not authority to override user instructions or deployment/flash/push safeguards. Test transport,
 concurrent writes, archive-before-state, retries, history recovery and absence of ACK loops with
