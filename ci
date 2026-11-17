@@ -28,8 +28,12 @@
 #   ./ci test_hmi_container Run HMI tests and kspsim in Debian Bookworm, without the Pi (needs Docker)
 #   ./ci hmi_desktop        Open both HMI and simulator windows in a browser desktop at localhost:6080
 #   ./ci test_hmi_desktop   Exercise the real simulator GUI controls and their connection to the C++ HMI
-#   ./ci deploy_hmi          Copy hmi-cpp/ to the Pi over SSH, build and test it there, install ksphmi.service, restart;
-#                            then apply the kiosk boot (setup-kiosk.sh, asks for the sudo password) when it changed
+#   ./ci hmi_sysroot [--force] Copy the Pi's headers and libraries into build/pi-sysroot (only when its packages changed)
+#   ./ci build_hmi_pi        Cross-compile the HMI and its tests for the Pi (aarch64) into build/hmi-cpp-pi (Linux/WSL)
+#   ./ci deploy_hmi          Cross-build the HMI (build_hmi_pi), copy it to the Pi over SSH, run its tests there, then
+#                            replace the running one, install ksphmi.service and restart; builds on the Pi only when no
+#                            cross compiler is available here. Then applies the kiosk boot (setup-kiosk.sh, asks for
+#                            the sudo password) when it changed
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
@@ -604,6 +608,17 @@ HMI_BREW_PACKAGES="cmake pkg-config sdl2 sdl2_ttf"
 HMI_LOCAL_DEBS="libsdl2-dev libsdl2-2.0-0 libsdl2-ttf-dev libsdl2-ttf-2.0-0 fonts-freefont-ttf libxss1
   libasound2t64 libdecor-0-0 libpulse0 libsamplerate0 libsndfile1 libasyncns0 libflac12t64 libvorbisenc2
   libvorbis0a libogg0 libopus0 libmpg123-0t64 libmp3lame0"
+# Cross build for the Pi (docs/building.rst): the Pi's headers and libraries in build/pi-sysroot, GNU's aarch64 cross
+# g++ (its libstdc++ must not be newer than the Pi's: hmi_pi_abi_check), outputs in build/hmi-cpp-pi.
+HMI_PI_SYSROOT="$BUILD/pi-sysroot"
+HMI_PI_BUILD="$BUILD/hmi-cpp-pi"
+HMI_CROSS_APT="g++-aarch64-linux-gnu"
+# Without root (this PC's WSL): Ubuntu 24.04's cross g++ 13 (and Ninja) unpacked into pi-toolchain, like hmi-cpp-deps.
+HMI_CROSS_DEBS="g++-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu cpp-13-aarch64-linux-gnu
+  gcc-13-aarch64-linux-gnu-base gcc-13-cross-base binutils-aarch64-linux-gnu libstdc++-13-dev-arm64-cross
+  libgcc-13-dev-arm64-cross libstdc++6-arm64-cross libgcc-s1-arm64-cross"
+# The test programs the Pi runs before a cross-built ksphmi replaces the running one (ctest's C++ tests).
+HMI_PI_TESTS="ksphmi_tests ksphmi_redux_tests ksphmi_intro_tests ksphmi_render_tests"
 
 hmi_ssh_client() {
   local client=ssh
@@ -830,8 +845,206 @@ test_hmi() {
   if [ "${1:-}" = "--sim" ]; then hmi_sim; fi
 }
 
-# Layout on the Pi: ~/ksphmi/cpp (hmi-cpp sources and config.toml, replaced on every deploy; its build/ directory is
-# kept so CMake rebuilds incrementally), ~/ksphmi/env (kRPC address), ~/ksphmi/config.local.toml (yours, never touched).
+# ------------------------------------------------------------------ Cross build for the Pi (never build on it)
+# The sysroot is copied again only when this stamp changes: the Pi's installed packages and the file list.
+hmi_sysroot_stamp() {
+  local pkgs list
+  pkgs="$(hmi_ssh "dpkg-query -W -f='\${Package} \${Version} \${Architecture}\\n' | sha256sum" </dev/null)" || return 1
+  list="$(cksum < "$HMI_DIR/cmake/pi-sysroot-files.sh")"
+  printf 'packages %s list %s\n' "${pkgs%% *}" "${list%% *}"
+}
+
+# Headers, gcc runtime, crt objects, .pc files and the ldd closure of SDL2/SDL2_ttf/libstdc++ (~60 MB, ~30 s):
+# hmi-cpp/cmake/pi-sysroot-files.sh lists them on the Pi, tar brings them here.
+hmi_sysroot() {
+  local want have
+  want="$(hmi_sysroot_stamp)" || die "cannot read the package list of '$HMI_HOST' over SSH (docs/hmi.rst)"
+  have="$(cat "$HMI_PI_SYSROOT/.stamp" 2>/dev/null || true)"
+  if [ "$want" = "$have" ] && [ "${1:-}" != --force ]; then
+    log "Pi sysroot up to date (build/pi-sysroot)"
+    return 0
+  fi
+  log "Copying the Pi's headers and libraries into build/pi-sysroot (first copy, or its packages changed)"
+  hmi_ssh 'sh -s | sort -u | tar -C / -cf - --no-recursion -T -' < "$HMI_DIR/cmake/pi-sysroot-files.sh" |
+    if is_windows; then hmi_in_wsl hmi_sysroot_unpack; else hmi_sysroot_unpack; fi ||
+    die "copying the sysroot from $HMI_HOST failed"
+  printf '%s\n' "$want" > "$HMI_PI_SYSROOT/.stamp"
+}
+
+# A tar of the Pi's files on stdin -> build/pi-sysroot, replaced whole. Linux/WSL (Git Bash cannot make the links).
+hmi_sysroot_unpack() {
+  local new="$HMI_PI_SYSROOT.new" link target
+  rm -rf "$new"
+  mkdir -p "$new"
+  tar -C "$new" -xf -
+  # Debian 13 is merged-/usr: linker scripts (libc.so, libm.so) name /lib/aarch64-linux-gnu/...
+  ln -s usr/lib "$new/lib"
+  # absolute links would point into this machine's /usr: make them relative to the sysroot
+  find "$new" -type l -lname '/*' | while IFS= read -r link; do
+    target="$(readlink "$link")"
+    ln -sfn "$(realpath -m --relative-to="$(dirname "$link")" "$new$target")" "$link"
+  done
+  rm -rf "$HMI_PI_SYSROOT"
+  mv "$new" "$HMI_PI_SYSROOT"
+}
+
+# Where the cross compiler works: build/ on a native Linux checkout; in WSL, where the checkout is on the Windows
+# drive (/mnt/c, NTFS through 9p: a cold build 108 s instead of 20 s, a no-op 26 s instead of 0.1 s), a directory on
+# WSL's own ext4 per checkout, ~/.cache/ksphmi-cross/<cksum of the checkout path>, holding the toolchain, a mirror
+# of build/pi-sysroot and the build tree. Only the programs are copied back to build/hmi-cpp-pi.
+hmi_cross_work() {
+  case "$ROOT" in
+    /mnt/[a-z]/*) printf '%s/.cache/ksphmi-cross/%s\n' "$HOME" "$(printf '%s' "$ROOT" | cksum | cut -d' ' -f1)" ;;
+    *) printf '%s\n' "$BUILD" ;;
+  esac
+}
+
+# Unpacks Debian packages (apt-get download, no root) into DIR/root once; DIR/.complete marks a finished unpack.
+hmi_unpack_debs() {
+  local dir="$1" f
+  shift
+  [ -f "$dir/.complete" ] && return 0
+  command -v apt-get >/dev/null && command -v dpkg >/dev/null || return 1
+  apt-cache show "$1" >/dev/null 2>&1 || return 1
+  log "Unpacking $* into $dir (no root needed)" >&2
+  rm -rf "$dir"
+  mkdir -p "$dir/debs"
+  (cd "$dir/debs" && apt-get download "$@") >&2 || return 1
+  for f in "$dir"/debs/*.deb; do dpkg -x "$f" "$dir/root"; done
+  touch "$dir/.complete"
+}
+
+# Sets HMI_PI_CXX, HMI_PI_READELF and HMI_PI_GENERATOR: an installed aarch64-linux-gnu-g++, else Ubuntu's unpacked
+# into <work>/pi-toolchain; Ninja when installed or unpackable, else Make. Fails without a compiler (and off
+# Linux: macOS/clang is not done yet).
+hmi_cross_env() {
+  local work root
+  [ "$(uname -s)" = Linux ] || command -v aarch64-linux-gnu-g++ >/dev/null 2>&1 || return 1
+  work="$(hmi_cross_work)"
+  root="$work/pi-toolchain/root"
+  if command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
+    HMI_PI_CXX="$(command -v aarch64-linux-gnu-g++)"
+    HMI_PI_READELF=aarch64-linux-gnu-readelf
+  else
+    # shellcheck disable=SC2086
+    hmi_unpack_debs "$work/pi-toolchain" $HMI_CROSS_DEBS || return 1
+    export PATH="$root/usr/bin:$PATH"
+    export LD_LIBRARY_PATH="$root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    HMI_PI_CXX="$root/usr/bin/aarch64-linux-gnu-g++-13"
+    HMI_PI_READELF="$root/usr/bin/aarch64-linux-gnu-readelf"
+  fi
+  HMI_PI_GENERATOR="Unix Makefiles"
+  if command -v ninja >/dev/null 2>&1; then
+    HMI_PI_GENERATOR=Ninja
+  elif [ "$(uname -s)" = Linux ] && hmi_unpack_debs "$work/ninja" ninja-build 2>/dev/null; then
+    export PATH="$work/ninja/root/usr/bin:$PATH"
+    HMI_PI_GENERATOR=Ninja
+  fi
+}
+
+# Can this machine cross-build the HMI? On Windows: inside WSL.
+hmi_cross_available() {
+  if is_windows; then
+    command -v wsl.exe >/dev/null 2>&1 || return 1
+    hmi_in_wsl hmi_cross_check >/dev/null 2>&1
+    return
+  fi
+  hmi_cross_env
+}
+
+build_hmi_pi() {
+  hmi_sysroot
+  if is_windows; then hmi_in_wsl build_hmi_pi_here; return; fi
+  build_hmi_pi_here
+}
+
+# The build tree stays between runs (incremental: Ninja, and ccache when installed); a tree per generator and
+# compiler path, so switching between the unpacked and an apt-installed g++ never mixes caches.
+build_hmi_pi_here() {
+  local start=$SECONDS work sysroot tree launcher=() b
+  [ "$(uname -s)" = Linux ] || die "build_hmi_pi runs on Linux or WSL for now (macOS with clang: docs/building.rst)"
+  [ -f "$HMI_PI_SYSROOT/.stamp" ] || die "no Pi sysroot in build/pi-sysroot: run ./ci hmi_sysroot"
+  hmi_cross_env || die "no aarch64 cross compiler: sudo apt install -y $HMI_CROSS_APT cmake ninja-build"
+  work="$(hmi_cross_work)"
+  sysroot="$HMI_PI_SYSROOT"
+  if [ "$work" != "$BUILD" ]; then
+    sysroot="$work/pi-sysroot"
+    if ! cmp -s "$HMI_PI_SYSROOT/.stamp" "$sysroot/.stamp"; then
+      log "Mirroring build/pi-sysroot into $sysroot (WSL ext4)"
+      rm -rf "$sysroot.new"
+      mkdir -p "$work"
+      cp -a "$HMI_PI_SYSROOT" "$sysroot.new"
+      rm -rf "$sysroot"
+      mv "$sysroot.new" "$sysroot"
+    fi
+  fi
+  tree="$work/hmi-cpp-pi-tree/$(printf '%s %s' "$HMI_PI_GENERATOR" "$HMI_PI_CXX" | cksum | cut -d' ' -f1)"
+  if command -v ccache >/dev/null 2>&1; then launcher=(-DCMAKE_CXX_COMPILER_LAUNCHER=ccache); fi
+  log "Cross-building the HMI for the Pi (aarch64, Release, $HMI_PI_GENERATOR${launcher[*]:+, ccache}) in $tree"
+  cmake -S "$HMI_DIR" -B "$tree" -G "$HMI_PI_GENERATOR" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$HMI_DIR/cmake/aarch64-pi.cmake" -DCMAKE_CXX_COMPILER="$HMI_PI_CXX" \
+    -DKSPHMI_PI_SYSROOT="$sysroot" -DKSPHMI_TEST_SOURCE_DIR=. ${launcher[@]+"${launcher[@]}"} >/dev/null
+  cmake --build "$tree" -j"$(nproc 2>/dev/null || echo 4)"
+  mkdir -p "$HMI_PI_BUILD"
+  for b in ksphmi $HMI_PI_TESTS; do
+    if [ "$tree" != "$HMI_PI_BUILD" ] && ! cmp -s "$tree/$b" "$HMI_PI_BUILD/$b"; then cp "$tree/$b" "$HMI_PI_BUILD/$b"; fi
+  done
+  hmi_pi_abi_check
+  log "Cross build done in $((SECONDS - start)) s: build/hmi-cpp-pi"
+}
+
+# Every symbol version (GLIBC_, GLIBCXX_, CXXABI_, GCC_) the cross-built programs need must be defined by the Pi's
+# own library of that name (its copy in build/pi-sysroot): a cross libstdc++ newer than the Pi's would build fine
+# and then fail at start on the Pi ("GLIBCXX_3.4.xx not found").
+hmi_pi_abi_check() {
+  local lib="$HMI_PI_SYSROOT/usr/lib/aarch64-linux-gnu" b file version missing="" newest=""
+  for b in ksphmi $HMI_PI_TESTS; do
+    while read -r file version; do
+      [ -f "$lib/$file" ] || { missing="$missing $b:$file"; continue; }
+      "$HMI_PI_READELF" -V "$lib/$file" |
+        awk '/Version definition section/ {d = 1; next} /Version needs section/ {d = 0}
+             d { for (i = 1; i < NF; i++) if ($i == "Name:") print $(i + 1) }' | grep -qxF "$version" ||
+        missing="$missing $b:$version"
+      case "$version" in GLIBCXX_*) newest="$(printf '%s\n%s\n' "$newest" "$version" | sort -V | tail -1)" ;; esac
+    done < <("$HMI_PI_READELF" -V "$HMI_PI_BUILD/$b" |
+      awk '/Version needs section/ {n = 1; next}
+           n { for (i = 1; i < NF; i++) { if ($i == "File:") f = $(i + 1); if ($i == "Name:" && $0 ~ /Version:/) print f, $(i + 1) } }')
+  done
+  [ -z "$missing" ] || die "the cross-built programs need versions the Pi's libraries lack:$missing
+(a cross g++ newer than the Pi's gcc: use an older one, or update the Pi and run ./ci hmi_sysroot)"
+  log "ABI check passed: the Pi's libraries define every version needed (newest libstdc++: ${newest:-none})"
+}
+
+# One deploy_hmi at a time per Pi (the Mac and the PC both deploy): a lock directory on the Pi, removed at the end or
+# when ci exits; one older than 30 minutes is a dead deploy's and is taken over with a warning.
+hmi_deploy_lock() {
+  local me state
+  me="$(hostname 2>/dev/null || echo unknown) pid $$ at $(date '+%F %T')"
+  state="$(hmi_ssh "mkdir -p ~/ksphmi; l=~/ksphmi/.deploy.lock
+    if [ -d \$l ] && [ \$((\$(date +%s) - \$(stat -c %Y \$l))) -gt 1800 ]; then echo stale; rm -rf \$l; fi
+    if mkdir \$l 2>/dev/null; then echo '$me' > \$l/owner; echo locked; else echo \"busy \$(cat \$l/owner 2>/dev/null)\"; fi" </dev/null)" ||
+    die "cannot reach '$HMI_HOST' over SSH"
+  case "$state" in
+    *busy*) die "another ./ci deploy_hmi is running on $HMI_HOST (${state#*busy }); if it died: ssh $HMI_HOST rm -r ~/ksphmi/.deploy.lock" ;;
+    *locked*) ;;
+    *) die "could not take the deploy lock on $HMI_HOST: $state" ;;
+  esac
+  case "$state" in stale*) log "WARNING: removed a deploy lock older than 30 minutes on $HMI_HOST" ;; esac
+  HMI_DEPLOY_LOCKED=1
+  trap hmi_deploy_unlock EXIT
+}
+
+hmi_deploy_unlock() {
+  [ "${HMI_DEPLOY_LOCKED:-0}" = 1 ] || return 0
+  HMI_DEPLOY_LOCKED=0
+  trap - EXIT
+  hmi_ssh 'rm -rf ~/ksphmi/.deploy.lock' </dev/null || log "WARNING: could not remove ~/ksphmi/.deploy.lock on $HMI_HOST"
+}
+
+# Layout on the Pi: ~/ksphmi/cpp (hmi-cpp sources and config.toml, replaced on every deploy; build/ksphmi and the
+# test programs, cross-built here, or built on the Pi by the fallback, which keeps build/ for incremental CMake
+# builds), ~/ksphmi/cpp.next (the next version while its tests run), ~/ksphmi/env (kRPC address),
+# ~/ksphmi/config.local.toml (yours, never touched).
 hmi_preflight() {
   hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
   local missing
@@ -878,17 +1091,70 @@ hmi_pc_address() {
   echo "$ip"
 }
 
-deploy_hmi() {
-  hmi_preflight
-  local pc_ip
-  pc_ip="$(hmi_pc_address)"
-
-  log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp (kRPC server: $pc_ip)"
+# hmi-cpp's files the Pi needs (sources for the fallback build, config.toml, assets, systemd, test data) as a tar.
+hmi_pack_sources() {
   # cd + relative names: GNU tar reads a "C:/..." argument as a remote host. macOS bsdtar would add AppleDouble
   # "._*" files and xattr headers: "mv cpp.new/*" leaves the dot files behind and "rmdir cpp.new" then fails.
   local tar_opts=()
   [ "$(uname -s)" = Darwin ] && tar_opts=(--no-xattrs --no-mac-metadata)
-  (cd "$HMI_DIR" && COPYFILE_DISABLE=1 tar ${tar_opts[@]+"${tar_opts[@]}"} -cf - CMakeLists.txt config.toml include src tests systemd assets) |
+  (cd "$HMI_DIR" && COPYFILE_DISABLE=1 tar ${tar_opts[@]+"${tar_opts[@]}"} -cf - CMakeLists.txt cmake config.toml include src tests systemd assets)
+}
+
+deploy_hmi() {
+  hmi_preflight
+  hmi_deploy_lock
+  local pc_ip
+  pc_ip="$(hmi_pc_address)"
+  log "kRPC server for the Pi: $pc_ip"
+  if hmi_cross_available; then
+    build_hmi_pi
+    hmi_ship_cross
+  else
+    log "WARNING: no aarch64 cross compiler here (Linux/WSL: sudo apt install -y $HMI_CROSS_APT; docs/building.rst):"
+    log "WARNING: building on $HMI_HOST instead, which is much slower"
+    hmi_copy_sources
+    hmi_build_on_pi
+  fi
+  hmi_install_service "$pc_ip"
+  hmi_kiosk
+  hmi_deploy_unlock
+  log "Done: HMI running on $HMI_HOST"
+}
+
+# Cross-built programs and hmi-cpp's files go to ~/ksphmi/cpp.next and the tests run there; only when they pass do
+# they replace ~/ksphmi/cpp (ksphmi by rename, the previous one kept as build/ksphmi.prev). The running service
+# keeps its binary until hmi_install_service restarts it; a failed test leaves ~/ksphmi/cpp untouched.
+hmi_ship_cross() {
+  local b bins=()
+  for b in ksphmi $HMI_PI_TESTS; do
+    [ -f "$HMI_PI_BUILD/$b" ] || die "missing build/hmi-cpp-pi/$b: run ./ci build_hmi_pi"
+    bins+=("$b")
+  done
+  log "Copying the cross-built HMI, its tests and hmi-cpp to $HMI_HOST:~/ksphmi/cpp.next"
+  hmi_pack_sources | hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.next; mkdir -p cpp.next/build; tar -C cpp.next -xf -'
+  (cd "$HMI_PI_BUILD" && tar -cf - "${bins[@]}") |
+    hmi_ssh 'set -e; cd ~/ksphmi/cpp.next/build; tar -xf -; chmod +x ./*'
+  log "Running the tests on $HMI_HOST"
+  hmi_ssh "set -e; cd ~/ksphmi/cpp.next
+    for t in $HMI_PI_TESTS; do echo \"==> \$t\"; ./build/\$t; done
+    if command -v python3 >/dev/null; then
+      echo '==> test_setup_kiosk.py'; python3 -B tests/test_setup_kiosk.py
+      echo '==> test_screenshots.py'; python3 -B tests/test_screenshots.py \"\$PWD/build/ksphmi\"
+    fi" </dev/null || die "tests failed on $HMI_HOST: the HMI was not replaced (the new one is in ~/ksphmi/cpp.next)"
+  log "Tests passed: replacing ~/ksphmi/cpp (previous binary kept as build/ksphmi.prev)"
+  hmi_ssh 'set -e; cd ~/ksphmi; mkdir -p cpp/build
+    if [ -f cpp/build/ksphmi ]; then ln -f cpp/build/ksphmi cpp/build/ksphmi.prev; fi
+    find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
+    for f in cpp.next/*; do [ "$f" = cpp.next/build ] || mv "$f" cpp/; done
+    for f in cpp.next/build/*; do [ "$f" = cpp.next/build/ksphmi ] || mv -f "$f" cpp/build/; done
+    mv -f cpp.next/build/ksphmi cpp/build/ksphmi
+    rm -rf cpp.next' </dev/null
+}
+
+# Fallback without a cross compiler: the sources go to ~/ksphmi/cpp and the Pi builds them (slow).
+hmi_copy_sources() {
+  log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp"
+  hmi_pack_sources |
     # Extracted files get the current time (-m), then unchanged ones get their old time back: a changed source is
     # always newer than the Pi's objects, even when another machine deployed (and built) in between with a later
     # clock time than this checkout's edit; unchanged sources keep the build incremental.
@@ -898,14 +1164,19 @@ deploy_hmi() {
       done
       find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
       mv cpp.new/* cpp/; rmdir cpp.new'
+}
 
+hmi_build_on_pi() {
   # The running service keeps its binary until the restart below: a failed build or test leaves it untouched.
   log "Building on $HMI_HOST (CMake Release, -j4) and running the tests there"
   hmi_ssh 'set -e; cd ~/ksphmi/cpp
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
     cmake --build build -j4
     cd build && ctest --output-on-failure' || die "build or tests failed on $HMI_HOST: the service was not restarted"
+}
 
+hmi_install_service() {
+  local pc_ip="$1"
   log "Installing ksphmi.service and restarting it"
   hmi_ssh "set -e
     cd ~/ksphmi
@@ -927,8 +1198,6 @@ deploy_hmi() {
   state="$(hmi_ssh 'echo "$(systemctl --user is-active ksphmi.service)/$(systemctl --user show ksphmi.service -p NRestarts --value)"' || true)"
   hmi_logs 15
   [ "$state" = "active/0" ] || die "the HMI service is not running cleanly on $HMI_HOST (state/restarts: $state, log above)"
-  hmi_kiosk
-  log "Done: HMI running on $HMI_HOST"
 }
 
 # Kiosk boot (no console text, loading screen, cursor off, persistent journal): setup-kiosk.sh needs root, so it
@@ -994,6 +1263,12 @@ case "${1:-help}" in
   hmi_desktop) test_hmi_container desktop ;;
   test_hmi_desktop) test_hmi_container desktop-smoke ;;
   deploy_hmi)        deploy_hmi ;;
+  hmi_sysroot)       shift; hmi_sysroot "$@" ;;
+  build_hmi_pi)      build_hmi_pi ;;
+  # internal: what Windows runs inside WSL for the two targets above, and deploy_hmi's toolchain probe
+  build_hmi_pi_here) build_hmi_pi_here ;;
+  hmi_sysroot_unpack) hmi_sysroot_unpack ;;
+  hmi_cross_check)   hmi_cross_env ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
