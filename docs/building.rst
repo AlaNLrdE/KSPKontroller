@@ -84,11 +84,60 @@ Deploying to KSP
 ----------------
 
 ``./ci deploy_all`` covers all three production projects. It checks KSP, the board and Pi SSH/package/linger
-prerequisites before building. After the local plugin/sketch builds, it runs ``deploy_hmi``, which copies
-``hmi-cpp/`` and builds/tests it natively on the Pi before restarting ``ksphmi.service``. Only then does it
+prerequisites before building. After the local plugin/sketch builds, it runs ``deploy_hmi``, which
+cross-compiles the HMI here, copies it to the Pi and runs its tests there before restarting ``ksphmi.service``
+(see `Cross-compiling the Pi HMI`_). Only then does it
 install the plugin and flash the Arduino, so an unreachable Pi, missing Pi prerequisite or failed HMI build/test
 stops the command before those hardware writes. This is not a transactional deployment: a later plugin or board
 failure does not roll back a successful Pi deployment. See :doc:`hmi` for the Pi's one-time setup and SSH alias.
+
+Cross-compiling the Pi HMI
+--------------------------
+
+The Pi never compiles the HMI (user, 2026-11-17: it builds far slower than the PC). This PC (inside WSL) or a
+Linux machine builds ``ksphmi`` and its test programs for the Pi's aarch64 Debian 13:
+
+``./ci hmi_sysroot [--force]``
+   Copies the Pi's headers, gcc runtime, crt objects, pkg-config files and the libraries SDL2, SDL2_ttf and
+   libstdc++ need (``ldd`` closure, about 60 MB, about 30 s) into ``build/pi-sysroot``.
+   ``hmi-cpp/cmake/pi-sysroot-files.sh`` lists them on the Pi. Absolute links are made relative, and ``lib``
+   points to ``usr/lib`` (merged ``/usr``). The copy is made again only when ``build/pi-sysroot/.stamp``
+   changes: the sha256 of the Pi's ``dpkg-query -W`` list plus the checksum of the file list.
+``./ci build_hmi_pi``
+   Runs ``hmi_sysroot``, then builds with ``hmi-cpp/cmake/aarch64-pi.cmake`` (``CMAKE_SYSROOT``, pkg-config
+   limited to the sysroot) and ``-DKSPHMI_TEST_SOURCE_DIR=.``, so that the tests read ``config.toml`` and
+   ``tests/data`` from their working directory on the Pi. The compiler is ``aarch64-linux-gnu-g++`` when it is
+   installed. Otherwise Ubuntu 24.04's cross g++ 13 is unpacked without root (``apt-get download``), and so is
+   Ninja. ccache is used when installed. On WSL the build tree, the toolchain and a mirror of the sysroot live
+   on WSL's ext4 (``~/.cache/ksphmi-cross/<cksum of the checkout path>``), because NTFS through ``/mnt/c`` is
+   about five times slower (108 s instead of 22 s cold, and 26 s instead of 0.1 s for a no-op). Only the
+   programs are copied to ``build/hmi-cpp-pi``.
+
+   Measured on this PC: 22 s cold, 6 s after touching one ``.cpp``, 4 s with nothing to do.
+
+   It then checks with ``readelf -V`` that the Pi's own ``libc``/``libstdc++``/``libgcc_s`` (their copies in the
+   sysroot) define every ``GLIBC_``/``GLIBCXX_``/``CXXABI_``/``GCC_`` version the programs need. A cross g++
+   newer than the Pi's gcc 14 would build fine and then fail at start on the Pi. g++ 13 needs at most
+   ``GLIBCXX_3.4.30``, and the Pi has ``3.4.33``.
+
+Once installed, the toolchain is one line in WSL or Ubuntu: ``sudo apt install -y g++-aarch64-linux-gnu cmake
+ninja-build``. Without sudo the unpacked copy is enough.
+
+``./ci deploy_hmi`` uses this path whenever a cross compiler is available. It takes a lock on the Pi
+(``~/ksphmi/.deploy.lock``, so only one deploy runs at a time; a lock older than 30 minutes is taken over with a
+warning). It then cross-builds, copies the programs and the hmi-cpp files (``config.toml``, assets, systemd,
+test data) to ``~/ksphmi/cpp.next`` and runs ``ksphmi_tests``, ``ksphmi_redux_tests``, ``ksphmi_intro_tests``,
+``ksphmi_render_tests``, ``test_setup_kiosk.py`` and ``test_screenshots.py`` there. Only when all of them
+pass does it replace ``~/ksphmi/cpp``: ``build/ksphmi`` is replaced by a rename, and the previous binary stays
+as ``build/ksphmi.prev``. Then it restarts the service. A failed test leaves the running HMI untouched and the
+new one in ``cpp.next`` for inspection. Without a cross compiler it prints a warning and falls back to the old
+on-Pi CMake build.
+
+macOS (not implemented yet): clang is already a cross compiler. ``./ci hmi_sysroot`` works there. A Darwin
+branch of ``build_hmi_pi_here`` would pass ``--target=aarch64-linux-gnu``, ``-fuse-ld=lld`` (Homebrew
+``lld``) and the sysroot, and would use the Pi's own gcc 14 libstdc++ headers and crt files from
+``usr/lib/gcc/aarch64-linux-gnu/14`` in the sysroot (already copied). The ABI check is then trivially
+satisfied.
 
 ``./ci deploy`` builds the plugin and copies ``KSPSerialIO.dll``, ``PsimaxSerial.dll`` and, the first
 time, ``config.xml`` to ``GameData/KSPSerialIO`` of a local KSP install, and ``KSPSerialIO.Hmi.dll`` to
