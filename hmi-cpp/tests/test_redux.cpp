@@ -1,6 +1,8 @@
 // KSP 2 Redux source: wire decoding, facility scenes, ship/VESSEL text replies, remote keyboard requests and the
 // nonce matching of the UDP exchange (loopback only, no game).
+#include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <fstream>
 #include <sstream>
@@ -215,6 +217,308 @@ TEST(redux_unresolved_name_keeps_the_source_alive) {
     src.stop();
     CHECK(snap && snap->state == State::Connecting);
     CHECK(snap && snap->detail.find("Redux") != std::string::npos);
+}
+
+// ------------------------------------------------------------------------------------------- KSP2ORB1 orbit report
+namespace {
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+    return s;
+}
+
+std::string golden() { return trimmed(read_file("redux_orb1_v1.txt")); }
+std::string maneuver_only() { return trimmed(read_file("redux_orb1_maneuver_v1.txt")); }
+
+std::vector<std::string> words(const std::string& s) {
+    std::vector<std::string> w;
+    std::istringstream in(s);
+    for (std::string t; in >> t;) w.push_back(t);
+    return w;
+}
+
+std::string joined(const std::vector<std::string>& w) {
+    std::string s;
+    for (const auto& t : w) s += (s.empty() ? "" : " ") + t;
+    return s;
+}
+
+/// The golden body with token `index` replaced.
+std::string with_token(size_t index, const std::string& value) {
+    auto w = words(golden());
+    w.at(index) = value;
+    return joined(w);
+}
+
+bool same(const Vec3& a, const Vec3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
+
+/// A loopback UDP socket pair: `server` bound to an ephemeral port, `client` connected to it.
+struct Loopback {
+    net::Fd server{net::open_socket(SOCK_DGRAM)}, client{net::open_socket(SOCK_DGRAM)};
+    sockaddr_in at{};
+    Loopback() {
+        at.sin_family = AF_INET;
+        at.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        socklen_t length = sizeof(at);
+        CHECK(server && client);
+        CHECK(::bind(server.get(), reinterpret_cast<sockaddr*>(&at), sizeof(at)) == 0);
+        CHECK(::getsockname(server.get(), reinterpret_cast<sockaddr*>(&at), &length) == 0);
+        CHECK(::connect(client.get(), reinterpret_cast<sockaddr*>(&at), sizeof(at)) == 0);
+        net::set_nonblocking(client.get(), true);
+    }
+    int port() const { return ntohs(at.sin_port); }
+};
+
+}  // namespace
+
+TEST(redux_orbit_golden_body_maps_to_the_snapshot_types) {
+    auto o = parse_redux_orbit(golden());
+    CHECK(o.has_value());
+    if (!o) return;
+    CHECK(o->ut == 1000.5 && o->body == "Kerbin" && o->mu == 3531600000000.0);
+    CHECK(same(o->position, {1300000, 0, 0}) && same(o->velocity, {0, 1648.2, 0}));
+    CHECK(!o->maneuver);
+    CHECK(o->target && o->target->name == "Mun" && o->target->body && o->target->radius == 200000);
+    CHECK(o->target && same(o->target->position, {-9000000, 7937253.9, 0}) && same(o->target->velocity, {-358.8, -406.8, 0}));
+    CHECK(o->approach && o->approach->ut == 1520.4 && !o->approach->planned);
+    CHECK(o->approach && same(o->approach->vessel, {-1288000, 0, 1300000}) && same(o->approach->target, {0, -8400000, 8000000}));
+    CHECK_EQ(o->encounters.size(), size_t(1));
+    if (o->encounters.size() == 1) {
+        const Encounter& e = o->encounters[0];
+        CHECK(e.body == "Mun" && e.radius == 200000 && e.mu == 65138000000.0 && e.soi == 2429559 && e.ut == 1500.25 && !e.planned);
+        CHECK(same(e.center, {-8000000, 8000000, 0}) && same(e.position, {1500000, -1800000, 0}) && same(e.velocity, {-300, -100, 0}));
+    }
+    Snapshot s;
+    const Axes axes = view_axes(o->position, o->velocity);
+    apply_redux_orbit(s, *o, axes);
+    CHECK(s.orbit_state && s.orbit_state->mu == o->mu && same(s.orbit_state->position, o->position));
+    CHECK(s.orbit_state && same(s.orbit_state->axes.x, axes.x) && same(s.orbit_state->axes.y, axes.y));
+    CHECK(!s.maneuver_orbit && s.target_orbit && s.approach && s.encounters.size() == 1);
+    // A Zup frame with the vessel in the x/y plane: the view plane is that plane, x right and y up.
+    CHECK_NEAR(axes.x.x, 1, 1e-12);
+    CHECK_NEAR(axes.y.y, 1, 1e-12);
+}
+
+TEST(redux_orbit_maneuver_only_dash_and_exponents) {
+    auto m = parse_redux_orbit(maneuver_only());
+    CHECK(m && m->body == "Mun" && m->mu == 1 && m->ut == 5 && !m->target && !m->approach && m->encounters.empty());
+    CHECK(m && m->maneuver && m->maneuver->ut == 9 && m->maneuver->soi == 0);  // 0 = unbounded
+    CHECK(m && m->maneuver && same(m->maneuver->position, {1, 0, 0}) && same(m->maneuver->velocity, {0, 1, 0}));
+    CHECK(!parse_redux_orbit("-"));
+    // C# "R" switches to an exponent for very large or small values.
+    auto w = words(golden());
+    w[2] = "3.5316E+12", w[7] = "1.6482E+03", w[9 - 1] = "1E-05", w[19 + 0] = "1.5204e3";
+    auto e = parse_redux_orbit(joined(w));
+    CHECK(e && e->mu == 3.5316e12 && e->velocity.y == 1648.2 && e->velocity.z == 1e-05 && e->approach && e->approach->ut == 1520.4);
+    // The whole reply: header, nonce and "-".
+    auto r = decode_redux_orbit("KSP2ORB1 77 " + golden(), "77");
+    CHECK(r && r->target && r->encounters.size() == 1);
+    CHECK(!decode_redux_orbit("KSP2ORB1 77 -", "77"));
+    CHECK(throws([] { decode_redux_orbit("KSP2ORB1 76 " + golden(), "77"); }));
+    CHECK(throws([] { decode_redux_orbit("KSP2ORB1 77", "77"); }));
+    CHECK(throws([] { decode_redux_orbit("KSP2HMI2 77 " + golden(), "77"); }));
+}
+
+TEST(redux_orbit_rejects_malformed_reports) {
+    const std::string g = golden();
+    auto w = words(g);
+    auto without_last = w;
+    without_last.pop_back();
+    std::vector<std::string> bad = {
+        "", " ", joined(without_last), g + " 0", g + " ", " " + g, g + "\n",
+        with_token(1, "4B657262696E"),         // uppercase hex
+        with_token(1, "4b6"),                  // odd hex
+        with_token(1, "4b65zz"),               // not hex
+        with_token(1, "-"),                    // no body name
+        with_token(1, "0a"),                   // control character in a name
+        with_token(2, "0"), with_token(2, "-1"),  // mu must be > 0
+        with_token(3, "nan"), with_token(3, "inf"), with_token(3, "1e999"), with_token(3, "0x10"), with_token(3, "1.5.2"),
+        with_token(3, "--1"), with_token(3, "1e"), with_token(3, "1,5"),
+        with_token(9, "8"), with_token(9, "-1"), with_token(9, "06"), with_token(9, "x"),
+        with_token(9, "7"), with_token(9, "2"), with_token(9, "4"),  // token counts that no longer match the mask
+        with_token(11, "2"), with_token(11, "true"),                  // target isBody flag
+        with_token(12, "-1"),                                         // target radius
+        with_token(20, "1.0"),                                        // approach planned flag
+        with_token(27, "5"), with_token(27, "2"), with_token(27, "0"),  // n out of range / not matching
+        with_token(28, "-"),                                          // encounter without a body name
+        with_token(30, "0"),                                          // encounter mu
+        with_token(33, "2"),                                          // encounter planned flag
+        g.substr(0, g.size() - 2),                                    // cut in the middle of the last group
+    };
+    // Approach without a target (mask 4 alone, with its 8 values).
+    bad.push_back("1 4b657262696e 1 1 0 0 0 1 0 4 1 0 1 0 0 0 1 0 0");
+    for (const std::string& b : bad) {
+        bool rejected = throws([&] { parse_redux_orbit(b); });
+        if (!rejected) std::fprintf(stderr, "accepted: %s\n", b.substr(0, 80).c_str());
+        CHECK(rejected);
+    }
+    // Five encounters is one more than the protocol allows even with the right token count.
+    std::string five = with_token(27, "5");
+    std::string group = g.substr(g.find(" 4d756e 200000 65138000000"));
+    for (int i = 0; i < 4; ++i) five += group;
+    CHECK(throws([&] { parse_redux_orbit(five); }));
+    std::string four = with_token(27, "4");
+    for (int i = 0; i < 3; ++i) four += group;
+    auto parsed = parse_redux_orbit(four);
+    CHECK(parsed && parsed->encounters.size() == 4);
+    // The same four-encounter report with 256-byte names and zero-padded numbers: valid up to 4096 bytes, rejected
+    // beyond (the reply limit), although every token alone is still well formed.
+    auto inflate = [&](size_t width) {
+        auto t = words(four);
+        std::string big;
+        for (int i = 0; i < 256; ++i) big += "4d";
+        t[1] = t[10] = big;
+        auto pad = [width](const std::string& v) {
+            const bool minus = v[0] == '-';
+            std::string digits = minus ? v.substr(1) : v;
+            if (digits.size() + minus < width) digits.insert(0, width - digits.size() - minus, '0');
+            return (minus ? "-" : "") + digits;
+        };
+        for (int i = 0; i < 4; ++i) {
+            const size_t at = 28 + 15 * size_t(i);
+            t[at] = big;
+            for (size_t k = 1; k < 15; ++k)
+                if (k != 5) t[at + k] = pad(t[at + k]);
+        }
+        return joined(t);
+    };
+    const std::string fits = inflate(8), oversized = inflate(30);
+    CHECK(fits.size() <= 4096 && oversized.size() > 4096);
+    CHECK(parse_redux_orbit(fits).has_value());
+    CHECK(throws([&] { parse_redux_orbit(oversized); }));
+}
+
+TEST(redux_orbit_tracker_cadence_staleness_and_vessel_changes) {
+    ReduxOrbitTracker t;
+    CHECK(t.due(0));
+    t.sent(10);
+    CHECK(!t.due(10.5) && t.due(11));
+    Snapshot s;
+    s.vessel = "Test", s.body = "Kerbin";
+    t.apply(s, 10);
+    CHECK(!s.orbit_state);  // nothing yet
+    t.received(parse_redux_orbit(golden()), "Test", 10);
+    Snapshot fresh = s;
+    t.apply(fresh, 12.9);
+    CHECK(fresh.orbit_state && fresh.target_orbit && fresh.approach && fresh.encounters.size() == 1 && t.holding());
+    const Axes first = fresh.orbit_state->axes;
+    Snapshot old = s;
+    t.apply(old, 13.1);  // no fresh reply for over 3 s
+    CHECK(!old.orbit_state && !old.target_orbit && old.encounters.empty() && !t.holding());
+    Snapshot after = s;
+    t.apply(after, 13.2);
+    CHECK(!after.orbit_state);  // dropped stays dropped
+    // The view axes stay fixed for the vessel and body while the orbit turns, as in the kRPC source.
+    auto turned = parse_redux_orbit(golden());
+    turned->position = {0, 1300000, 0}, turned->velocity = {0, 0, 1648.2};
+    t.received(turned, "Test", 20);
+    Snapshot kept = s;
+    t.apply(kept, 20);
+    CHECK(kept.orbit_state && same(kept.orbit_state->axes.x, first.x) && same(kept.orbit_state->axes.y, first.y));
+    // Another vessel or another body drops the report at once.
+    Snapshot other = s;
+    other.vessel = "Other";
+    t.apply(other, 20.1);
+    CHECK(!other.orbit_state && !t.holding());
+    t.received(turned, "Other", 21);
+    Snapshot recomputed = other;
+    t.apply(recomputed, 21);
+    CHECK(recomputed.orbit_state && !same(recomputed.orbit_state->axes.y, first.y));  // a new vessel: new axes
+    Snapshot moved = other;
+    moved.body = "Mun";
+    t.apply(moved, 21.1);
+    CHECK(!moved.orbit_state && !t.holding());
+    // "-" (no orbit data) drops it at once too.
+    t.received(parse_redux_orbit(golden()), "Test", 30);
+    t.received(std::nullopt, "Test", 30.5);
+    Snapshot dash = s;
+    t.apply(dash, 30.6);
+    CHECK(!dash.orbit_state);
+    t.reset();
+    CHECK(t.due(0) && !t.holding());
+}
+
+TEST(redux_orbit_exchange_matches_its_nonce) {
+    Loopback link;
+    const net::socket_t fd = link.server.get();
+    auto serve = [fd](std::vector<std::string> replies) {
+        return std::thread([fd, replies] {
+            char buffer[256];
+            sockaddr_in from{};
+            socklen_t size = sizeof(from);
+            if (::recvfrom(fd, buffer, sizeof(buffer), 0, reinterpret_cast<sockaddr*>(&from), &size) <= 0) return;
+            for (const auto& r : replies) ::sendto(fd, r.data(), int(r.size()), 0, reinterpret_cast<sockaddr*>(&from), size);
+        });
+    };
+    // A foreign nonce and a malformed reply are skipped; the matching one is taken.
+    auto mixed = serve({"KSP2ORB1 4 -", "KSP2ORB1 5 garbage", "KSP2ORB1 5 " + golden()});
+    auto got = redux_orbit_exchange(link.client.get(), "5", 0.5);
+    mixed.join();
+    CHECK(got && *got && (*got)->target && (*got)->target->name == "Mun");
+    auto dash = serve({"KSP2ORB1 6 -"});
+    auto none = redux_orbit_exchange(link.client.get(), "6", 0.5);
+    dash.join();
+    CHECK(none && !*none);  // answered: no orbit data
+    auto silent = serve({});
+    CHECK(!redux_orbit_exchange(link.client.get(), "7", 0.05));  // unsupported server: no reply at all
+    silent.join();
+}
+
+TEST(redux_source_requests_the_orbit_report_once_a_second_and_drops_it_when_stale) {
+    // A fake Redux plugin on a loopback port: KSP2HMI snapshots always, KSP2ORB1 while `orbit` is set.
+    Loopback link;
+    std::atomic<bool> running{true}, orbit{true};
+    std::atomic<int> orbit_requests{0}, snapshots{0};
+    const net::socket_t fd = link.server.get();
+    std::thread game([&] {
+        char buffer[256];
+        while (running) {
+            if (net::wait(fd, false, 20) <= 0) continue;
+            sockaddr_in from{};
+            socklen_t size = sizeof(from);
+            const long count = ::recvfrom(fd, buffer, sizeof(buffer), 0, reinterpret_cast<sockaddr*>(&from), &size);
+            if (count <= 0) continue;
+            const std::string request(buffer, size_t(count));
+            const std::string nonce = request.substr(request.find(' ') + 1);
+            std::string reply;
+            if (request.rfind("KSP2HMI", 0) == 0) {
+                reply = PACKET;
+                reply.replace(9, 2, nonce);
+                ++snapshots;
+            } else if (request.rfind("KSP2ORB1 ", 0) == 0) {
+                ++orbit_requests;
+                if (!orbit) continue;
+                reply = "KSP2ORB1 " + nonce + " " + golden();
+            } else {
+                continue;  // VESSEL view and the rest: an older plugin
+            }
+            ::sendto(fd, reply.data(), int(reply.size()), 0, reinterpret_cast<sockaddr*>(&from), size);
+        }
+    });
+    check::set_env("KSPHMI_REDUX_PORT", std::to_string(link.port()));
+    KrpcSource::Options o;
+    o.address = "127.0.0.1";
+    o.discovery = false;
+    ReduxSource src(o, false);
+    src.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2300));
+    auto with = src.latest();
+    const int first = orbit_requests;
+    orbit = false;  // the game stops answering KSP2ORB1 (stale report): the snapshot must keep flowing
+    std::this_thread::sleep_for(std::chrono::milliseconds(3600));
+    auto without = src.latest();
+    const int second = orbit_requests - first;
+    src.stop();
+    running = false;
+    game.join();
+    check::unset_env("KSPHMI_REDUX_PORT");
+    CHECK(first >= 2 && first <= 4);    // about 1 Hz, not with every 10 Hz snapshot
+    CHECK(second >= 3 && second <= 5);  // still asked about once a second while unanswered
+    CHECK(snapshots > 30);
+    CHECK(with && with->state == State::Flight && with->orbit_state && with->target_orbit && with->approach);
+    CHECK(with && with->encounters.size() == 1 && with->orbit_state->mu == 3531600000000.0);
+    CHECK(without && without->state == State::Flight && without->vessel == "Test");
+    CHECK(without && !without->orbit_state && !without->target_orbit && without->encounters.empty());
 }
 
 int main(int argc, char** argv) { return RUN_TESTS(argc, argv); }

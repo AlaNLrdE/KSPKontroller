@@ -91,3 +91,9 @@ want COM5 and port 50000 (it checks).
 - End-to-end HMI check without the game: start `KrpcServer(sim, "127.0.0.1", 0, 0, context_port=0)` in a Python
   script, write a temp config (`[krpc]` address/ports, `discovery = false`) and run `build/hmi-cpp/ksphmi --config
   F --flight-scene mechjeb --screenshot X.png --seconds 4`; the HMI log lines prove the procedures were called.
+- KSP 2 Redux orbit report (KSP2ORB1 v1): `tools/kspsim/redux.py` encodes/decodes the body with the C# "R" number
+  rules (.NET writes an exponent from 1E+15, Python repr only from 1e+16) and `--redux-orbit` answers only KSP2ORB1
+  on UDP 50003 (no KSP2HMI snapshot, so the HMI keeps using kRPC). The C++ ReduxSource can be driven end to end on
+  loopback with `KSPHMI_REDUX_PORT` (tests/test_redux.cpp fake plugin). On macOS `tools/verify.py` runs the sim tests
+  with system python3, which has no krpc: "sim: tests" FAILs there; run `build/venv/bin/python -m unittest
+  kspsim.test_kspsim` from tools/ instead.
