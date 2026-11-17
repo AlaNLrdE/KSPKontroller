@@ -1,16 +1,23 @@
-// STAND-IN: replace with the Mac agent's MechJebFormat.cs (same public API). It exists only so MechJebBridge
-// compiles and can be tested before the real format lands; it follows the agreed API and rules.
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text;
 
 namespace KSPSerialIO.Hmi
 {
-    /// <summary>MechJeb report format v1 (docs/hmi.rst, "MechJeb scene"; fixture hmi-cpp/tests/data/mechjeb_report_v1.txt).
-    /// Plain C#, no game types.</summary>
+    /// <summary>
+    /// The MechJeb report format v1 (docs/hmi.rst "MechJeb scene"): the key list with each value's kind, the report
+    /// text and the parsing of MechJebSet values. Plain C# without game or MechJeb types, so
+    /// tools/plugin-shipreport-tests checks it against hmi-cpp/tests/data/mechjeb_report_v1.txt, the fixture the Pi
+    /// parser and kspsim share. The reflection bridge formats each value with Number / Flag / Text and passes them
+    /// to Report in Keys order, omitting keys the installed MechJeb lacks.
+    /// </summary>
     public static class MechJebFormat
     {
+        /// <summary>Text format version, the first field of every report ("v=1").</summary>
+        public const int Version = 1;
+
         public enum Kind { Flag, Number, Integer, Text }
 
         public sealed class KeyInfo
@@ -20,16 +27,20 @@ namespace KSPSerialIO.Hmi
             public bool ReadOnly;
         }
 
-        private static KeyInfo K(string key, Kind kind, bool readOnly = false)
+        private static KeyInfo K(string key, Kind kind)
         {
-            return new KeyInfo { Key = key, Kind = kind, ReadOnly = readOnly };
+            return new KeyInfo { Key = key, Kind = kind, ReadOnly = false };
         }
 
-        /// <summary>Every v1 key, in report (fixture) order.</summary>
-        public static readonly IList<KeyInfo> Keys = new List<KeyInfo> {
-            K("ascent.enabled", Kind.Flag, true),
-            K("ascent.status", Kind.Text, true),
-            K("ascent.t_minus", Kind.Number, true),
+        private static KeyInfo RO(string key, Kind kind)
+        {
+            return new KeyInfo { Key = key, Kind = kind, ReadOnly = true };
+        }
+
+        private static readonly ReadOnlyCollection<KeyInfo> keys = new ReadOnlyCollection<KeyInfo>(new List<KeyInfo> {
+            RO("ascent.enabled", Kind.Flag),
+            RO("ascent.status", Kind.Text),
+            RO("ascent.t_minus", Kind.Number),
             K("ascent.path", Kind.Integer),
             K("ascent.altitude", Kind.Number),
             K("ascent.inclination", Kind.Number),
@@ -38,7 +49,7 @@ namespace KSPSerialIO.Hmi
             K("ascent.launch_lan_difference", Kind.Number),
             K("ascent.warp_count_down", Kind.Integer),
             K("ascent.classic.auto", Kind.Flag),
-            K("ascent.classic.auto_turn_start_altitude", Kind.Number, true),
+            RO("ascent.classic.auto_turn_start_altitude", Kind.Number),
             K("ascent.classic.turn_start_altitude", Kind.Number),
             K("ascent.classic.turn_start_velocity", Kind.Number),
             K("ascent.classic.turn_end_altitude", Kind.Number),
@@ -90,73 +101,92 @@ namespace KSPSerialIO.Hmi
             K("staging.fairing_max_q", Kind.Number),
             K("staging.fairing_min_altitude", Kind.Number),
             K("staging.fairing_max_flux", Kind.Number),
-        };
+        });
 
-        /// <summary>MechJebAction names.</summary>
+        /// <summary>Every key of the contract, in fixture order.</summary>
+        public static IList<KeyInfo> Keys { get { return keys; } }
+
+        /// <summary>The procedures MechJebAction accepts.</summary>
         public static readonly string[] Actions = {
             "ascent.engage", "ascent.disengage", "ascent.launch_rendezvous", "ascent.launch_target_plane",
             "ascent.abort_timed_launch", "all.disengage" };
 
-        /// <summary>"v=1 rev=N mj=STATE[ version=X]", then one key=value line per entry, '\n' endings.</summary>
+        /// <summary>The key's description, or null when the contract does not have it.</summary>
+        public static KeyInfo Find(string key)
+        {
+            foreach (KeyInfo k in keys)
+                if (k.Key == key) return k;
+            return null;
+        }
+
+        /// <summary>
+        /// The report: "v=1 rev=N mj=STATE[ version=X]" and one "key=value" line per entry, in the given order.
+        /// STATE is ok, missing, nocore or error:TEXT (TEXT percent-encoded here); version is null when unknown.
+        /// </summary>
         public static string Report(uint revision, string state, string version, IList<KeyValuePair<string, string>> values)
         {
             var sb = new StringBuilder();
-            sb.Append("v=1 rev=").Append(revision.ToString(CultureInfo.InvariantCulture)).Append(" mj=").Append(state);
-            if (version != null) sb.Append(" version=").Append(version);
+            sb.Append("v=").Append(Version).Append(" rev=").Append(revision.ToString(CultureInfo.InvariantCulture)).Append(" mj=");
+            const string error = "error:";
+            if (state != null && state.StartsWith(error, StringComparison.Ordinal))
+                sb.Append(error).Append(Text(state.Substring(error.Length)));
+            else
+                sb.Append(state);
+            if (version != null) sb.Append(" version=").Append(Text(version));
             sb.Append('\n');
             if (values != null)
-                foreach (KeyValuePair<string, string> kv in values) sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\n');
+                foreach (KeyValuePair<string, string> kv in values)
+                    sb.Append(kv.Key).Append('=').Append(kv.Value).Append('\n');
             return sb.ToString();
         }
 
-        /// <summary>Invariant culture, at most 6 decimals, trailing zeros trimmed; non-finite is "nan".</summary>
+        /// <summary>Invariant culture, at most 6 decimals, trailing zeros trimmed, no "-0"; non-finite is "nan".</summary>
         public static string Number(double v)
         {
             if (double.IsNaN(v) || double.IsInfinity(v)) return "nan";
-            string s = Math.Round(v, 6).ToString("0.######", CultureInfo.InvariantCulture);
+            string s = v.ToString("F6", CultureInfo.InvariantCulture);
+            if (s.IndexOf('.') >= 0) s = s.TrimEnd('0').TrimEnd('.');
             return s == "-0" ? "0" : s;
         }
 
-        public static string Flag(bool b) { return b ? "1" : "0"; }
-
-        /// <summary>Percent-encode every UTF-8 byte outside A-Z a-z 0-9 . _ -.</summary>
-        public static string Text(string s)
+        public static string Flag(bool b)
         {
-            if (string.IsNullOrEmpty(s)) return "";
-            var sb = new StringBuilder(s.Length);
-            foreach (byte b in Encoding.UTF8.GetBytes(s))
-            {
-                bool plain = (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') ||
-                             b == '.' || b == '_' || b == '-';
-                if (plain) sb.Append((char)b);
-                else sb.Append('%').Append(b.ToString("X2", CultureInfo.InvariantCulture));
-            }
-            return sb.ToString();
+            return b ? "1" : "0";
         }
 
-        /// <summary>"ok" and the value as a number (flags 0/1), or "invalid value". ReadOnly is the caller's check.</summary>
+        /// <summary>Percent-encoded UTF-8 text, the ship report's rule (ShipReportFormat.Escape).</summary>
+        public static string Text(string s)
+        {
+            return ShipReportFormat.Escape(s);
+        }
+
+        /// <summary>
+        /// Parse a MechJebSet value for the key's kind: "ok" or "invalid value". Flags take 0/1/true/false (number
+        /// 0 or 1), integers must be integral and fit an int, numbers must be finite; text gives number 0. The
+        /// caller checks ReadOnly.
+        /// </summary>
         public static string Parse(KeyInfo key, string value, out double number)
         {
             number = 0;
-            if (key == null || value == null) return "invalid value";
-            string v = value.Trim();
+            const string invalid = "invalid value";
+            if (key == null || value == null) return invalid;
             switch (key.Kind)
             {
-                case Kind.Flag:
-                    if (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase)) { number = 1; return "ok"; }
-                    if (v == "0" || v.Equals("false", StringComparison.OrdinalIgnoreCase)) { number = 0; return "ok"; }
-                    return "invalid value";
-                case Kind.Integer:
-                case Kind.Number:
-                    double d;
-                    if (!double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out d) ||
-                        double.IsNaN(d) || double.IsInfinity(d)) return "invalid value";
-                    if (key.Kind == Kind.Integer && (d != Math.Floor(d) || d < int.MinValue || d > int.MaxValue))
-                        return "invalid value";
-                    number = d;
+                case Kind.Text:
                     return "ok";
+                case Kind.Flag:
+                    if (value == "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)) { number = 1; return "ok"; }
+                    if (value == "0" || string.Equals(value, "false", StringComparison.OrdinalIgnoreCase)) { number = 0; return "ok"; }
+                    return invalid;
                 default:
-                    return "invalid value";
+                    double v;
+                    if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out v) ||
+                        double.IsNaN(v) || double.IsInfinity(v))
+                        return invalid;
+                    if (key.Kind == Kind.Integer && (Math.Floor(v) != v || v < int.MinValue || v > int.MaxValue))
+                        return invalid;
+                    number = v == 0 ? 0 : v;
+                    return "ok";
             }
         }
     }

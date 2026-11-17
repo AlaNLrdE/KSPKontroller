@@ -47,7 +47,7 @@ namespace KSPSerialIO.Hmi
             catch (Exception e)
             {
                 Exception inner = e is TargetInvocationException && e.InnerException != null ? e.InnerException : e;
-                state = "error:" + MechJebFormat.Text(inner.Message);
+                state = "error:" + inner.Message;  // MechJebFormat.Report percent-encodes the text
                 MechJebCache.Publish(state, version, null);
                 LogOnce("report failed: " + inner);
             }
@@ -165,7 +165,7 @@ namespace KSPSerialIO.Hmi
         /// <summary>KSPHMIFlight.MechJebSet: ok, unknown key, read only, invalid value or unavailable.</summary>
         public static string SetValue(string key, string value)
         {
-            MechJebFormat.KeyInfo info = MechJebMap.Info(key);
+            MechJebFormat.KeyInfo info = MechJebFormat.Find(key);
             MechJebMap.Entry entry = MechJebMap.Find(key);
             if (info == null || entry == null) return "unknown key";
             if (info.ReadOnly) return "read only";

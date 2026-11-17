@@ -96,7 +96,6 @@ namespace KSPSerialIO.Hmi
         };
 
         private static Dictionary<string, Entry> byKey;
-        private static Dictionary<string, MechJebFormat.KeyInfo> infoByKey;
 
         public static Entry Find(string key)
         {
@@ -108,18 +107,6 @@ namespace KSPSerialIO.Hmi
             }
             Entry found;
             return key != null && byKey.TryGetValue(key, out found) ? found : null;
-        }
-
-        public static MechJebFormat.KeyInfo Info(string key)
-        {
-            if (infoByKey == null)
-            {
-                var d = new Dictionary<string, MechJebFormat.KeyInfo>();
-                foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys) d[k.Key] = k;
-                infoByKey = d;
-            }
-            MechJebFormat.KeyInfo found;
-            return key != null && infoByKey.TryGetValue(key, out found) ? found : null;
         }
     }
 

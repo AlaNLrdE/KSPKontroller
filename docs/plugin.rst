@@ -273,12 +273,16 @@ part of the mod that references kRPC: ``KSPSerialIO.dll`` is unchanged and has n
   takes the active vessel's master core from ``MuMech.VesselExtensions.GetMasterMechJeb`` and rebuilds the report
   twice a second (and on the frame after a change) into ``MechJebCache``. ``KSPHMIFlight.MechJebRevision`` /
   ``MechJebReport`` only read the cache; ``MechJebSet`` and ``MechJebAction`` run on Unity's thread and mark it
-  dirty. ``MechJebMembers`` (plain C#) holds the key to member map, the cached reflection accessors (``Editable*``
+  dirty. In phase 1 ``all.disengage`` stops only the ascent autopilot, the only module the bridge drives; phase 2
+  modules add theirs. ``MechJebMembers`` (plain C#) holds the key to member map, the cached reflection accessors (``Editable*``
   through ``.Val``) and the cache, tested by ``tools/plugin-shipreport-tests`` against the v1 fixture. The log says
   ``mechjeb: <state> (MechJeb X)`` on each state change and ``mechjeb: <key>: ... has no <member>`` once per
   member the installed MechJeb lacks.
 * ``ShipReportFormat`` writes the text (format version 1, documented in :doc:`hmi`) and has no game types, so
   ``tools/plugin-shipreport-tests`` tests it against ``hmi-cpp/tests/data/ship_report_v1.txt``.
+* ``MechJebFormat`` (plain C#) holds the MechJeb report format v1 (:doc:`hmi`, *MechJeb scene*): the keys, their
+  kinds and read-only marks, the actions, the report text and the parsing of set values. The same test project
+  checks it against ``hmi-cpp/tests/data/mechjeb_report_v1.txt``.
 
 Stage values come from ``DeltaVStageInfo``. The situation and body are the delta-v app's own
 (``DeltaVGlobals.fetch.deltaVAppValues``: ``body``, ``situation``), and each stage's delta-v and TWR are picked the

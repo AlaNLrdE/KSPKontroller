@@ -7,8 +7,9 @@
   rebuilds report format v1 twice a second (`mj=missing|nocore|error:TEXT|ok`; a member the installed MechJeb lacks
   is omitted). New `KSPHMIFlight` procedures: `MechJebRevision`, `MechJebReport`, `MechJebSet(key, value)` and
   `MechJebAction(action)`; actions mirror MechJeb 2.15.3's Ascent Guidance window (engage / disengage as that
-  window, launch to rendezvous / target plane with its countdown times, abort timed launch; `all.disengage`
-  covers the ascent autopilot). `MechJebFormat` is a stand-in until the shared formatter lands.
+  window, launch to rendezvous / target plane with its countdown times, abort timed launch). In phase 1
+  `all.disengage` stops only the ascent autopilot (the only module the bridge drives); later modules add theirs.
+  The report text comes from the shared `MechJebFormat`.
   `KSPSerialIO.dll` only changes version. No serial packet or firmware change.
 
 * **0.19.7.3**: 20261116

@@ -100,21 +100,21 @@ namespace FakeMuMech
 
 internal static partial class Program
 {
-    private static void MechJeb(string root)
+    private static void MechJebBridge(string root)
     {
         // Map completeness: one entry per format key, no extra keys, only the four modules.
         var seen = new HashSet<string>();
         foreach (MechJebMap.Entry e in MechJebMap.Entries)
         {
             Check(seen.Add(e.Key), "mechjeb map: duplicate " + e.Key);
-            Check(MechJebMap.Info(e.Key) != null, "mechjeb map: " + e.Key + " is not a format key");
+            Check(MechJebFormat.Find(e.Key) != null, "mechjeb map: " + e.Key + " is not a format key");
             Check(e.Module == MechJebMap.Ascent || e.Module == MechJebMap.Settings || e.Module == MechJebMap.Thrust ||
                   e.Module == MechJebMap.Staging, "mechjeb map: module " + e.Module);
             Check(e.Members.Length > 0, "mechjeb map: no member for " + e.Key);
         }
         foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys)
             Check(MechJebMap.Find(k.Key) != null, "mechjeb map: format key " + k.Key + " has no member");
-        Check(MechJebMap.Find("nope") == null && MechJebMap.Info(null) == null, "mechjeb map: unknown key");
+        Check(MechJebMap.Find("nope") == null && MechJebFormat.Find(null) == null, "mechjeb map: unknown key");
 
         var ap = new FakeMuMech.MechJebModuleAscentBaseAutopilot { Enabled = true };
         var settings = new FakeMuMech.MechJebModuleAscentSettings();

@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The editor ship report text (KSPSerialIO.Hmi) without KSP or kRPC: ShipReportFormat.cs has no game types; nor do VesselViewFormat.cs,
-       MechJebFormat*.cs and MechJebMembers.cs (MechJeb bridge map, reflection accessors and cache). -->
+       MechJebFormat.cs and MechJebMembers.cs (MechJeb bridge map, reflection accessors and cache). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
@@ -8,7 +8,7 @@
   <ItemGroup>
     <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\ShipReportFormat.cs" Link="ShipReportFormat.cs" />
     <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\VesselViewFormat.cs" Link="VesselViewFormat.cs" />
-    <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\MechJebFormat.Standin.cs" Link="MechJebFormat.Standin.cs" />
+    <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\MechJebFormat.cs" Link="MechJebFormat.cs" />
     <Compile Include="..\..\KSPSerialIO\KSPSerialIO.Hmi\MechJebMembers.cs" Link="MechJebMembers.cs" />
   </ItemGroup>
 </Project>

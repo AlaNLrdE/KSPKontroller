@@ -398,6 +398,13 @@ the HMI parser and kspsim). The first line is ``v=1 rev=N mj=STATE`` plus ``vers
 stays unknown, never zero. Values are numbers in SI units (metres, m/s, seconds, degrees, pascals, fractions 0-1,
 flags 0/1) or percent-encoded text. Readers ignore unknown keys, so later modules add lines without a new version.
 
+On the plugin side ``MechJebFormat.cs`` (``KSPSerialIO.Hmi``, plain C# without game or MechJeb types) holds the
+key list with each key's kind (flag, number, integer, text) and read-only mark, the actions, the report text,
+number formatting (invariant culture, at most six decimals, trailing zeros trimmed, ``nan`` when not finite) and
+the parsing of ``MechJebSet`` values; the reflection bridge only reads and writes MechJeb members.
+``tools/plugin-shipreport-tests`` (``./ci verify``, *ship report: plugin format*) requires its keys to match the
+fixture's in order and its report to reproduce the fixture byte for byte.
+
 Keys map to MechJeb 2.15.3 members (reflected on the shared install, 2026-11-17): ``AS`` is
 ``MechJebCore.AscentSettings`` (``MechJebModuleAscentSettings``), ``TC`` ``MechJebCore.Thrust``
 (``MechJebModuleThrustController``), ``SC`` ``MechJebCore.Staging`` (``MechJebModuleStagingController``), ``AP``

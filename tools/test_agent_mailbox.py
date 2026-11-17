@@ -11,7 +11,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from agent_mailbox import Journal, make_server, receive, request, pending_messages, mark_handled, collect, history_messages, digest
+from agent_mailbox import Journal, LockBusy, make_server, receive, request, pending_messages, mark_handled, collect, history_messages, digest
 
 
 class MailboxTest(unittest.TestCase):
@@ -35,6 +35,51 @@ class MailboxTest(unittest.TestCase):
         data = dict(sender='mac', to='pc', text='Ready to test: Δv', id='one')
         data.update(changes)
         return request(self.config, '/messages', data)
+
+    def test_agents_on_one_host_have_separate_identities_and_inboxes(self):
+        # Two agents on the PC (Claude Code and Codex) must never share a config: each one collects only its own.
+        self.send(sender='mac', to='pc-claude', text='REQUEST bridge', id='c1')
+        self.send(sender='mac', to='pc-codex', text='REQUEST pi setup', id='x1')
+        claude, codex = dict(self.config, peer='pc-claude'), dict(self.config, peer='pc-codex')
+        with contextlib.redirect_stdout(io.StringIO()):
+            collect(claude, self.root / 'pc-claude.json', acknowledge=False)
+        self.assertEqual([m['text'] for m in pending_messages(claude, self.root / 'pc-claude.handled.json')],
+                         ['REQUEST bridge'])
+        self.assertEqual([m['text'] for m in pending_messages(codex, self.root / 'pc-codex.handled.json')],
+                         ['REQUEST pi setup'])  # still on the server: Claude's collect did not take it
+        for bad in ('pc_codex', 'PC', 'laptop', 'pc-', 'pc-' + 'x' * 21):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.send(sender='mac', to=bad, id='bad-' + bad)
+            self.assertEqual(caught.exception.code, 400)
+            caught.exception.close()
+
+    def test_shared_resource_locks_have_one_holder_and_expire(self):
+        lock = lambda **d: request(self.config, '/locks', d)
+        got = lock(action='acquire', name='pi-deploy', holder='mac-claude', ttl=600, reason='deploy 68ce1a7')
+        self.assertTrue(got['acquired'])
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            lock(action='acquire', name='pi-deploy', holder='pc-claude', ttl=600, reason='deploy 6e37210')
+        self.assertEqual(caught.exception.code, 409)
+        self.assertEqual(json.loads(caught.exception.read())['lock']['holder'], 'mac-claude')
+        caught.exception.close()
+        with self.assertRaises(urllib.error.HTTPError) as caught:  # only the holder releases it
+            lock(action='release', name='pi-deploy', holder='pc-codex')
+        self.assertEqual(caught.exception.code, 409)
+        caught.exception.close()
+        self.assertTrue(lock(action='acquire', name='pi-deploy', holder='mac-claude', ttl=900, reason='renew')['acquired'])
+        self.assertEqual([l['name'] for l in request(self.config, '/locks')['locks']], ['pi-deploy'])
+        self.assertEqual(Journal(self.journal.path).locks['pi-deploy']['holder'], 'mac-claude')  # survives restart
+        self.assertTrue(lock(action='release', name='pi-deploy', holder='mac-claude')['released'])
+        self.assertEqual(request(self.config, '/locks')['locks'], [])
+        # A crashed holder cannot block for ever: the lock expires by itself
+        self.journal.lock('acquire', 'board-flash', 'pc-codex', 60, 'flash', now=1000.0)
+        with self.assertRaises(LockBusy):
+            self.journal.lock('acquire', 'board-flash', 'mac-claude', 60, 'flash', now=1030.0)
+        self.assertTrue(self.journal.lock('acquire', 'board-flash', 'mac-claude', 60, 'flash', now=1061.0)['acquired'])
+        for bad in (dict(name='Pi Deploy', ttl=600, reason='x'), dict(name='pi-deploy', ttl=5, reason='x'),
+                    dict(name='pi-deploy', ttl=600, reason='')):
+            with self.assertRaises(ValueError):
+                self.journal.lock('acquire', bad['name'], 'mac', bad['ttl'], bad['reason'])
 
     def test_auth_and_no_file_or_config_exposure(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
