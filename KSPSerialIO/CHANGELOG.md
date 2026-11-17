@@ -1,5 +1,17 @@
 # Changelog
 
+* **0.19.8.0**: 20261116
+  MechJeb scene, plugin side (docs/hmi.rst, "MechJeb scene"): `KSPSerialIO.Hmi.dll` reads and changes the active
+  vessel's MechJeb by reflection, so MechJeb stays optional (no compile-time reference). `MechJebBridge` (flight
+  `KSPAddon`) finds `MuMech.MechJebCore`, takes the vessel's master core (`VesselExtensions.GetMasterMechJeb`) and
+  rebuilds report format v1 twice a second (`mj=missing|nocore|error:TEXT|ok`; a member the installed MechJeb lacks
+  is omitted). New `KSPHMIFlight` procedures: `MechJebRevision`, `MechJebReport`, `MechJebSet(key, value)` and
+  `MechJebAction(action)`; actions mirror MechJeb 2.15.3's Ascent Guidance window (engage / disengage as that
+  window, launch to rendezvous / target plane with its countdown times, abort timed launch). In phase 1
+  `all.disengage` stops only the ascent autopilot (the only module the bridge drives); later modules add theirs.
+  The report text comes from the shared `MechJebFormat`.
+  `KSPSerialIO.dll` only changes version. No serial packet or firmware change.
+
 * **0.19.7.3**: 20261116
   HMI throttle readout: `KSPHMIFlight.Throttle()` returns the main throttle KSP applies to the active vessel
   (`ctrlState.mainThrottle`). kRPC's `Control.Throttle` reads kRPC's own pilot state: it stayed 0.0 in every

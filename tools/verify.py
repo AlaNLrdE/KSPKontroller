@@ -1007,24 +1007,33 @@ def check_vessel_view_contract(ctx):
     server = read(os.path.join(ROOT, "tools", "kspsim", "krpcserver.py"))
     data = os.path.join(HMI_DIR, "tests", "data")
     procedures = ("SetAxes", "SetThrottle", "NudgeThrottle", "Throttle", "VesselShape", "VesselState")
+    # MechJeb scene (docs/hmi.rst): plugin side first; the HMI and kspsim join this list when they call them.
+    mechjeb = {"MechJebRevision": "uint", "MechJebReport": "string", "MechJebSet": "string", "MechJebAction": "string"}
+    bridge = read(os.path.join(HMI_PLUGIN_DIR, "MechJebBridge.cs"))
+    members = read(os.path.join(HMI_PLUGIN_DIR, "MechJebMembers.cs"))
     problems = []
     for what, ok in (
             ("service KSPHMIFlight in the Flight scene",
              re.search(r'KRPCService\(Name = "KSPHMIFlight", GameScene = GameScene\.Flight\)', service)),
             ("plugin procedures " + "/".join(procedures), all("public static %s %s(" % ("string" if n.startswith("Vessel") else "float" if n == "Throttle" else "void", n) in service for n in procedures)),
+            ("plugin MechJeb procedures " + "/".join(mechjeb),
+             all("public static %s %s(" % (t, n) in service for n, t in mechjeb.items())),
+            ("MechJeb stays optional (no MechJeb2 reference, found by reflection)",
+             "MechJeb2" not in project and '"MuMech.MechJebCore"' in bridge and "KRPC" not in bridge and "KRPC" not in members),
             ("HMI calls every KSPHMIFlight procedure", '"KSPHMIFlight"' in telemetry and all('"%s"' % n in telemetry for n in procedures)),
             ("kspsim serves every KSPHMIFlight procedure", 'name="KSPHMIFlight"' in server and all('"%s"' % n in server for n in procedures)),
             ("shared fixtures exist", all(os.path.isfile(os.path.join(data, f)) for f in ("vessel_shape_v1.txt", "vessel_state_v1.txt"))),
             ("HMI tests and kspsim read the fixtures", "vessel_shape_v1.txt" in hmi_tests and "vessel_shape_v1.txt" in server),
             ("only HmiFlightService.cs references kRPC", "KRPC" not in addon and "KRPC" not in fmt),
             ("project builds every VESSEL source",
-             all('Compile Include="%s"' % f in project for f in ("HmiFlightService.cs", "VesselViewFormat.cs", "VesselViewReport.cs")))):
+             all('Compile Include="%s"' % f in project for f in ("HmiFlightService.cs", "VesselViewFormat.cs", "VesselViewReport.cs",
+                                                                  "MechJebMembers.cs", "MechJebBridge.cs")))):
         if not ok:
             problems.append(what)
     if problems:
         report("FAIL", "vessel view: contract", "; ".join(problems))
     else:
-        report("PASS", "vessel view: contract", "KSPHMIFlight (Flight) keys and VesselShape/VesselState, format v1 in plugin, HMI and kspsim")
+        report("PASS", "vessel view: contract", "KSPHMIFlight (Flight) keys and VesselShape/VesselState, format v1 in plugin, HMI and kspsim; plugin MechJeb procedures")
 
 
 def check_ship_report_contract(ctx):

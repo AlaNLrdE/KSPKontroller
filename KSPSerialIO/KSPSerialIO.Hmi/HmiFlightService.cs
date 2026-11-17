@@ -54,6 +54,37 @@ namespace KSPSerialIO.Hmi
             return VesselViewCache.State;
         }
 
+        /// <summary>The MechJeb report's revision: it moves when the report text changes (refreshed twice a second).
+        /// Reads MechJebCache only.</summary>
+        [KRPCProcedure]
+        public static uint MechJebRevision()
+        {
+            return MechJebCache.Revision;
+        }
+
+        /// <summary>The MechJeb report (format v1, docs/hmi.rst "MechJeb scene"). Reads MechJebCache only.</summary>
+        [KRPCProcedure]
+        public static string MechJebReport()
+        {
+            return MechJebCache.Report;
+        }
+
+        /// <summary>Change one MechJeb setting by report key and value (report units): "ok", "unknown key",
+        /// "read only", "invalid value" or "unavailable" (no MechJeb or no core on the active vessel).</summary>
+        [KRPCProcedure]
+        public static string MechJebSet(string key, string value)
+        {
+            return MechJebBridge.SetValue(key, value);
+        }
+
+        /// <summary>Run a MechJeb action (ascent.engage, ascent.disengage, ascent.launch_rendezvous,
+        /// ascent.launch_target_plane, ascent.abort_timed_launch, all.disengage): the same replies as MechJebSet.</summary>
+        [KRPCProcedure]
+        public static string MechJebAction(string action)
+        {
+            return MechJebBridge.Act(action);
+        }
+
         /// <summary>Move the main throttle by `delta` (clamped to 0..1), like a frame of held Shift / Ctrl.</summary>
         [KRPCProcedure]
         public static void NudgeThrottle(float delta)

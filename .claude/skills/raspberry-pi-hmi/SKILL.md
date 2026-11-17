@@ -365,3 +365,12 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - Never use `M_PI` in hmi-cpp: MSYS2 UCRT64 (the native Windows build) does not define it; use the project's `PI`.
 - MechJeb on the shared install is 2.15.3 (MechJeb2.dll, MechJebLib.dll; no KRPC.MechJeb): the MechJeb scene reads it
   through our own KSPHMIFlight procedures by reflection (docs/hmi.rst "MechJeb scene").
+- MechJeb 2.15.3 Ascent Guidance (MechJebModuleAscentMenu IL, read with REA inspect_managed_members + a tiny IL
+  walker; REA has no managed decompiler on Windows): Engage/Disengage = `Ascent.Users.Add/Remove(menu)` (menu =
+  `core.GetComputerModule("MechJebModuleAscentMenu")`); launch buttons only when `LandedOrSplashed` and
+  `Target.NormalTargetExists` (rendezvous hidden for AscentType 1): rendezvous = `LaunchingToRendezvous=true`,
+  `StartCountdown(vs.time + menu.TimeToPhaseAngle(LaunchPhaseAngle, MainBody, vs.longitude, TargetOrbit))`; plane =
+  `MechJebLib.Functions.Astro.MinimumTimeToPlane(rotationPeriod, lat, celestialLongitude, LAN - LaunchLANDifference,
+  inc)` -> (time, inclination), countdown + `DesiredInclination.Val = inclination`; abort clears the four
+  `LaunchingTo*` and `TimedLaunch`. Launching does not engage the autopilot. `set_AscentType` also calls
+  `DisableAscentModules`: write the path through the property, not `AscentTypeInteger`.

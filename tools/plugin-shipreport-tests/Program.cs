@@ -8,7 +8,7 @@ using System.IO;
 using System.Threading;
 using KSPSerialIO.Hmi;
 
-internal static class Program
+internal static partial class Program
 {
     private static int failures;
 
@@ -273,6 +273,7 @@ internal static class Program
         string root = args.Length > 0 ? args[0] : Path.Combine("..", "..");
         EditorContract(root);
         VesselView(root);
+        MechJebBridge(root);
         // A comma decimal separator must not leak into the report.
         Thread.CurrentThread.CurrentCulture = new CultureInfo("es-MX");
         string golden = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "ship_report_v1.txt")).Replace("\r\n", "\n");
@@ -310,7 +311,7 @@ internal static class Program
         MechJeb(root);
 
         Console.WriteLine(failures == 0
-            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew, vessel view, MechJeb"
+            ? "ship report format: golden text, escaping, pending, revisions, stage events, situations, Kerbin ASL, crew, vessel view, MechJeb, MechJeb bridge"
             : failures + " failures");
         return failures == 0 ? 0 : 1;
     }
