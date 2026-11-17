@@ -195,85 +195,82 @@ Agent coordination mailbox
 --------------------------
 
 ``tools/agent_mailbox.py`` is a development-only, standard-library LAN service, separate from
-all game protocols. The Mac hosts the active queue in ``build/agent-mailbox/shared.jsonl``.
-``mac`` and ``pc`` clients use a bearer token in private, ignored configuration files. Bind only
-the intended LAN interface (default loopback), use port 50380, and keep this plain HTTP endpoint
-on a trusted local network. Do not expose it through a router or send account credentials.
+all game protocols. The Mac hosts it with its log in ``build/agent-mailbox/shared.jsonl``.
+Every agent has its own private, ignored config file holding the server URL, the shared bearer
+token and the agent's own identity. Bind only the intended LAN interface (default loopback),
+use port 50380, and keep this plain HTTP endpoint on a trusted local network. Do not expose it
+through a router or send account credentials.
 
 Use a stable LAN hostname in each mailbox URL, not a DHCP address. On the LAN host, launch
 ``serve --bind 0.0.0.0`` so the listening socket remains usable when an IPv4 interface address
 changes. The default loopback binding is for local tests. Each new HTTP request resolves its
 hostname again; a running watcher also reloads its private config before each retry, so a
-URL/token update does not require restarting that watcher. Keep the peer identity unchanged.
+URL/token update does not require restarting that watcher. Keep the identity unchanged.
 HTTP operations retry transient transport/DNS failures up to three times, resolving the name
-again on each attempt. Mutation IDs and archive digests make retries safe even when the server
-committed a message but its reply was lost. Authentication/client errors fail immediately.
+again on each attempt. Message IDs and state-change digests make retries safe even when the
+server committed a change but its reply was lost. Authentication/client errors fail immediately.
 After bounded retries, watch keeps reconnecting; one-shot commands fail visibly and can be
 retried with the same message ID. Hosts must advertise/resolve their names on the actual LAN.
 Using a hostname alone does not install a Windows mDNS responder or configure a router.
 
-Initialize with ``python tools/agent_mailbox.py init --url http://HOST:50380 --peer mac`` and
-start ``serve --bind HOST``. PC initializes a separate config with the same URL/token and
-``--peer pc``. The public script is available at ``/client.py`` for bootstrap; no directories,
-credentials or history files are served. Pass ``--config PATH`` before the subcommand::
+The server is initialized once with ``init --url http://HOST:50380 --peer mac-claude`` (which
+creates the token) and started with ``serve --bind HOST``. Every other agent creates its own
+config with the same URL and token: ``init --url ... --peer pc-codex --token TOKEN``, at
+``build/agent-mailbox/pc-codex.json``. The public script is available at ``/client.py`` for
+bootstrap; no directories, credentials or history files are served. Pass ``--config PATH``
+before the subcommand::
 
+   python tools/agent_mailbox.py register
    python tools/agent_mailbox.py status
    python tools/agent_mailbox.py collect
    python tools/agent_mailbox.py pending
-   python tools/agent_mailbox.py send --to pc --text "RESULT #3: commit, tests, findings"
-   python tools/agent_mailbox.py done --seq 3
+   python tools/agent_mailbox.py send --to pc-codex --text "REQUEST: rebuild the HMI at 6f887e7"
+   python tools/agent_mailbox.py send --to pc --owner pc-codex --deadline 60 --text "REQUEST: ..."
+   python tools/agent_mailbox.py track --id ID
+   python tools/agent_mailbox.py done --id ID
    python tools/agent_mailbox.py watch --once
 
-The agreed lifecycle is archive, remove, acknowledge, work, result:
+The agreed lifecycle is archive, acknowledge, work, result, done:
 
 * At turn start/end and long-task progress checkpoints, run ``collect``. It atomically writes
-  incoming messages to the receiver's ``*.history.md``, flushes the file, then asks the server
-  to remove only those messages. Recipient and copied-content digest must match. Never remove
-  a message before its local history copy succeeds. ``collect --no-ack`` is for migrating
-  messages already acknowledged.
+  each incoming copy to the agent's ``*.history.md``, flushes the file, and only then records
+  ``archived`` for that agent on the server. It never deletes other recipients' copies. Each
+  entry is keyed by message id and recipient, so a retried collect never duplicates it.
+  ``collect --no-ack`` is for migrating messages already acknowledged.
 * Work from that Markdown history. Human-readable entries include a machine-readable copy so
-  ``pending`` can recover tasks after the shared queue is empty. The independent ``*.handled.json``
-  completion watermark keeps archived requests pending until explicitly completed.
-* ``collect`` sends one deterministic working ACK for each unhandled REQUEST. The sender reads,
-  archives and removes that ACK with its own ``collect``. ACK and RESULT messages do not trigger
-  automatic ACK replies, avoiding loops. Leave outgoing messages for their recipient to collect.
-* After completing the request, send RESULT with its number and findings, then ``done --seq N``
-  locally. This accepts only the oldest pending incoming message. An ACK is not completed work.
-  Also read/mark informational ACK and RESULT messages handled; archive deletion does not remove
-  the history. Migration from the old client may expose previously read messages: mark only
-  work already completed.
-
-The server uses atomic file replacement under a lock and persistent monotonically increasing
-sequence numbers, including when the queue becomes empty. Its first JSONL record holds protocol
-version, last sequence and compact ID/digest receipts; remaining records are active messages.
-Receipts contain no old message bodies and prevent retried sends from resurrecting deleted
-messages. Reuse ``send --id ID`` after an uncertain send. Legacy append-only journals load without
-resetting IDs. Corruption in the middle is rejected; a partial legacy final write is recovered.
-One collector per peer/config is required. Notification cursors remain valid across removals.
+  ``pending`` can recover tasks after the server compacted them.
+* ``collect`` sends one deterministic working ACK (id ``ack-IDENTITY-SEQ``) for each REQUEST the
+  agent owns and records ``acked``. ACK, RESULT and NOTICE messages never trigger ACK replies,
+  avoiding loops. Leave outgoing messages for their recipients.
+* After completing the request, send RESULT with its number and findings, then ``done --id ID``
+  (or ``--seq N``), in any order. ``done`` is stored on the server and in the local
+  ``*.done.json``, so a lost local file does not resurrect finished work. Also read and mark
+  informational messages done; an ACK is not completed work.
 
 ``watch --once`` is a background notification hint: it long-polls without model calls, prints
-incoming messages and exits. Re-arm it after receiving a notification, then collect/process it.
+incoming messages and the ``acked``/``done``/``reassigned`` changes of the agent's own REQUESTs
+(``MAILBOX TRACK`` lines), and exits. Re-arm it after a notification, then collect/process it.
 ``watch`` without ``--once`` keeps running. Notifications do not replace collect/pending checks:
 in the observed Codex host, completed background output was not injected automatically into the
 conversation. The script cannot create model turns or awaken a closed chat. Transport outages
-retry without model polling; invalid credentials/cursors fail visibly. The Mac must stay awake
-with the server running; no auto-start service or firewall changes are installed.
+retry without model polling; invalid credentials or a lost session fail visibly. The Mac must stay
+awake with the server running; no auto-start service or firewall changes are installed.
 
-Arbitration between agents (protocol 3)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Arbitration between agents
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Several agents can work on one machine (on 2026-11-17 Claude Code and Codex both ran on the PC with the same ``pc``
-config: their ``collect`` runs removed each other's messages and replayed old ACKs). The rules:
+config: their ``collect`` runs removed each other's messages and replayed old ACKs). The rules, introduced with
+protocol 3 and enforced by protocol 4:
 
 * **One identity per agent**, ``HOST-AGENT``: ``mac-claude``, ``pc-claude``, ``pc-codex``, ``pi-claude``. Each agent
-  has its own config file named after it (``init --peer pc-codex`` writes ``pc-codex.json``), hence its own cursor,
-  history and handled files, and runs at most one collector and one watcher. Two agents never share a config. The
-  bare ``mac`` / ``pc`` identities are legacy: an agent that used one collects that inbox until it is empty, then
-  stops using it. The server rejects malformed identities.
-* **One owner per request.** Address a REQUEST to exactly one agent; that agent owns it until its RESULT. To ask
-  several agents, send one message to each. An agent that should not do the work replies ``RESULT #N declined:
-  owner is X`` instead of starting it. The REQUEST or its ACK names the files the owner will edit; no two agents edit
-  the same file at the same time (work in separate worktrees, as for subagents).
+  has its own config file named after it, hence its own session, history, done, cursor and track files, and runs at
+  most one collector and one watcher. Two agents never share a config. The bare ``mac`` / ``pc`` / ``pi`` names are
+  host groups in protocol 4; their old protocol 3 inboxes are drained once (see migration below).
+* **One owner per request.** A REQUEST has exactly one owner among its recipients; that agent owns it until its
+  RESULT and ``done``. The other recipients receive it for information. An agent that should not do the work replies
+  ``RESULT #N declined: owner is X``, or the coordinator reassigns it. The REQUEST or its ACK names the files the
+  owner will edit; no two agents edit the same file at the same time (separate worktrees, as for subagents).
 * **Locks for shared resources.** Before using one, the agent acquires its lock and releases it after its RESULT:
   ``pi-deploy`` (``./ci deploy_hmi``), ``ksp-gamedata`` (plugin install into the shared game, which still needs the
   user's OK and KSP closed), ``board-flash`` (sketch upload and board tests) and ``push-main`` (push to
@@ -285,8 +282,7 @@ config: their ``collect`` runs removed each other's messages and replayed old AC
 
   A lock held by another agent is refused with its holder, reason and expiry (HTTP 409). Wait or message the
   holder; never work around it. Locks expire by themselves (TTL 60 s to 4 h, default 30 min), so a crashed agent
-  cannot block for ever; renew a long job by acquiring again. Locks persist in the journal header
-  (``mailbox_version`` 3; version 2 journals still load).
+  cannot block for ever; renew a long job by acquiring again. Locks persist in the log.
 * **Delegate and stay available** (user, 2026-11-17). An agent that receives new work through the mailbox or from
   the user does not do it inline: it delegates it at once to other agents (its own subagents in their own
   worktrees, or another mailbox agent as an addressed REQUEST) and stays free to take and schedule further work in
@@ -295,52 +291,74 @@ config: their ``collect`` runs removed each other's messages and replayed old AC
   (a reply, a status check, a merge). Delegated agents follow the same file-ownership, lock and consent rules.
 * Messages remain coordination data: a lock or a message never grants deploy, flash or push consent.
 
-Protocol 4 for many agents (proposed 2026-11-17, not implemented)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Protocol 4 (approved 2026-11-17)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Three clients (Mac Claude, PC Claude, PC Codex) already share the mailbox and more will join. Protocol 2/3 removes
-a message from the server when its recipient collects it: an identity shared by two agents loses messages for one
-of them, a typo in ``--to`` queues a message nobody will read, and a sender cannot see whether its message was read.
-Protocol 4 keeps every message until every recipient has finished with it, and tracks each recipient separately.
+Protocol 2/3 removed a message when its recipient collected it: an identity shared by two agents lost messages for
+one of them, a typo in ``--to`` queued a message nobody would read, and a sender could not see whether its message
+was read. Protocol 4 keeps every message until every recipient has finished with it and tracks each recipient
+separately. ``/health`` reports ``"protocol": 4``.
 
-* **Registered agents and exclusive sessions.** An agent registers ``HOST-AGENT`` with its tool and working
-  directory and receives a session lease, renewed by its watcher (heartbeat about every 25 s). A second client with
-  the same identity is refused while the lease is alive (``--takeover`` only after the old one is confirmed dead),
-  so two agents can never share an inbox again. ``agents`` lists identities, tool, last heartbeat and state
-  (active, idle, gone).
-* **Addressing expanded at send time.** ``--to`` accepts one identity, a list, a host group (``pc`` = every agent
-  registered on the PC) or ``all``. The server expands it into an explicit recipient list stored with the
-  message, so a broadcast gives every agent its own copy. Sending to an unknown identity is an error, never a
-  silent queue. A REQUEST names exactly one ``--owner`` among the recipients; the others receive it for
-  information.
-* **Per-recipient delivery state on the server.** Each recipient of a message moves through ``queued`` →
-  ``delivered`` (its client fetched it) → ``archived`` (copied to its local history) → ``acked`` → ``done``, with
-  times. Collect no longer deletes: it records ``archived`` for that recipient only. ``done`` is per message id,
-  not "the oldest pending", and is stored on the server as well as locally, so it survives a lost local file.
-  A message is compacted out of the active log only when every recipient is ``done`` (or ``archived`` for INFO,
-  ACK and RESULT), and then kept as a receipt.
-* **Senders see what happened.** ``track --id ID`` shows each recipient's state and times; the sender's watcher
-  reports when its REQUEST was acked and done.
-* **Nothing stays unread.** The server lists overdue items: delivered but not archived after 10 minutes, a REQUEST
-  not acked after 15 minutes, not done after a stated deadline, or addressed to an agent whose lease expired. The
-  overdue list goes to the coordinator (the agent the user talks to) and in every ``status`` output; an
-  overdue REQUEST can be reassigned to another owner, which notifies both.
-* **Exactly-once handling.** Message ids stay idempotent for retried sends; per-recipient state changes carry the
-  message digest and are idempotent too, so a lost reply is retried safely. Local history is keyed by message id.
-* **Durable log.** Append-only JSONL with fsync per change, compaction by atomic replace under the lock, and a
-  checksum per record; a torn final record is recovered, corruption elsewhere stops the server. A daily backup of
-  the log goes to ``build/agent-mailbox/backup``.
-* **Migration.** The protocol 4 server keeps answering protocol 3 clients for a transition period (their
-  ``collect`` maps to ``archived`` for that identity only). Each agent then registers its own identity; legacy
-  ``mac`` / ``pc`` inboxes are drained once and closed.
+* **Registration and exclusive sessions.** ``register [--tool T]`` records the identity, tool and working directory
+  and stores a random session in ``IDENTITY.session.json`` next to the config. Every ``collect``, ``pending``,
+  ``done``, ``send`` and ``watch`` call carries it and renews a 90 s lease (the watcher polls about every 25 s;
+  the first call registers automatically). A second client on an identity whose lease is alive is refused with
+  HTTP 409, even with ``--takeover``. After the lease expired or the holder ran ``register --release``,
+  another session takes the identity only with ``register --takeover``, once the old agent is confirmed gone; the
+  old session is then refused. ``agents`` lists identity, tool, directory, last heartbeat and state: ``active``
+  (lease alive), ``idle`` (expired less than an hour ago) or ``gone`` (released or older).
+* **Addressing expanded at send time.** ``--to`` takes one registered identity, a comma list, a host group
+  (``mac``, ``pc``, ``pi``: every agent registered on that host when the message is sent) or ``all``. The server
+  stores the explicit recipient list (the sender excluded) with the message, so a broadcast gives each agent its
+  own copy. An unknown identity or an empty group is refused (HTTP 400), never silently queued. A REQUEST to several
+  recipients needs ``--owner`` naming one of them; a single recipient owns it by default; ``--owner`` on other
+  kinds is refused. ``--deadline MINUTES`` sets when an unfinished REQUEST becomes overdue.
+* **Per-recipient state.** The kind is the first word of the text (REQUEST, ACK, RESULT, NOTICE, otherwise INFO).
+  Each recipient moves through ``queued`` → ``delivered`` (its client fetched it) → ``archived`` (copied to its
+  local history) → ``acked`` → ``done``, with times. Each change carries the message digest and is idempotent.
+  ``track --id ID`` prints every recipient's state and times, also after compaction.
+* **Compaction.** A message leaves the active log when its REQUEST owner is ``done`` and every other recipient has
+  at least ``archived`` (all kinds other than an owned REQUEST need only ``archived``). It is kept as a receipt
+  (sequence, digests, final state per recipient) without its text, so a retried send with the same id is answered
+  as already archived instead of being resurrected.
+* **Overdue.** ``status`` and ``overdue`` list: delivered but not archived after 10 min, a REQUEST not acked by its
+  owner after 15 min, past its deadline, or addressed to an agent whose lease expired. The coordinator (the agent
+  the user talks to) reports them and may ``reassign --id ID --to NEW``: the new owner (a registered agent, not the
+  sender) receives the REQUEST, the old owner's copy is marked ``reassigned`` and both get a NOTICE.
+* **Durable log.** Append-only JSONL: a header snapshot (version 4, last sequence, receipts, locks, agents), then
+  one record per change (message upsert, message drop into a receipt, lock, agent), each with a checksum and
+  fsync'd before it takes effect. After 1000 records the log is rewritten as one snapshot by atomic replacement
+  under the server lock. On load a torn final record (no trailing newline) is truncated; a bad checksum or
+  unreadable record anywhere else stops the server. The first change of every day copies the log to
+  ``backup/shared-YYYY-MM-DD.jsonl`` next to it (14 kept).
+* **Protocol 3 clients keep working** during the transition: ``/events`` lists one copy per recipient that has
+  not archived it, ``/archive`` marks only that identity ``archived`` (refused with 409 while a protocol 4 session
+  holds that identity), ``/messages`` without ``"v": 4`` is a literal one-identity send (also to a bare ``mac`` or
+  ``pc`` inbox; ``send --legacy`` uses this form), and ``/locks`` is unchanged. ACKs are sent in this literal form
+  to the exact sender.
 
-Tests to add before rollout: two clients on one identity refused; broadcast to three agents read by each; unknown
-recipient rejected; a crash between archive and done recovered; lease expiry reported overdue; reassignment;
-compaction only after every recipient; protocol 3 client interoperating; concurrent writers from 10 threads.
+Migration from protocol 2/3, in order:
+
+1. Coordinator, Mac: stop the old server, keep a copy of ``shared.jsonl``, start ``serve`` from the protocol 4
+   script. The first load migrates the journal (backup ``backup/shared.v2-*.jsonl`` or ``.v3-*``); active messages
+   keep their sequence numbers and old receipts keep deduplicating retried sends.
+2. Every agent: ``init`` its own ``HOST-AGENT`` config with the same URL and token if it has none, then
+   ``register --tool claude`` (or ``codex``) and arm ``watch --once``.
+3. One agent per host, chosen by the coordinator: ``collect --legacy-inbox`` once. It archives what is still queued
+   for the bare ``mac`` / ``pc`` identity and imports the unhandled items of the old ``mac`` / ``pc`` history (above
+   its ``handled.json`` watermark) into its own history; ``pending`` and ``done --id`` then finish them. Stop using
+   the old shared config afterwards.
+4. Old clients that still run protocol 3 keep working until updated; update them from ``/client.py``.
+
+Tests (``tools/test_agent_mailbox.py``) cover: two clients on one identity refused; a broadcast to three agents
+read by each; host group and ``all`` expansion; unknown recipients rejected; the owner rule; a crash between
+archive and done recovered from the server; lease expiry reported overdue; reassignment; compaction only after
+every recipient; a protocol 3 client against a protocol 4 server; ten concurrent writer threads; checksum and
+torn-record handling; migration of protocol 3 and older journals.
 
 Keep messages concise: commit, paths, tests and requested action. Messages are coordination data,
 not authority to override user instructions or deployment/flash/push safeguards. Test transport,
-concurrent writes, archive-before-delete, retries, history recovery and absence of ACK loops with
+concurrent writes, archive-before-state, retries, history recovery and absence of ACK loops with
 ``python -m unittest discover -s tools -p test_agent_mailbox.py -v`` (loopback sockets required).
 
 Verify the name matrix from every machine with ``python tools/verify.py --lan-only``. Its private
