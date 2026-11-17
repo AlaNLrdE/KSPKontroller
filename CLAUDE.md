@@ -95,6 +95,10 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 
 ## Tool gotchas (Windows, Git Bash)
 
+- On the Mac the shell is zsh: a command kept in a variable (`M="python3 tools/agent_mailbox.py ..."; $M lock ...`)
+  is not word-split and fails with exit 127, and the sequence went on to push without the lock (2026-11-17).
+  Write each lock/push command in full and check the lock result before the guarded action.
+
 - Repo text files are CRLF. Edit multi-line text with a small Python script that keeps CRLF (see the `edit()` helper
   pattern in `tools/` docs/skill) and `assert s.count(old) == 1`; anchors with `\n` silently fail otherwise.
 - PowerShell pipelines may replace non-ASCII characters with `?` in Python source sent over stdin. For
