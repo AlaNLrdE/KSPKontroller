@@ -362,3 +362,6 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - The Pi has no touch screen and normally no mouse: clicks need a USB mouse (SDL KMSDRM reads evdev); the fbdev
   fallback has no SDL input. The full-screen cursor shows on motion and hides after 3 s.
 - On macOS the system `python3` has no `krpc`: run kspsim's tests with `build/venv/bin/python`.
+- Never use `M_PI` in hmi-cpp: MSYS2 UCRT64 (the native Windows build) does not define it; use the project's `PI`.
+- MechJeb on the shared install is 2.15.3 (MechJeb2.dll, MechJebLib.dll; no KRPC.MechJeb): the MechJeb scene reads it
+  through our own KSPHMIFlight procedures by reflection (docs/hmi.rst "MechJeb scene").
