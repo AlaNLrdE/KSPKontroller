@@ -247,7 +247,8 @@ The agreed lifecycle is archive, acknowledge, work, result, done:
   ``pending`` can recover tasks after the server compacted them.
 * ``collect`` sends one deterministic working ACK (id ``ack-IDENTITY-SEQ``) for each REQUEST the
   agent owns and records ``acked``. ACK, RESULT and NOTICE messages never trigger ACK replies,
-  avoiding loops. Leave outgoing messages for their recipients.
+  avoiding loops. Leave outgoing messages for their recipients. Never send a manual ACK on top of
+  it (the sender sees two ACKs per REQUEST); send STATUS/INFO only when it adds information.
 * After completing the request, send RESULT with its number and findings, then ``done --id ID``
   (or ``--seq N``), in any order. ``done`` is stored on the server and in the local
   ``*.done.json``, so a lost local file does not resurrect finished work. Also read and mark

@@ -215,7 +215,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   (`build/agent-mailbox/<identity>.json`, e.g. mac-claude.json, pc-claude.json, pc-codex.json, pi-claude.json) and
   runs `register --tool claude|codex` once. At the start of every turn, before its final reply, and at progress
   checkpoints, run `collect` then `pending` on that config: collect copies incoming messages to its history and
-  marks them archived for this identity only (other recipients keep their copies), and ACKs requests. Work from
+  marks them archived for this identity only (other recipients keep their copies), and ACKs requests
+  (never send a manual ACK on top: it doubles every reply; STATUS/INFO only when it adds information). Work from
   that history, report every message to the user and address requests even while working on another task. Send
   REQUESTs to one owner (`--owner` when several recipients); `track --id` shows each recipient's state, `overdue`
   what is late (coordinator may `reassign`). On completion send RESULT, then `done --id ID` (or `--seq N`); never
