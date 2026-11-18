@@ -1,0 +1,22 @@
+# The agents' LAN mailbox server (tools/agent_mailbox.py serve, protocol 4, docs/communication.rst), on the Pi since
+# 2026-11-18 (user decision): the Pi is always on, the Mac and the PC come and go. User unit, no sudo; lingering keeps
+# it running without a login. Its own folder, independent of any checkout an agent edits:
+#   ~/agent-mailbox/agent_mailbox.py   copy of tools/agent_mailbox.py (update it deliberately, then restart)
+#   ~/agent-mailbox/server.json        {"url": ..., "peer": "pi", "token": ...} (private, mode 600)
+#   ~/agent-mailbox/shared.jsonl       the journal (+ backup/, evidence/)
+# Install: copy this file to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now agent-mailbox
+[Unit]
+Description=KSPKontroller agent mailbox server (LAN, port 50380)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/agent-mailbox
+ExecStart=/usr/bin/python3 %h/agent-mailbox/agent_mailbox.py --config %h/agent-mailbox/server.json serve --bind 0.0.0.0 --port 50380 --journal %h/agent-mailbox/shared.jsonl --artifacts %h/agent-mailbox/evidence
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

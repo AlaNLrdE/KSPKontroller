@@ -195,7 +195,13 @@ Agent coordination mailbox
 --------------------------
 
 ``tools/agent_mailbox.py`` is a development-only, standard-library LAN service, separate from
-all game protocols. The Mac hosts it with its log in ``build/agent-mailbox/shared.jsonl``.
+all game protocols. Since 2026-11-18 the Raspberry Pi hosts it (user decision: the Pi is always on, the Mac and the
+PC come and go): user unit ``agent-mailbox.service`` (``tools/systemd/agent-mailbox.service``, lingering, no sudo),
+own folder ``~/agent-mailbox`` (a deliberate copy of the script, private ``server.json`` with the token, the log
+``shared.jsonl``, ``backup/`` and ``evidence/``), URL ``http://kspKontrollerPi.local:50380`` (``localhost`` on the Pi).
+To move it: stop the old server, copy ``shared.jsonl`` (plus ``backup/`` and ``evidence/``) unchanged and check its
+hash, start the new one, then change only the ``url`` field of every agent's config; watchers reload it on retry. An
+agent whose config still names the old host cannot receive the move notice: its operator updates that ``url``.
 Every agent has its own private, ignored config file holding the server URL, the shared bearer
 token and the agent's own identity. Bind only the intended LAN interface (default loopback),
 use port 50380, and keep this plain HTTP endpoint on a trusted local network. Do not expose it
@@ -261,8 +267,8 @@ Arbitration between agents
 
 **Roles** (user, 2026-11-17): the **coordinator is ``pc-claude``** (Claude Code on the PC). It plans and splits
 the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, merges results and keeps the
-user informed. ``mac-claude`` operates the mailbox server, which runs on the Mac (restarts and migrations only with
-the user's OK), and works on what the coordinator assigns. Every other agent (``pi-claude``, ``pc-codex`` once
+user informed. ``mac-claude`` operates the mailbox server, which runs on the Pi (over SSH; restarts and migrations only
+with the user's OK), and works on what the coordinator assigns. Every other agent (``pi-claude``, ``pc-codex`` once
 registered) takes work from the coordinator. Any agent still reports every message it exchanges to the user.
 
 Several agents can work on one machine (on 2026-11-17 Claude Code and Codex both ran on the PC with the same ``pc``
