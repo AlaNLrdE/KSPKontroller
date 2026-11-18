@@ -886,6 +886,40 @@ the name again at every reconnect (user, 2026-11-16: Mac, PC and Pi reach each o
 --layer-cache auto|on|off`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).
 
+**PC on Ethernet and Wi-Fi (prefer_mac).** A PC connected both ways announces its mDNS name with one address
+at a time (2026-11-18: ``Alan-TR.local`` answered its Ethernet ``.17`` and Wi-Fi ``.29`` in turn, ``getent`` on
+the Pi returns a single address), so re-resolving the name flipped the endpoint
+(``Redux endpoint ... is .29 (was .17)`` and back). ``[krpc] prefer_mac = "aa:bb:cc:dd:ee:ff"`` (or
+``KSPHMI_PREFER_MAC``; ``:`` or ``-`` separators, any case) names the PC's **Ethernet** MAC. Then, when the
+configured address is a name, the HMI (``hmi-cpp/src/endpoint.cpp``) reads the Linux neighbour table
+``/proc/net/arp`` after each resolution, skipping incomplete rows (flags ``0x0``, ``00:00:00:00:00:00``):
+
+#. the address shown with that MAC on the same /24 as the name's answers wins (``(preferred MAC, was ...)``)
+   and is remembered;
+#. while the remembered Ethernet address is in use and still answers, it stays even when its row expired and
+   mDNS points at Wi-Fi (``remembered preferred MAC``);
+#. otherwise the address in use stays while it answers (the link worked recently, or the table holds a
+   complete row for it) or while the name still returns it (``kept``): equivalent answers never flip it;
+#. only when it neither answers nor is returned any more does the HMI move to the name's answer
+   (``resolved``), e.g. Ethernet unplugged or a new LAN.
+
+The kernel only learns a MAC after traffic to that address, so the HMI sends one empty UDP datagram (port 9,
+discard) to every other answer, and the Ethernet address wins at the next resolution once mDNS has named it.
+Without ``/proc/net/arp`` (macOS, Windows), with a numeric address or with ``prefer_mac`` unset the old rule
+applies: the resolver's first answer. The rule covers the Redux source and kRPC (``kRPC endpoint NAME is IP
+(...)``, also used for the UDP 50002 context requests); a discovered kRPC number gives way to the configured name
+as soon as a connection to it fails, so a LAN change never keeps a stale number. The MAC is private to each
+installation: never commit it. On the Pi put it in ``~/ksphmi/config.local.toml``::
+
+    [krpc]
+    prefer_mac = "aa:bb:cc:dd:ee:ff"
+
+and restart ``ksphmi.service`` (``systemctl --user restart ksphmi``). Not in ``~/ksphmi/env``: every
+``./ci deploy_hmi`` rewrites that file with only ``KSPHMI_KRPC_ADDRESS``. ``KSPHMI_PREFER_MAC`` suits a Mac or
+PC shell. The log line ``KSP 2 Redux UDP source at ...,
+preferring the PC's Ethernet MAC`` confirms it. Reading the MAC: on the PC, PowerShell ``Get-NetAdapter``
+(``MacAddress`` of the Ethernet adapter); or on the Pi ``ping -c1 <Ethernet IP>`` then ``ip neigh show``.
+
 On macOS, the launcher opens full screen at the selected display native resolution, with Retina
 rendering enabled. The Windows desktop and WSLg behavior below remains platform-specific.
 

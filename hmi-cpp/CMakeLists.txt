@@ -48,6 +48,7 @@ add_library(ksphmi_core STATIC
   src/cockpitinput.cpp
   src/config.cpp
   src/discovery.cpp
+  src/endpoint.cpp
   src/fmt.cpp
   src/intro.cpp
   src/editorpage.cpp
