@@ -18,6 +18,7 @@
 #include "check.hpp"
 #include "cockpitinput.hpp"
 #include "config.hpp"
+#include "endpoint.hpp"
 #include "fake_krpc.hpp"
 #include "fmt.hpp"
 #include "gauges.hpp"
@@ -2628,6 +2629,185 @@ TEST(mechjeb_poller_fetches_on_revision_change_and_commands_reach_krpc) {
     CHECK_EQ(send_mechjeb(c, act), "ok");
     std::lock_guard<std::mutex> lock(m);
     CHECK((args_seen == std::vector<std::string>{"ascent.altitude", "90000", "ascent.enabled", "0", "ascent.engage"}));
+}
+
+// ---------------------------------------------------------------------------------- PC endpoint (prefer_mac)
+// Made-up MACs only: the real ones are private per installation.
+namespace {
+const char* const ETH_MAC = "02:00:5e:10:00:01";   // the PC's "Ethernet"
+const char* const WIFI_MAC = "02:00:5e:10:00:02";  // the PC's "Wi-Fi"
+const std::string ETH = "192.168.50.17", WIFI = "192.168.50.29";
+std::vector<ArpEntry> arp_with(std::initializer_list<std::pair<std::string, const char*>> rows) {
+    std::vector<ArpEntry> out;
+    for (const auto& r : rows) out.push_back({r.first, r.second, "eth0"});
+    return out;
+}
+}  // namespace
+
+TEST(normalise_mac_accepts_colons_dashes_any_case) {
+    CHECK_EQ(normalise_mac("02:00:5E:10:00:01"), "02:00:5e:10:00:01");
+    CHECK_EQ(normalise_mac("02-00-5e-10-00-01"), "02:00:5e:10:00:01");
+    CHECK_EQ(normalise_mac("2:0:5e:10:0:1"), "02:00:5e:10:00:01");
+    for (const char* bad : {"", "02:00:5e:10:00", "02:00:5e:10:00:01:02", "02:00:5e:10:00:0g", "0200.5e10.0001",
+                            "02:00:5e:10:00:01 ", "002:00:5e:10:00:01", "02::5e:10:00:01"})
+        CHECK_EQ(normalise_mac(bad), "");
+}
+
+TEST(parse_arp_table_keeps_complete_entries) {
+    const std::string text =
+        "IP address       HW type     Flags       HW address            Mask     Device\n"
+        "192.168.50.17    0x1         0x2         02:00:5E:10:00:01     *        eth0\n"
+        "192.168.50.29    0x1         0x2         02:00:5e:10:00:02     *        eth0\n"
+        "192.168.50.40    0x1         0x0         00:00:00:00:00:00     *        eth0\n"   // incomplete
+        "192.168.50.41    0x1         0x2         00:00:00:00:00:00     *        eth0\n"   // no MAC
+        "10.9.0.5         0x1         0x2         02:00:5e:10:00:01     *        wlan0\n"  // other interface
+        "garbage line\n";
+    auto rows = parse_arp_table(text);
+    CHECK_EQ(rows.size(), size_t(3));
+    CHECK_EQ(rows[0].ip, ETH);
+    CHECK_EQ(rows[0].mac, std::string(ETH_MAC));
+    CHECK_EQ(rows[0].device, "eth0");
+    CHECK_EQ(rows[1].mac, std::string(WIFI_MAC));
+    CHECK_EQ(rows[2].device, "wlan0");
+    CHECK(parse_arp_table("").empty());
+    CHECK(is_ipv4_literal("192.168.50.17") && !is_ipv4_literal("Gaming-PC.local") && !is_ipv4_literal(""));
+}
+
+TEST(endpoint_without_prefer_mac_is_the_first_answer) {
+    EndpointMemory m;
+    auto arp = arp_with({{ETH, ETH_MAC}});
+    CHECK_EQ(choose_endpoint({WIFI}, arp, "", true, m).address, WIFI);
+    CHECK_EQ(choose_endpoint({ETH}, arp, "", true, m).address, ETH);  // old behaviour: follows every answer
+    CHECK_EQ(choose_endpoint({WIFI, ETH}, arp, "", true, m).reason, "");
+    CHECK_EQ(choose_endpoint({}, arp, "", true, m).address, "");  // does not resolve: the caller keeps its socket
+    CHECK_EQ(m.current, WIFI);
+}
+
+TEST(endpoint_flip_flop_stays_on_ethernet) {
+    // 2026-11-18: mDNS answered .17 and .29 in turn and the Redux endpoint followed every answer.
+    EndpointMemory m;
+    auto arp = arp_with({{ETH, ETH_MAC}, {WIFI, WIFI_MAC}});
+    auto first = choose_endpoint({WIFI}, arp, ETH_MAC, false, m);
+    CHECK_EQ(first.address, ETH);
+    CHECK_EQ(first.reason, "preferred MAC");
+    CHECK_EQ(endpoint_note(first, WIFI), " (preferred MAC, was " + WIFI + ")");
+    for (int i = 0; i < 20; ++i) {
+        CHECK_EQ(choose_endpoint({i % 2 ? ETH : WIFI}, arp, ETH_MAC, i % 3 == 0, m).address, ETH);
+        CHECK_EQ(choose_endpoint({WIFI, ETH}, arp, ETH_MAC, false, m).address, ETH);
+    }
+    // The name stops resolving: the neighbour table still knows the PC's Ethernet address.
+    CHECK_EQ(choose_endpoint({}, arp, ETH_MAC, false, m).address, ETH);
+    CHECK_EQ(m.learned, ETH);
+}
+
+TEST(endpoint_learns_ethernet_when_its_mac_appears) {
+    EndpointMemory m;
+    // Only Wi-Fi has been talked to: no preference known yet, the first answer.
+    auto wifi_only = arp_with({{WIFI, WIFI_MAC}});
+    auto c = choose_endpoint({WIFI}, wifi_only, ETH_MAC, false, m);
+    CHECK_EQ(c.address, WIFI);
+    CHECK_EQ(c.reason, "resolved");
+    // The name now answers .17, but Wi-Fi still answers: no flip on an equivalent answer...
+    CHECK_EQ(choose_endpoint({ETH}, wifi_only, ETH_MAC, true, m).address, WIFI);
+    CHECK_EQ(choose_endpoint({ETH}, wifi_only, ETH_MAC, false, m).reason, "kept");  // complete ARP row = alive
+    // ...until the preferred MAC appears (the resolver poked .17): then Ethernet, and it stays.
+    auto both = arp_with({{WIFI, WIFI_MAC}, {ETH, ETH_MAC}});
+    c = choose_endpoint({WIFI}, both, ETH_MAC, true, m);
+    CHECK_EQ(c.address, ETH);
+    CHECK_EQ(c.reason, "preferred MAC");
+    CHECK_EQ(choose_endpoint({WIFI}, both, ETH_MAC, true, m).address, ETH);
+}
+
+TEST(endpoint_keeps_remembered_ethernet_when_arp_entry_expires) {
+    EndpointMemory m;
+    CHECK_EQ(choose_endpoint({ETH}, arp_with({{ETH, ETH_MAC}}), ETH_MAC, true, m).address, ETH);
+    // The entry was flushed and mDNS points at Wi-Fi: the learned Ethernet address stays while it answers.
+    auto c = choose_endpoint({WIFI}, arp_with({{WIFI, WIFI_MAC}}), ETH_MAC, true, m);
+    CHECK_EQ(c.address, ETH);
+    CHECK_EQ(c.reason, "remembered preferred MAC");
+    CHECK_EQ(choose_endpoint({WIFI}, {}, ETH_MAC, true, m).address, ETH);
+    // No /proc/net/arp (macOS, Windows) and the link silent but the name still answers .17: kept.
+    CHECK_EQ(choose_endpoint({ETH}, {}, ETH_MAC, false, m).address, ETH);
+    // Ethernet unplugged: .17 neither answers nor appears in the table nor among the answers: Wi-Fi.
+    c = choose_endpoint({WIFI}, arp_with({{WIFI, WIFI_MAC}}), ETH_MAC, false, m);
+    CHECK_EQ(c.address, WIFI);
+    CHECK_EQ(c.reason, "resolved");
+    CHECK_EQ(endpoint_note(c, ETH), " (resolved, was " + ETH + ")");
+    CHECK_EQ(m.learned, ETH);  // still remembered: it wins again as soon as its MAC reappears
+    CHECK_EQ(choose_endpoint({WIFI}, arp_with({{WIFI, WIFI_MAC}, {ETH, ETH_MAC}}), ETH_MAC, true, m).address, ETH);
+}
+
+TEST(endpoint_ignores_preferred_mac_on_another_subnet) {
+    EndpointMemory m;
+    // The same MAC on an unrelated network (a VPN or a stale row) is not the PC's address on this LAN.
+    auto c = choose_endpoint({WIFI}, arp_with({{"10.9.0.5", ETH_MAC}}), ETH_MAC, false, m);
+    CHECK_EQ(c.address, WIFI);
+    // Nothing resolves and nothing is known yet: any row with the MAC is the best guess.
+    EndpointMemory fresh;
+    CHECK_EQ(choose_endpoint({}, arp_with({{ETH, ETH_MAC}}), ETH_MAC, false, fresh).address, ETH);
+    EndpointMemory none;
+    CHECK_EQ(choose_endpoint({}, {}, ETH_MAC, false, none).address, "");
+}
+
+TEST(config_prefer_mac_setting) {
+    Config cfg;
+    CHECK_EQ(cfg.krpc.prefer_mac, "");
+    apply_toml(cfg, parse_toml("[krpc]\nprefer_mac = \"02-00-5E-10-00-01\""));
+    CHECK_EQ(cfg.krpc.prefer_mac, std::string(ETH_MAC));
+    bool threw = false;
+    try {
+        apply_toml(cfg, parse_toml("[krpc]\nprefer_mac = \"not a mac\""));
+    } catch (const std::runtime_error& e) {
+        threw = std::string(e.what()).find("krpc.prefer_mac") != std::string::npos;
+    }
+    CHECK(threw);
+    // The repository's config.toml never carries a MAC (private per installation).
+    Config shipped;
+    std::ifstream in(std::string(KSPHMI_SOURCE_DIR) + "/config.toml");
+    std::stringstream buf;
+    buf << in.rdbuf();
+    apply_toml(shipped, parse_toml(buf.str()));
+    CHECK_EQ(shipped.krpc.prefer_mac, "");
+}
+
+namespace {
+// Every attempt fails; discovery finds an old number once. Records the address each attempt starts with.
+class NameAgainProbe : public KrpcSource {
+public:
+    using KrpcSource::KrpcSource;
+    std::vector<std::string> tried;
+    void go() { run(); }
+
+protected:
+    std::unique_ptr<krpc::Client> connect() override {
+        tried.push_back(address());
+        if (tried.size() >= 5) request_stop();
+        throw krpc::ConnectionError("timed out");
+    }
+    std::string discover_server() override { return tried.size() == 1 ? "192.0.2.152" : ""; }
+};
+}  // namespace
+
+TEST(reconnect_resolves_the_configured_name_again_after_a_discovered_number_fails) {
+    // The Mac kept "kRPC at 192.168.0.152:50000: timed out" for hours after the LAN moved (2026-11-18).
+    KrpcSource::Options o;
+    o.address = "gaming-pc.invalid";
+    o.retry_seconds = 0.01;
+    NameAgainProbe probe(o);
+    probe.go();
+    CHECK((probe.tried == std::vector<std::string>{"gaming-pc.invalid", "192.0.2.152", "gaming-pc.invalid",
+                                                   "gaming-pc.invalid", "gaming-pc.invalid"}));
+    CHECK_EQ(probe.address(), "gaming-pc.invalid");
+}
+
+TEST(endpoint_follows_a_name_whose_address_changes_between_reconnects) {
+    // The LAN moved: the old address neither answers nor is among the answers any more.
+    for (const char* mac : {"", ETH_MAC}) {
+        EndpointMemory m;
+        CHECK_EQ(choose_endpoint({"192.168.0.152"}, {}, mac, true, m).address, "192.168.0.152");
+        CHECK_EQ(choose_endpoint({"192.168.0.152"}, {}, mac, false, m).address, "192.168.0.152");
+        CHECK_EQ(choose_endpoint({ETH}, {}, mac, false, m).address, ETH);
+    }
 }
 
 int main(int argc, char** argv) {

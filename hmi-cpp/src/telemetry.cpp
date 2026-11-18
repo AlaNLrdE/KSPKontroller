@@ -1161,7 +1161,8 @@ std::shared_ptr<const ShipReport> ShipReportPoller::poll(Client& c, double now) 
 }
 
 // ================================================================================================ KrpcSource
-KrpcSource::KrpcSource(Options options) : Source("KrpcSource"), options_(std::move(options)) {
+KrpcSource::KrpcSource(Options options)
+    : Source("KrpcSource"), options_(std::move(options)), configured_(options_.address) {
     period_ = 1.0 / std::max(options_.rate_hz, 0.5);
 }
 
@@ -1172,6 +1173,27 @@ std::string KrpcSource::address() const {
     return options_.address;
 }
 
+std::string KrpcSource::target() const {
+    std::lock_guard<std::mutex> lock(address_mutex_);
+    return target_.empty() ? options_.address : target_;
+}
+
+std::string KrpcSource::choose_target() {
+    const std::string host = address();
+    std::string chosen;
+    if (!options_.prefer_mac.empty() && !is_ipv4_literal(host)) {
+        if (!endpoint_ || endpoint_->host() != host) endpoint_.emplace(host, options_.prefer_mac);
+        const std::string before = endpoint_->current();
+        const EndpointChoice choice = endpoint_->resolve(endpoint_ok_);
+        chosen = choice.address;  // "" (does not resolve): connect reports it with the name
+        if (!chosen.empty() && chosen != before)
+            log::info(LOG, "kRPC endpoint " + host + " is " + chosen + endpoint_note(choice, before));
+    }
+    std::lock_guard<std::mutex> lock(address_mutex_);
+    target_ = chosen;
+    return chosen.empty() ? host : chosen;
+}
+
 void KrpcSource::publish(Snapshot snap) {
     snap.server = fmt::str("kRPC %s:%d", address().c_str(), options_.rpc_port);
     // The context channel (UDP 50002) also carries the simulator's skin choice: ask about once a second in every
@@ -1179,7 +1201,7 @@ void KrpcSource::publish(Snapshot snap) {
     double now = monotonic();
     if (now - context_at_ >= 1.0) {
         context_at_ = now;
-        Context ctx = read_context_reply(address(), options_.context_port);
+        Context ctx = read_context_reply(target(), options_.context_port);
         if (ctx.skin != context_skin_)
             log::info(LOG, "context skin: " + (ctx.skin.empty() ? std::string("none (the [display] setting)") : ctx.skin));
         context_skin_ = ctx.skin;
@@ -1321,7 +1343,7 @@ void KrpcSource::on_stop() {
 
 std::unique_ptr<Client> KrpcSource::connect() {
     Client::Options o;
-    o.address = address();
+    o.address = target();
     o.rpc_port = options_.rpc_port;
     o.stream_port = options_.stream_port;
     o.name = options_.client_name;
@@ -1340,12 +1362,26 @@ void KrpcSource::run() {
         publish(connecting);
         std::unique_ptr<Client> conn;
         try {
+            choose_target();
             conn = connect();
+            endpoint_ok_ = true;
         } catch (const std::exception& e) {  // refused (KSP closed), timeout, handshake rejected by the server
+            endpoint_ok_ = false;
             log::warning(LOG, "kRPC at " + where + ": " + short_error(e));
             Snapshot s;
             s.detail = "kRPC at " + where + ": " + short_error(e);
             publish(s);
+            // A discovered number that stops answering gives way to the configured name, resolved again on the
+            // next attempt: the Mac kept a discovered 192.168.0.152 for hours after the LAN moved (2026-11-18).
+            if (address() != configured_) {
+                log::info(LOG, "kRPC: " + address() + " stopped answering; resolving " + configured_ + " again");
+                {
+                    std::lock_guard<std::mutex> lock(address_mutex_);
+                    options_.address = configured_;
+                }
+                wait(options_.retry_seconds);
+                continue;
+            }
             // DHCP may have reassigned the PC. The game already answers scene requests on UDP 50002,
             // including broadcast requests from a new Pi address.
             std::string found = options_.discovery ? discover_server() : "";
@@ -1412,7 +1448,7 @@ void KrpcSource::session(Client& conn) {
         if (!vessel) {  // kRPC 0.7 at the Space Center / Tracking Station returns null instead of raising
             Snapshot s;
             s.state = State::NoVessel;
-            Context ctx = read_context_reply(address(), options_.context_port);
+            Context ctx = read_context_reply(target(), options_.context_port);
             s.scene = ctx.scene;
             if (ctx.skin != context_skin_)
                 log::info(LOG, "context skin: " + (ctx.skin.empty() ? std::string("none (the [display] setting)") : ctx.skin));

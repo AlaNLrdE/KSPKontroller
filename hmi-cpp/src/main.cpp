@@ -368,6 +368,7 @@ std::unique_ptr<Source> make_source(const Config& cfg, const Args& args) {
     o.rate_hz = cfg.krpc.rate_hz;
     o.retry_seconds = cfg.krpc.retry_seconds;
     o.discovery = cfg.krpc.discovery && args.address.empty();
+    o.prefer_mac = cfg.krpc.prefer_mac;
     // KSP 2 Redux (docs/hmi.rst "KSP 2 Redux source"): config source, or KSPHMI_SOURCE for older Pi drop-ins.
     const char* env = std::getenv("KSPHMI_SOURCE");
     const std::string mode = env && *env ? env : cfg.source;

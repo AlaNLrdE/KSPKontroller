@@ -19,6 +19,9 @@ struct Config {
         int rpc_port = 50000, stream_port = 50001;
         double rate_hz = 10, retry_seconds = 3;
         bool discovery = true;
+        /// The PC's Ethernet MAC (normalised): its address wins when the PC is on Ethernet and Wi-Fi. Private,
+        /// per installation (~/ksphmi/config.local.toml or KSPHMI_PREFER_MAC); "" = first resolver answer.
+        std::string prefer_mac;
     } krpc;
     struct {
         double speed = 20;

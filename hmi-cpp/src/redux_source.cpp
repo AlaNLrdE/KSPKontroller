@@ -9,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "endpoint.hpp"
 #include "fmt.hpp"
 #include "log.hpp"
 
@@ -515,8 +516,12 @@ void ReduxSource::run() {
     std::string endpoint;  // the address the socket is connected to
     double next_resolve = 0;
     std::string resolve_problem;
+    // [krpc] prefer_mac: the PC's Ethernet address wins over its Wi-Fi one and never flips (endpoint.hpp).
+    EndpointResolver resolver(host, options_.prefer_mac);
+    double last_redux = -1e9;
     auto open_endpoint = [&] {
-        auto remote = net::resolve_ipv4(host, port);
+        const EndpointChoice choice = resolver.resolve(socket && now() - last_redux <= 10);
+        auto remote = choice.address.empty() ? std::nullopt : net::resolve_ipv4(choice.address, port);
         if (!remote) {
             if (resolve_problem != "dns") log::warning(LOG, "Redux address does not resolve yet: " + host);
             resolve_problem = "dns";
@@ -533,7 +538,7 @@ void ReduxSource::run() {
         }
         net::set_nonblocking(fresh.get(), true);
         socket = std::move(fresh);
-        if (ip != host) log::info(LOG, "Redux endpoint " + host + " is " + ip + (endpoint.empty() ? "" : " (was " + endpoint + ")"));
+        if (ip != host) log::info(LOG, "Redux endpoint " + host + " is " + ip + endpoint_note(choice, endpoint));
         endpoint = ip;
         resolve_problem.clear();
     };
@@ -545,9 +550,9 @@ void ReduxSource::run() {
         krpc_ = krpc.get();
         krpc_->set_cockpit(cockpit_);
     }
-    log::info(LOG, "KSP 2 Redux UDP source at " + host + ":" + std::to_string(port) + (fallback_ ? ", kRPC fallback" : ""));
+    log::info(LOG, "KSP 2 Redux UDP source at " + host + ":" + std::to_string(port) + (fallback_ ? ", kRPC fallback" : "") +
+                       (resolver.preferring() ? ", preferring the PC's Ethernet MAC" : ""));
     uint64_t sequence = 0;
-    double last_redux = -1e9;
     bool version2 = false, linked = false, in_vab = false, in_flight = false;
     std::shared_ptr<const ShipReport> ship;
     double ship_at = -1e9, next_ship = 0;

@@ -158,6 +158,23 @@ std::optional<sockaddr_in> resolve_ipv4(const std::string& host, int port) {
     return out;
 }
 
+std::vector<std::string> resolve_all_ipv4(const std::string& host) {
+    start();
+    std::vector<std::string> out;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;  // one entry per address instead of one per socket type
+    addrinfo* res = nullptr;
+    if (host.empty() || getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || !res) return out;
+    for (addrinfo* p = res; p; p = p->ai_next) {
+        if (!p->ai_addr || p->ai_family != AF_INET) continue;
+        const std::string ip = to_string(reinterpret_cast<const sockaddr_in*>(p->ai_addr)->sin_addr);
+        if (!ip.empty() && std::find(out.begin(), out.end(), ip) == out.end()) out.push_back(ip);
+    }
+    freeaddrinfo(res);
+    return out;
+}
+
 std::string to_string(const in_addr& a) {
     char buf[INET_ADDRSTRLEN];
     return inet_ntop(AF_INET, &a, buf, sizeof buf) ? buf : "";
