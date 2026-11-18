@@ -405,3 +405,19 @@ numeric endpoints, bounds resolver waits and reports whether each name has a non
 IPv4 address. It does not claim a game/service is running: test the mailbox, SSH and active
 game endpoints separately. Keep local names/addresses and manifests out of version control.
 Name-check tests: ``python -m unittest discover -s tools -p test_lan_names.py -v``.
+
+A Windows PC with Ethernet and Wi-Fi on the same LAN is dual-homed: Windows' own responder (Dnscache)
+answers ``<hostname>.local`` over mDNS (UDP 5353) and LLMNR (UDP 5355) on both adapters, so peers get
+two addresses. The Pi's Redux source re-resolves every 10 s while silent and flips between them.
+``tools/windows/mdns-prefer-ethernet.ps1`` keeps one address: four block rules in the firewall group
+``KSPKontroller mDNS`` (inbound and outbound UDP 5353/5355, ``InterfaceType Wireless`` only) are enabled
+while a wired (802.3) adapter is Up with a LAN IPv4 and no wireless adapter is on a different subnet,
+and disabled otherwise, so Wi-Fi answers again when the cable is out. Adapters are chosen by physical
+media type, never by alias. ``-Install`` (elevated) copies the script to ``%ProgramFiles%\KSPKontroller``,
+creates the rules and a SYSTEM scheduled task ``\KSPKontroller\mDNS prefer Ethernet`` that runs
+``-Apply`` at startup, on NetworkProfile/Operational events 10000/10001 and every 15 minutes;
+``-Status`` is read-only, ``-Uninstall`` removes only that group, task and copy. The log is
+``%ProgramData%\KSPKontroller\mdns-prefer-ethernet.log``. ``verify.py --lan-only`` reports the group on
+Windows (the local lookup of the own name always lists every adapter, so it proves nothing there),
+and on other hosts warns when the own ``.local`` name or the manifest's ``pc`` name resolves to more
+than one LAN IPv4. Peers keep a cached answer until its TTL (about two minutes) expires.

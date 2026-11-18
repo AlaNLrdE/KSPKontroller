@@ -592,6 +592,139 @@ def check_lan_names(ctx):
                host + ": " + (error or ", ".join(addresses)))
 
 
+MDNS_SCRIPT = os.path.join(ROOT, "tools", "windows", "mdns-prefer-ethernet.ps1")
+
+
+def resolve_ipv4(host, timeout):
+    """getaddrinfo IPv4 with a bounded wait: (addresses, error)."""
+    import queue
+    import socket
+    import threading
+    answers = queue.Queue()
+    def worker():
+        try:
+            answers.put((sorted({r[4][0] for r in socket.getaddrinfo(host, None, socket.AF_INET)}), ""))
+        except OSError as error:
+            answers.put(([], str(error)))
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        return answers.get(timeout=timeout)
+    except queue.Empty:
+        return [], "name-resolution timeout"
+
+
+def lan_ipv4(addresses):
+    import ipaddress
+    return [a for a in addresses if ipaddress.ip_address(a).is_private
+            and not ipaddress.ip_address(a).is_loopback and not ipaddress.ip_address(a).is_link_local]
+
+
+def linux_wired_up():
+    """True when a physical non-wireless Ethernet interface is up (Linux /sys); None elsewhere."""
+    base = "/sys/class/net"
+    if not sys.platform.startswith("linux") or not os.path.isdir(base):
+        return None
+    for name in os.listdir(base):
+        path = os.path.join(base, name)
+        if not os.path.exists(os.path.join(path, "device")):
+            continue  # virtual (lo, docker, bridges)
+        if os.path.exists(os.path.join(path, "wireless")) or os.path.exists(os.path.join(path, "phy80211")):
+            continue
+        try:
+            if read(os.path.join(path, "type")).strip() == "1" and read(os.path.join(path, "operstate")).strip() == "up":
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def windows_mdns_status():
+    """Parse the read-only -Status of tools/windows/mdns-prefer-ethernet.ps1; None when it cannot run."""
+    powershell = shutil.which("powershell") or shutil.which("powershell.exe")
+    if os.name != "nt" or not powershell or not os.path.isfile(MDNS_SCRIPT):
+        return None
+    try:
+        out = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                              "-File", MDNS_SCRIPT, "-Status"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    state = {"wired": [], "wireless": [], "rules": 0, "task": False, "in_sync": False, "block": None}
+    section = None
+    for line in out.splitlines():
+        if line.startswith("Wired"):
+            section = "wired"
+        elif line.startswith("Wireless"):
+            section = "wireless"
+        elif line.startswith("  ") and section and ": " in line and " Up: " in line:
+            state[section] += [a.split("/")[0] for a in line.rsplit(" Up: ", 1)[1].split(", ") if "/" in a]
+        elif line.startswith("Decision: block "):
+            section = None
+            state["block"] = line.startswith("Decision: block enabled")
+        elif line.startswith("Firewall group"):
+            m = re.search(r": (\d+) of (\d+) rules", line)
+            state["rules"] = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+        elif line.startswith("Task "):
+            state["task"] = not line.endswith("not installed")
+        elif line.startswith("In sync: "):
+            state["in_sync"] = line.strip().endswith("True")
+    return state if state["block"] is not None else None
+
+
+def check_lan_mdns_single_address(ctx):
+    """A dual-homed host (Ethernet + Wi-Fi on one LAN) must announce its .local name with one address, or peers
+    such as the Pi's Redux source flip between them. On Windows the local lookup of the own name lists every
+    adapter address whatever is announced, so there the verdict comes from the prefer-Ethernet firewall group."""
+    import socket
+    timeout = getattr(ctx["args"], "lan_timeout", 4.0)
+    own = socket.gethostname().split(".")[0] + ".local"
+    win = windows_mdns_status()
+    if os.name == "nt":
+        if win is None:
+            report("WARN", "LAN mDNS: one address", "could not run %s -Status" % os.path.relpath(MDNS_SCRIPT, ROOT))
+            return
+        wired_up = bool(win["wired"])
+    else:
+        wired_up = linux_wired_up()
+    addresses, error = resolve_ipv4(own, timeout)
+    lan = lan_ipv4(addresses)
+    if win is not None:
+        lan = [a for a in lan if a in win["wired"] + win["wireless"]]  # drop WSL/Hyper-V virtual adapters
+    detail = "%s -> %s" % (own, ", ".join(lan) or error or "no LAN IPv4")
+    if win is not None:
+        detail = "; local lookup " + detail + " (lists every adapter, not what peers get)"
+        present, wanted = win["rules"]
+        installed = present == wanted and win["task"]
+        dual = bool(win["wired"]) and bool(win["wireless"]) and win["block"]
+        if present == 0 and not win["task"]:
+            report("WARN" if dual else "PASS", "LAN mDNS: Windows prefer-Ethernet",
+                   ("not installed while Ethernet and Wi-Fi share a LAN: peers get both addresses; run (elevated) "
+                    "tools/windows/mdns-prefer-ethernet.ps1 -Install") if dual else "not installed (not dual-homed now)" + detail)
+        elif not installed or not win["in_sync"]:
+            report("FAIL", "LAN mDNS: Windows prefer-Ethernet", "%d of %d rules, task %s, in sync %s: rerun -Install"
+                   % (present, wanted, "present" if win["task"] else "missing", win["in_sync"]) + detail)
+        else:
+            report("PASS", "LAN mDNS: Windows prefer-Ethernet", "installed, Wi-Fi mDNS/LLMNR %s"
+                   % ("blocked (announcing Ethernet only)" if win["block"] else "allowed (no shared wired LAN)") + detail)
+    elif not wired_up:
+        report("PASS" if len(lan) <= 1 else "WARN", "LAN mDNS: one address",
+               detail + ("" if wired_up is False else " (wired state unknown on this OS)"))
+    else:
+        report("PASS" if len(lan) <= 1 else "WARN", "LAN mDNS: one address",
+               detail + ("" if len(lan) <= 1 else ": several LAN IPv4 while wired is up (announce wired only)"))
+    path = ctx["args"].lan_config
+    try:
+        with open(path, encoding="utf-8") as f:
+            pc = json.load(f)["hosts"]["pc"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if isinstance(pc, str) and pc.split(".")[0].lower() != own.split(".")[0].lower():
+        peer, error = resolve_ipv4(pc, timeout)
+        peer = lan_ipv4(peer)
+        report("PASS" if len(peer) <= 1 else "WARN", "LAN mDNS: pc name seen from here",
+               "%s -> %s" % (pc, ", ".join(peer) or error or "no LAN IPv4")
+               + ("" if len(peer) <= 1 else ": several addresses, the PC is dual-homed without prefer-Ethernet"))
+
+
 def check_git(ctx):
     def git(*a):
         return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True).stdout.strip()
@@ -1349,7 +1482,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_lan_mdns_single_address, check_git]
 
 
 def main():
@@ -1384,7 +1517,7 @@ def main():
         report("PASS" if not ksp_running() else "WARN", "KSP process", "closed" if not ksp_running() else "running (install/flash/board checks need it closed)")
     checks = CHECKS
     if args.lan_only:
-        checks = [check_lan_names]
+        checks = [check_lan_names, check_lan_mdns_single_address]
     elif args.docs_only:
         checks = [check_documentation, check_skill_mirrors]
     elif args.firmware_only:

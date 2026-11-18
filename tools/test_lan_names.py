@@ -65,5 +65,45 @@ class LanNamesTest(unittest.TestCase):
 
 
 
+class LanMdnsSingleAddressTest(LanNamesTest):
+    def run_check(self, own, peer, wired=True):
+        def fake(host, timeout):
+            return (peer if host == self.hosts['pc'] else own), ''
+        with patch.object(verify.os, 'name', 'posix'), patch('verify.windows_mdns_status', return_value=None), \
+                patch('verify.linux_wired_up', return_value=wired), patch('verify.resolve_ipv4', side_effect=fake), \
+                patch('socket.gethostname', return_value='this-host'):
+            verify.check_lan_mdns_single_address(self.ctx)
+        return {name: status for status, name, _ in verify.results}
+
+    def test_single_addresses_pass(self):
+        got = self.run_check(['192.168.1.5'], ['192.168.1.7'])
+        self.assertEqual(got['LAN mDNS: one address'], 'PASS')
+        self.assertEqual(got['LAN mDNS: pc name seen from here'], 'PASS')
+
+    def test_two_lan_addresses_while_wired_warn(self):
+        got = self.run_check(['192.168.1.5', '192.168.1.6'], ['192.168.1.7', '192.168.1.8'])
+        self.assertEqual(got['LAN mDNS: one address'], 'WARN')
+        self.assertEqual(got['LAN mDNS: pc name seen from here'], 'WARN')
+
+    def test_loopback_and_link_local_ignored(self):
+        got = self.run_check(['127.0.1.1', '169.254.3.4', '192.168.1.5'], ['192.168.1.7'])
+        self.assertEqual(got['LAN mDNS: one address'], 'PASS')
+
+    def test_windows_status_parse(self):
+        out = ('Wired (802.3) adapters:\n  Ethernet [NIC] Up: 192.168.1.17/24\n'
+               'Wireless (802.11) adapters:\n  Wi-Fi [WLAN] Up: 192.168.1.29/24\n'
+               'Decision: block enabled (wired and wireless share a subnet: announce on wired only)\n'
+               'Firewall group "KSPKontroller mDNS": 0 of 4 rules\n'
+               'Task \\KSPKontroller\\mDNS prefer Ethernet: not installed\nIn sync: False\n')
+        with patch.object(verify.os, 'name', 'nt'), patch('shutil.which', return_value='powershell'), \
+                patch('subprocess.run', return_value=SimpleNamespace(stdout=out)):
+            state = verify.windows_mdns_status()
+        self.assertEqual(state['wired'], ['192.168.1.17'])
+        self.assertEqual(state['wireless'], ['192.168.1.29'])
+        self.assertEqual(state['rules'], (0, 4))
+        self.assertTrue(state['block'])
+        self.assertFalse(state['task'])
+
+
 if __name__ == '__main__':
     unittest.main()
