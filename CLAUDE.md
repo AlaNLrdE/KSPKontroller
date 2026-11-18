@@ -49,10 +49,13 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 
 ## Working with agents (learned from the ksp-workbench project)
 
-- **Coordinator: `pc-claude`** (Claude Code on the PC, user 2026-11-17): it plans, assigns owners and locks,
-  watches `overdue`, reassigns and merges. `mac-claude` operates the mailbox server, which runs on the Pi
-  (`agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, since 2026-11-18) and takes assigned work like
-  `pi-claude` and `pc-codex`; requests from the user to another agent are reported to the coordinator.
+- **Coordinator: `pi-claude`** (Claude Code on the Pi, user 2026-11-18; `pc-claude` until then): it plans,
+  assigns one owner and the locks per job, watches `overdue` and reassigns. It never deploys, pushes or flashes:
+  merges, PC builds, `deploy_hmi`, plugin deploys and pushes go to `pc-claude` (or `mac-claude`) as assigned work,
+  each still under the user's OK. `mac-claude` operates the mailbox server, which runs on the Pi
+  (`agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, since 2026-11-18). `pc-claude`, `mac-claude`,
+  `pc-codex` and `mac-workbench` (ksp-workbench repo on the Mac) take assigned work; requests from the user to
+  another agent are reported to the coordinator.
 - **Delegate and stay available** (user, 2026-11-17): every agent on the mailbox bus that receives new work (from
   the user or another agent) delegates it right away to other agents (`kspcontroller-dev` subagents in their own
   worktrees, or an addressed mailbox REQUEST to another agent) and stays free to schedule further work in parallel.

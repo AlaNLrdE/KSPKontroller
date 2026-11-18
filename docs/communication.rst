@@ -266,11 +266,14 @@ awake with the server running; no auto-start service or firewall changes are ins
 Arbitration between agents
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-**Roles** (user, 2026-11-17): the **coordinator is ``pc-claude``** (Claude Code on the PC). It plans and splits
-the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, merges results and keeps the
-user informed. ``mac-claude`` operates the mailbox server, which runs on the Pi (over SSH; restarts and migrations only
-with the user's OK), and works on what the coordinator assigns. Every other agent (``pi-claude``, ``pc-codex`` once
-registered) takes work from the coordinator. Any agent still reports every message it exchanges to the user.
+**Roles** (user, 2026-11-18; ``pc-claude`` coordinated from 2026-11-17): the **coordinator is ``pi-claude``**
+(Claude Code on the Pi, next to the mailbox server, which stays up when the PC or the Mac is away). It plans and
+splits the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, and keeps the user
+informed. It never deploys, pushes or flashes: merges, Windows builds, deploys and pushes are assigned to
+``pc-claude`` (or ``mac-claude``), each still under the user's OK. ``mac-claude`` operates the mailbox server (over
+SSH; restarts and migrations only with the user's OK). Every other agent (``pc-claude``, ``mac-claude``,
+``pc-codex``, ``mac-workbench`` for the ksp-workbench repo on the Mac) takes work from the coordinator. Any agent
+still reports every message it exchanges to the user.
 
 Several agents can work on one machine (on 2026-11-17 Claude Code and Codex both ran on the PC with the same ``pc``
 config: their ``collect`` runs removed each other's messages and replayed old ACKs). The rules, introduced with
