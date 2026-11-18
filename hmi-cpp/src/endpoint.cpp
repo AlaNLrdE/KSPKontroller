@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -94,14 +95,14 @@ EndpointChoice choose_endpoint(const std::vector<std::string>& resolved, const s
     };
     if (prefer_mac.empty()) return resolved.empty() ? EndpointChoice{} : pick(resolved.front(), "");
     // 2. The neighbour table shows the preferred MAC near the PC's answers (or anywhere when nothing is known yet).
-    std::vector<std::string> near = resolved;
-    if (!memory.current.empty()) near.push_back(memory.current);
-    if (!memory.learned.empty()) near.push_back(memory.learned);
+    std::vector<std::string> nearby = resolved;
+    if (!memory.current.empty()) nearby.push_back(memory.current);
+    if (!memory.learned.empty()) nearby.push_back(memory.learned);
     const ArpEntry* best = nullptr;
     for (const auto& e : arp) {
         if (e.mac != prefer_mac) continue;
-        bool close = near.empty();
-        for (const auto& r : near) close = close || same_24(e.ip, r);
+        bool close = nearby.empty();
+        for (const auto& r : nearby) close = close || same_24(e.ip, r);
         if (!close) continue;
         if (!best || e.ip == memory.current || (e.ip == memory.learned && best->ip != memory.current)) best = &e;
     }
