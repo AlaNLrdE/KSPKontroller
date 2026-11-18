@@ -391,6 +391,8 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   fallback has no SDL input. The full-screen cursor shows on motion and hides after 3 s.
 - On macOS the system `python3` has no `krpc`: run kspsim's tests with `build/venv/bin/python`.
 - Never use `M_PI` in hmi-cpp: MSYS2 UCRT64 (the native Windows build) does not define it; use the project's `PI`.
+  Also include `<cstdint>` explicitly for `uint32_t`, and never name a variable `near` / `far` (`<windef.h>` macros:
+  `expected unqualified-id before '='`); Linux/Pi builds hide both (2026-11-18, endpoint.cpp).
 - MechJeb on the shared install is 2.15.3 (MechJeb2.dll, MechJebLib.dll; no KRPC.MechJeb): the MechJeb scene reads it
   through our own KSPHMIFlight procedures by reflection (docs/hmi.rst "MechJeb scene").
 - MechJeb 2.15.3 Ascent Guidance (MechJebModuleAscentMenu IL, read with REA inspect_managed_members + a tiny IL
@@ -402,6 +404,9 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   inc)` -> (time, inclination), countdown + `DesiredInclination.Val = inclination`; abort clears the four
   `LaunchingTo*` and `TimedLaunch`. Launching does not engage the autopilot. `set_AscentType` also calls
   `DisableAscentModules`: write the path through the property, not `AscentTypeInteger`.
+  `TMinus` is a countdown only while `AP.TimedLaunch` is true (set by StartCountdown): the bridge omits
+  `ascent.t_minus` otherwise. `TC.FlameoutSafetyPct` is a percent (5), the report a fraction (0.05):
+  `MechJebMap.Entry.Divisor` converts both ways; check each `*Pct` member's unit before mapping it.
 - A new member of an aggregate such as `Command` or `MjControl` needs a default initializer (`std::string key{};`):
   clang's -Wmissing-field-initializers otherwise warns at every `{Command::Kind, value}` brace in the code base.
 - Apollo/Steampunk frame titles sit on the frame line, a few pixels above the frame rect: an overlay (the MechJeb

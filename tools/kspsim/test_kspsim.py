@@ -582,6 +582,7 @@ class KrpcTest(unittest.TestCase):
             with open(os.path.join(ROOT, "hmi-cpp", "tests", "data", "mechjeb_report_v1.txt"), encoding="utf-8") as f:
                 fixture = f.read().replace("\r\n", "\n")
             self.assertEqual(call("MechJebReport"), fixture)  # byte for byte at start
+            self.assertNotIn("ascent.t_minus", fixture)  # idle vessel: no timed launch armed
             self.assertEqual(fixture_values()[1]["ascent.status"], "Awaiting liftoff")
             rev = call("MechJebRevision")
             self.assertEqual(rev, 42)
@@ -603,10 +604,12 @@ class KrpcTest(unittest.TestCase):
             self.assertEqual(call("MechJebAction", "ascent.launch_rendezvous"), "ok")
             report = call("MechJebReport")
             self.assertIn("\nascent.enabled=1\n", report)
-            self.assertIn("\nascent.t_minus=30\n", report)
+            self.assertIn("\nascent.status=Launching%20to%20rendezvous\nascent.t_minus=30\n", report)
             self.assertIn("\nascent.status=Launching%20to%20rendezvous\n", report)
             self.assertEqual(call("MechJebAction", "ascent.abort_timed_launch"), "ok")
-            self.assertIn("\nascent.t_minus=0\n", call("MechJebReport"))
+            self.assertNotIn("ascent.t_minus", call("MechJebReport"))  # omitted when no launch is armed
+            self.assertEqual(call("MechJebSet", "ascent.t_minus", "5"), "read only")
+            self.assertIn("\nthrust.flameout_safety_pct=0.05\n", call("MechJebReport"))  # a fraction
             self.assertEqual(call("MechJebAction", "ascent.fly_me_to_the_mun"), "unknown key")
             sim.mechjeb.set_state("nocore")
             self.assertEqual(call("MechJebReport"), "v=1 rev=%d mj=nocore version=2.15.3.0\n" % sim.mechjeb.revision)

@@ -424,8 +424,10 @@ Keys map to MechJeb 2.15.3 members (reflected on the shared install, 2026-11-17)
 
    * - Keys
      - MechJeb 2.15.3 member
-   * - ``ascent.enabled`` (RO), ``ascent.status`` (RO, text), ``ascent.t_minus`` (RO, s)
-     - ``AP`` enabled state, ``AP.Status``, ``AP.TMinus``
+   * - ``ascent.enabled`` (RO), ``ascent.status`` (RO, text), ``ascent.t_minus`` (RO, s, only while a timed
+       launch is armed)
+     - ``AP`` enabled state, ``AP.Status``, ``AP.TMinus`` (reported only while ``AP.TimedLaunch`` is true; absent
+       otherwise, which the HMI reads as "no countdown", never 0)
    * - ``ascent.path`` (0 Classic, 1 GravityTurn, 2 PVG)
      - ``AS.AscentTypeInteger``
    * - ``ascent.altitude``, ``ascent.inclination``, ``ascent.lan``
@@ -456,10 +458,10 @@ Keys map to MechJeb 2.15.3 members (reflected on the shared install, 2026-11-17)
      - ``TC.LimitDynamicPressure`` / ``MaxDynamicPressure``, ``LimitToPreventOverheats``, ``LimitAcceleration`` /
        ``MaxAcceleration``, ``LimitThrottle`` / ``MaxThrottle``, ``LimiterMinThrottle`` / ``MinThrottle``,
        ``SmoothThrottle``
-   * - ``thrust.prevent_flameout`` / ``flameout_safety_pct``, ``prevent_unstable_ignition``,
-       ``differential_throttle``
-     - ``TC.LimitToPreventFlameout`` / ``FlameoutSafetyPct``, ``LimitToPreventUnstableIgnition``,
-       ``DifferentialThrottle``
+   * - ``thrust.prevent_flameout`` / ``flameout_safety_pct`` (fraction 0..1, 0.05 = 5 %),
+       ``prevent_unstable_ignition``, ``differential_throttle``
+     - ``TC.LimitToPreventFlameout`` / ``FlameoutSafetyPct`` (a percent in MechJeb: the bridge divides by 100 on
+       read and multiplies by 100 on ``MechJebSet``), ``LimitToPreventUnstableIgnition``, ``DifferentialThrottle``
    * - ``staging.autostage_limit``, ``pre_delay``, ``post_delay``, ``clamp_thrust_pct``, ``autostaging_once``
      - ``SC.AutostageLimit``, ``AutostagePreDelay``, ``AutostagePostDelay``, ``ClampAutoStageThrustPct``,
        ``AutostagingOnce``

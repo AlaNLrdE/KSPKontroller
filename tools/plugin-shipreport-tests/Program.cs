@@ -196,9 +196,15 @@ internal static partial class Program
             int eq = lines[i].IndexOf('=');
             values.Add(new KeyValuePair<string, string>(lines[i].Substring(0, eq), lines[i].Substring(eq + 1)));
         }
-        bool sameKeys = values.Count == MechJebFormat.Keys.Count;
-        for (int i = 0; sameKeys && i < values.Count; ++i) sameKeys = values[i].Key == MechJebFormat.Keys[i].Key;
+        // The fixture is an idle vessel: every key but the conditional ones (ascent.t_minus, timed launch only).
+        var always = new List<string>();
+        foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys) if (!k.Conditional) always.Add(k.Key);
+        bool sameKeys = values.Count == always.Count;
+        for (int i = 0; sameKeys && i < values.Count; ++i) sameKeys = values[i].Key == always[i];
         Check(sameKeys, "MechJeb keys differ from mechjeb_report_v1.txt (names or order)");
+        var conditional = new List<string>();
+        foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys) if (k.Conditional) conditional.Add(k.Key);
+        Check(string.Join(",", conditional.ToArray()) == "ascent.t_minus", "MechJeb conditional keys");
         var readOnly = new List<string>();
         foreach (MechJebFormat.KeyInfo k in MechJebFormat.Keys) if (k.ReadOnly) readOnly.Add(k.Key);
         Check(string.Join(",", readOnly.ToArray()) ==

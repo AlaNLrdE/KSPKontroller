@@ -25,6 +25,9 @@ namespace KSPSerialIO.Hmi
             public string Key;
             public Kind Kind;
             public bool ReadOnly;
+            /// <summary>Present only while its condition holds (ascent.t_minus: while a timed launch is armed), so
+            /// the fixture, which shows an idle vessel, leaves it out.</summary>
+            public bool Conditional;
         }
 
         private static KeyInfo K(string key, Kind kind)
@@ -40,7 +43,7 @@ namespace KSPSerialIO.Hmi
         private static readonly ReadOnlyCollection<KeyInfo> keys = new ReadOnlyCollection<KeyInfo>(new List<KeyInfo> {
             RO("ascent.enabled", Kind.Flag),
             RO("ascent.status", Kind.Text),
-            RO("ascent.t_minus", Kind.Number),
+            new KeyInfo { Key = "ascent.t_minus", Kind = Kind.Number, ReadOnly = true, Conditional = true },
             K("ascent.path", Kind.Integer),
             K("ascent.altitude", Kind.Number),
             K("ascent.inclination", Kind.Number),

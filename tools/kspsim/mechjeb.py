@@ -14,6 +14,8 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "
 
 # Values only MechJeb itself changes (MechJebSet answers "read only").
 READ_ONLY = {"ascent.enabled", "ascent.status", "ascent.t_minus", "ascent.classic.auto_turn_start_altitude"}
+# Reported only while armed (MechJeb's TimedLaunch): absent from the fixture, inserted after ascent.status.
+T_MINUS, T_MINUS_AFTER = "ascent.t_minus", "ascent.status"
 # 0/1 settings: anything else is an invalid value.
 FLAGS = {"ascent.classic.auto", "ascent.force_roll", "ascent.limit_aoa", "ascent.limit_qa",
          "ascent.corrective_steering", "ascent.autostage", "ascent.autodeploy_solar_panels",
@@ -54,6 +56,7 @@ class MechJebSim:
         self.version, self.values = fixture_values()
         self.state = "ok"  # ok, missing (MechJeb not installed) or nocore (no MechJeb part on the vessel)
         self.revision = 42
+        self.t_minus: str | None = None  # ascent.t_minus while a timed launch is armed, else omitted
         self.calls: list[tuple[str, ...]] = []  # every Set / Action, for tests and the log
 
     def set_state(self, state: str) -> None:
@@ -70,7 +73,12 @@ class MechJebSim:
             head = "v=1 rev=%d mj=%s version=%s\n" % (self.revision, self.state, self.version)
             if self.state != "ok":
                 return head
-            return head + "".join("%s=%s\n" % (k, urllib.parse.quote(v, safe=".-_")) for k, v in self.values.items())
+            items = []
+            for k, v in self.values.items():
+                items.append((k, v))
+                if k == T_MINUS_AFTER and self.t_minus is not None:
+                    items.append((T_MINUS, self.t_minus))
+            return head + "".join("%s=%s\n" % (k, urllib.parse.quote(v, safe=".-_")) for k, v in items)
 
     def set(self, key: str, value: str) -> str:
         """KSPHMIFlight.MechJebSet: ok, unknown key, read only, invalid value or unavailable."""
@@ -78,10 +86,10 @@ class MechJebSim:
             self.calls.append(("set", key, value))
             if self.state != "ok":
                 return "unavailable"
-            if key not in self.values:
-                return "unknown key"
             if key in READ_ONLY:
                 return "read only"
+            if key not in self.values:
+                return "unknown key"
             try:
                 number = float(value)
             except ValueError:
@@ -112,12 +120,12 @@ class MechJebSim:
             if action == "ascent.engage":
                 v["ascent.enabled"], v["ascent.status"] = "1", "Awaiting liftoff"
             elif action in ("ascent.disengage", "all.disengage"):
-                v["ascent.enabled"], v["ascent.status"], v["ascent.t_minus"] = "0", "Off", "0"
+                v["ascent.enabled"], v["ascent.status"], self.t_minus = "0", "Off", None
             elif action in ("ascent.launch_rendezvous", "ascent.launch_target_plane"):
-                v["ascent.enabled"], v["ascent.t_minus"] = "1", "30"
+                v["ascent.enabled"], self.t_minus = "1", "30"
                 v["ascent.status"] = "Launching to rendezvous" if action.endswith("rendezvous") else \
                     "Launching to target plane"
             elif action == "ascent.abort_timed_launch":
-                v["ascent.t_minus"], v["ascent.status"] = "0", "Timed launch aborted"
+                self.t_minus, v["ascent.status"] = None, "Timed launch aborted"
             self.revision += 1
             return "ok"

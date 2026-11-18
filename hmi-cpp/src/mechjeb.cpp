@@ -125,7 +125,6 @@ const char* demo_mechjeb_text() {
         "v=1 rev=42 mj=ok version=2.15.3.0\n"
         "ascent.enabled=1\n"
         "ascent.status=Awaiting%20liftoff\n"
-        "ascent.t_minus=0\n"
         "ascent.path=0\n"
         "ascent.altitude=80000\n"
         "ascent.inclination=0\n"

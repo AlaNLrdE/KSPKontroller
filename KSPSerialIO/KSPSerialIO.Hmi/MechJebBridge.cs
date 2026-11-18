@@ -180,6 +180,7 @@ namespace KSPSerialIO.Hmi
                 MechJebMember member = module != null ? MechJebMember.Find(module.GetType(), entry.Members) : null;
                 if (member == null) return "unavailable";
                 if (!member.CanWrite) return "read only";
+                number = entry.ToMember(number);  // the report's fraction back to MechJeb's percent
                 try { MechJebMember.Convert(number, member.ValueType); }
                 catch (ArgumentException) { return "invalid value"; }
                 catch (OverflowException) { return "invalid value"; }

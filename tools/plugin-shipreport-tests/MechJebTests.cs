@@ -43,7 +43,9 @@ namespace FakeMuMech
     public class MechJebModuleAscentBaseAutopilot : ComputerModule
     {
         public string Status = "Awaiting liftoff";
-        public double TMinus { get { return 0; } }
+        public bool TimedLaunch;  // set by StartCountdown: only then is TMinus a countdown
+        public double tMinus = -42;
+        public double TMinus { get { return tMinus; } }
     }
 
     public class MechJebModuleAscentSettings : ComputerModule
@@ -78,7 +80,7 @@ namespace FakeMuMech
     {
         public bool LimitDynamicPressure = true, LimitToPreventOverheats = true, SmoothThrottle, LimitToPreventFlameout,
             LimitToPreventUnstableIgnition, LimitAcceleration, LimitThrottle, LimiterMinThrottle, DifferentialThrottle;
-        public EditableDouble MaxDynamicPressure = new EditableDouble(20000), FlameoutSafetyPct = new EditableDouble(0.05),
+        public EditableDouble MaxDynamicPressure = new EditableDouble(20000), FlameoutSafetyPct = new EditableDouble(5),  // percent
             MaxAcceleration = new EditableDouble(40);
         public EditableDoubleMult MaxThrottle = new EditableDoubleMult(1), MinThrottle = new EditableDoubleMult(0.05);
     }
@@ -96,6 +98,13 @@ namespace FakeMuMech
 
     /// <summary>An older MechJeb without some members.</summary>
     public class OldAutopilot : ComputerModule { }
+
+    /// <summary>TMinus without TimedLaunch: the countdown cannot be told apart from a stale value.</summary>
+    public class NoTimedLaunchAutopilot : ComputerModule
+    {
+        public string Status = "";
+        public double TMinus = 12;
+    }
 }
 
 internal static partial class Program
@@ -128,6 +137,37 @@ internal static partial class Program
         string golden = File.ReadAllText(Path.Combine(root, "hmi-cpp", "tests", "data", "mechjeb_report_v1.txt")).Replace("\r\n", "\n");
         Check(report == golden, "mechjeb report differs from mechjeb_report_v1.txt:\n" + report);
         Check(missing.Count == 0, "mechjeb: unexpected missing members: " + string.Join("; ", missing));
+
+        // ascent.t_minus only while a timed launch is armed (TimedLaunch), right after ascent.status.
+        Check(!report.Contains("ascent.t_minus"), "mechjeb: t_minus omitted without a timed launch");
+        ap.TimedLaunch = true;
+        ap.tMinus = 12.5;
+        report = MechJebFormat.Report(43, "ok", "2.15.3.0", MechJebValues.Collect(lookup, missing.Add));
+        Check(report.Contains("\nascent.status=Awaiting%20liftoff\nascent.t_minus=12.5\nascent.path="),
+              "mechjeb: t_minus while armed:\n" + report);
+        ap.TimedLaunch = false;
+        report = MechJebFormat.Report(44, "ok", "2.15.3.0", MechJebValues.Collect(lookup, missing.Add));
+        Check(report == golden.Replace("rev=42", "rev=44"), "mechjeb: t_minus gone after abort:\n" + report);
+        Check(missing.Count == 0, "mechjeb: armed / disarmed members found");
+
+        // thrust.flameout_safety_pct: MechJeb's percent as a fraction, and back to percent on writes.
+        Check(golden.Contains("\nthrust.flameout_safety_pct=0.05\n"), "mechjeb: flameout safety fraction in the fixture");
+        MechJebMap.Entry flameout = MechJebMap.Find("thrust.flameout_safety_pct");
+        Check(flameout.Divisor == 100 && flameout.ToMember(0.05) == 5 && flameout.ToMember(0.125) == 12.5 &&
+              flameout.ToReport(5) == 0.05, "mechjeb: flameout safety percent <-> fraction");
+        Check(MechJebMap.Find("thrust.min_throttle").ToMember(0.05) == 0.05 &&
+              MechJebMap.Find("thrust.min_throttle").ToReport(0.05) == 0.05, "mechjeb: other keys unscaled");
+        thrust.FlameoutSafetyPct.Val = flameout.ToMember(0.1);
+        report = MechJebFormat.Report(45, "ok", "2.15.3.0", MechJebValues.Collect(lookup, missing.Add));
+        Check(thrust.FlameoutSafetyPct.Val == 10 && report.Contains("\nthrust.flameout_safety_pct=0.1\n"),
+              "mechjeb: flameout safety round trip");
+        thrust.FlameoutSafetyPct.Val = 5;
+
+        // An autopilot without TimedLaunch: t_minus omitted, with the reason.
+        modules[MechJebMap.Ascent] = new FakeMuMech.NoTimedLaunchAutopilot { Enabled = true };
+        report = MechJebFormat.Report(46, "ok", null, MechJebValues.Collect(lookup, missing.Add));
+        Check(!report.Contains("ascent.t_minus") && missing.Count == 1 && missing[0].Contains("TimedLaunch"),
+              "mechjeb: no TimedLaunch member: " + string.Join("; ", missing));
 
         // Missing members and modules are omitted, never zero.
         modules[MechJebMap.Ascent] = new FakeMuMech.OldAutopilot { Enabled = true };
