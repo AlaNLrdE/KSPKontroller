@@ -1,5 +1,13 @@
 # Changelog
 
+* **0.19.8.1**: 20261118
+  MechJeb report fixes (docs/hmi.rst, "MechJeb scene"): `ascent.t_minus` is reported only while a timed launch is
+  armed (MechJeb 2.15.3's `TimedLaunch`); otherwise `TMinus` holds a stale value and the key is now omitted, which
+  the HMI reads as "no countdown". `thrust.flameout_safety_pct` is a fraction (0.05 = 5 %) as the contract says:
+  MechJeb's `FlameoutSafetyPct` is a percent, so the bridge divides by 100 on read and multiplies by 100 on
+  `MechJebSet`. The shared fixture drops `ascent.t_minus` (an idle vessel); kspsim omits it outside its 30 s
+  countdown. `KSPSerialIO.dll` only changes version. No serial packet or firmware change.
+
 * **0.19.8.0**: 20261116
   MechJeb scene, plugin side (docs/hmi.rst, "MechJeb scene"): `KSPSerialIO.Hmi.dll` reads and changes the active
   vessel's MechJeb by reflection, so MechJeb stays optional (no compile-time reference). `MechJebBridge` (flight

@@ -1,7 +1,6 @@
 v=1 rev=42 mj=ok version=2.15.3.0
 ascent.enabled=1
 ascent.status=Awaiting%20liftoff
-ascent.t_minus=0
 ascent.path=0
 ascent.altitude=80000
 ascent.inclination=0

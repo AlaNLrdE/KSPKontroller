@@ -18,6 +18,23 @@ namespace KSPSerialIO.Hmi
             public string Key;
             public string Module;
             public string[] Members;
+            /// <summary>Report value = member value / Divisor (FlameoutSafetyPct is a percent, the report a fraction).</summary>
+            public double Divisor = 1;
+            /// <summary>A bool member of the same module: the key is reported only while it is true (TMinus means
+            /// nothing unless a timed launch is armed). Null: always reported.</summary>
+            public string WhileTrue;
+
+            /// <summary>The report number for a member value.</summary>
+            public double ToReport(double member)
+            {
+                return Divisor == 1 ? member : member / Divisor;
+            }
+
+            /// <summary>The member value for a report number (MechJebSet).</summary>
+            public double ToMember(double report)
+            {
+                return report * Divisor;
+            }
         }
 
         public const string Ascent = "Ascent", Settings = "AscentSettings", Thrust = "Thrust", Staging = "Staging";
@@ -27,10 +44,24 @@ namespace KSPSerialIO.Hmi
             return new Entry { Key = key, Module = module, Members = members };
         }
 
+        private static Entry D(Entry e, double divisor)
+        {
+            e.Divisor = divisor;
+            return e;
+        }
+
+        private static Entry W(Entry e, string whileTrue)
+        {
+            e.WhileTrue = whileTrue;
+            return e;
+        }
+
         public static readonly IList<Entry> Entries = new List<Entry> {
             E("ascent.enabled", Ascent, "Enabled"),
             E("ascent.status", Ascent, "Status"),
-            E("ascent.t_minus", Ascent, "TMinus"),
+            // TMinus keeps counting from the last StartCountdown; MechJeb 2.15.3's ascent autopilot runs a countdown
+            // only while TimedLaunch is set (StartCountdown sets it, a launch or abort clears it).
+            W(E("ascent.t_minus", Ascent, "TMinus"), "TimedLaunch"),
             // The AscentType property setter also disables the other path's modules (DisableAscentModules), the way
             // MechJeb's own path selector does; AscentTypeInteger is its backing field.
             E("ascent.path", Settings, "AscentType", "AscentTypeInteger"),
@@ -78,7 +109,7 @@ namespace KSPSerialIO.Hmi
             E("thrust.min_throttle", Thrust, "MinThrottle"),
             E("thrust.smooth_throttle", Thrust, "SmoothThrottle"),
             E("thrust.prevent_flameout", Thrust, "LimitToPreventFlameout"),
-            E("thrust.flameout_safety_pct", Thrust, "FlameoutSafetyPct"),
+            D(E("thrust.flameout_safety_pct", Thrust, "FlameoutSafetyPct"), 100),  // MechJeb percent, report fraction
             E("thrust.prevent_unstable_ignition", Thrust, "LimitToPreventUnstableIgnition"),
             E("thrust.differential_throttle", Thrust, "DifferentialThrottle"),
             E("staging.autostage_limit", Staging, "AutostageLimit"),
@@ -272,8 +303,9 @@ namespace KSPSerialIO.Hmi
     /// <summary>Builds the report values from MechJeb's computer modules (looked up by MechJebMap module name).</summary>
     public static class MechJebValues
     {
-        /// <summary>One key=value pair per MechJebFormat key, in format order; keys whose module or member is missing,
-        /// or whose value cannot be expressed, are omitted (never zero). `missing` (may be null) is told why each
+        /// <summary>One key=value pair per MechJebFormat key, in format order, divided by the entry's Divisor; keys whose
+        /// module or member is missing, whose WhileTrue member is false, or whose value cannot be expressed, are
+        /// omitted (never zero). `missing` (may be null) is told why each
         /// key without a module or member is omitted, on every call.</summary>
         public static List<KeyValuePair<string, string>> Collect(Func<string, object> module, Action<string> missing)
         {
@@ -290,7 +322,21 @@ namespace KSPSerialIO.Hmi
                     if (missing != null) missing(info.Key + ": " + target.GetType().Name + " has no " + string.Join("/", entry.Members));
                     continue;
                 }
-                string text = MechJebMember.Format(info.Kind, member.Read(target));
+                if (entry.WhileTrue != null)
+                {
+                    MechJebMember gate = MechJebMember.Find(target.GetType(), entry.WhileTrue);
+                    if (gate == null)
+                    {
+                        if (missing != null) missing(info.Key + ": " + target.GetType().Name + " has no " + entry.WhileTrue);
+                        continue;
+                    }
+                    object armed = gate.Read(target);
+                    if (armed == null || MechJebMember.ToDouble(armed) == 0) continue;  // not armed: omitted, not 0
+                }
+                object value = member.Read(target);
+                if (value != null && entry.Divisor != 1 && info.Kind == MechJebFormat.Kind.Number)
+                    value = entry.ToReport(MechJebMember.ToDouble(value));
+                string text = MechJebMember.Format(info.Kind, value);
                 if (text != null) values.Add(new KeyValuePair<string, string>(info.Key, text));
             }
             return values;
