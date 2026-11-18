@@ -353,6 +353,12 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   mDNS), Mac Alans-MacBook-Air.local. `deploy_hmi` writes the PC name into ~/ksphmi/env when the Pi resolves it
   to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
   unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
+- PC on Ethernet and Wi-Fi in one LAN (2026-11-17): Dnscache answers <hostname>.local on both, the Redux source
+  flipped .17/.29 about 12 times in 30 min. Fix: elevated `tools/windows/mdns-prefer-ethernet.ps1 -Install`
+  (firewall group "KSPKontroller mDNS" blocks UDP 5353/5355 on wireless only while wired shares the LAN; SYSTEM
+  task re-applies on network events). `verify.py --lan-only` checks it. On the PC itself getaddrinfo of its own
+  name lists every adapter (even WSL vEthernet): judge from the Pi (`getent hosts PC.local`) or -Status.
+  PowerShell variables are case-insensitive: `$rules` overwrote `$Rules` in the first draft of that script.
   Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
 
 ## Cockpit panel scene (2026-11-16, docs/hmi.rst "Cockpit panel")

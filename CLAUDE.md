@@ -147,6 +147,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - The HMI is always full screen at the display's native pixel size on every platform (user, 2026-11-15): no size settings, `ALLOW_HIGHDPI` on macOS, and a window/display size change rebuilds Canvas and Display. `--size` is for off-screen frames only; `--windowed` only for the virtual-desktop test harnesses. Boot ready file: Linux only.
 - HMI keyboard = remote KSP keyboard with KSP's default bindings (user, 2026-11-15; docs/hmi.rst). T/R in the VAB go through KSPHMI.Press into EditorNavigation; Ctrl+1/2 pick the skin (1-0 are action groups), Esc quits (Q is roll). Held axes and throttle go through KSPHMIFlight into the plugin, never kRPC Control axes/throttle: those cannot yield to the board's joystick and kRPC's throttle stays latched. The frame loop only queues commands: kRPC calls stay on the telemetry thread.
 - HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.
+- A PC with Ethernet and Wi-Fi on one LAN announces <hostname>.local with both IPs (the Pi HMI flips): elevated
+  `tools/windows/mdns-prefer-ethernet.ps1 -Install` blocks mDNS/LLMNR on Wi-Fi only while Ethernet shares the LAN.
 - The DLL is UTF-16 inside: grep the installed DLL with `s.encode('utf-16-le')`, not plain `grep`.
 - NavBall speed uses `orbit_speed_reference_frame` / `surface_speed_reference_frame` /
   `target_speed_reference_frame`: `orbital_reference_frame` co-moves with the vessel and reads zero speed.
