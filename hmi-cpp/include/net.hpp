@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ksphmi::net {
 
@@ -86,6 +87,8 @@ void shutdown_both(socket_t fd);
 std::optional<sockaddr_in> resolve_ipv4(const std::string& host, int port);
 
 std::string to_string(const in_addr& a);
+/// Every IPv4 answer for `host`, in resolver order, duplicates removed (empty when it does not resolve).
+std::vector<std::string> resolve_all_ipv4(const std::string& host);
 
 /// Receive timeout on a socket (seconds, > 0).
 void set_timeout(socket_t fd, double seconds);

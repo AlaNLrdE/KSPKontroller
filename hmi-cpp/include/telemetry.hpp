@@ -10,10 +10,12 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "endpoint.hpp"
 #include "keyboard.hpp"
 #include "krpc.hpp"
 #include "model.hpp"
@@ -166,10 +168,13 @@ public:
         double tcp_timeout = 5;      ///< reaching the port (a firewall on a Public network drops rather than refuses)
         double connect_timeout = 20;  ///< the whole handshake, longer than tcp_timeout so the two causes stay apart
         int context_port = 50002;
+        std::string prefer_mac;  ///< the PC's Ethernet MAC, normalised (endpoint.hpp); "" = first resolver answer
     };
     explicit KrpcSource(Options options);
     ~KrpcSource() override;
     std::string address() const;
+    /// The IPv4 address the link uses: address() itself, or with prefer_mac its chosen address (endpoint.hpp).
+    std::string target() const;
     void command(const Command& c) override;
     void hold(const Held& h) override;
     void set_cockpit(bool shown) override;
@@ -200,7 +205,15 @@ protected:
     double period_;
 
 private:
+    /// address() resolved with the prefer_mac rule before each connection (telemetry thread); logs a change.
+    std::string choose_target();
     mutable std::mutex address_mutex_;
+    /// Options::address as configured (a name is resolved on every attempt); a discovered number replaces
+    /// options_.address only until a connection to it fails.
+    std::string configured_;
+    std::optional<EndpointResolver> endpoint_;  ///< for a host name with prefer_mac (telemetry thread)
+    bool endpoint_ok_ = false;                  ///< the last connection to the chosen address worked
+    std::string target_;                        ///< the chosen address, "" = address() (address_mutex_)
     std::mutex client_mutex_;
     krpc::Client* active_ = nullptr;
     /// Skin field of the last context reply, refreshed about once a second in every state (telemetry thread).

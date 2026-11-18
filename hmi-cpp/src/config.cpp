@@ -18,6 +18,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "endpoint.hpp"
 #include "log.hpp"
 
 namespace ksphmi {
@@ -122,6 +123,14 @@ int to_int(const TomlValues& m, const std::string& key, int current) {
     return static_cast<int>(v);
 }
 
+/// A MAC address setting, normalised; "" stays "" (no preference).
+std::string checked_mac(const std::string& text, const std::string& what) {
+    if (text.empty()) return "";
+    std::string mac = normalise_mac(text);
+    if (mac.empty()) throw std::runtime_error(what + " must be a MAC address like \"aa:bb:cc:dd:ee:ff\", not \"" + text + "\"");
+    return mac;
+}
+
 std::string to_string(const TomlValues& m, const std::string& key, const std::string& current) {
     auto it = m.find(key);
     return it == m.end() ? current : it->second;
@@ -222,6 +231,7 @@ void apply_toml(Config& c, const TomlValues& m) {
     c.krpc.rate_hz = to_double(m, "krpc.rate_hz", c.krpc.rate_hz);
     c.krpc.retry_seconds = to_double(m, "krpc.retry_seconds", c.krpc.retry_seconds);
     c.krpc.discovery = to_bool(m, "krpc.discovery", c.krpc.discovery);
+    c.krpc.prefer_mac = checked_mac(to_string(m, "krpc.prefer_mac", c.krpc.prefer_mac), "krpc.prefer_mac");
     c.demo.speed = to_double(m, "demo.speed", c.demo.speed);
     c.display.output = to_string(m, "display.output", c.display.output);
     c.display.fbdev = to_string(m, "display.fbdev", c.display.fbdev);
@@ -315,6 +325,8 @@ Config load_config(const std::string& path) {
     }
     if (const char* address = std::getenv("KSPHMI_KRPC_ADDRESS"))
         if (*address) cfg.krpc.address = address;
+    if (const char* mac = std::getenv("KSPHMI_PREFER_MAC"))
+        if (*mac) cfg.krpc.prefer_mac = checked_mac(mac, "KSPHMI_PREFER_MAC");
     return cfg;
 }
 

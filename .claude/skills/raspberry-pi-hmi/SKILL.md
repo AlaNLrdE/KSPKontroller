@@ -354,6 +354,12 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
   unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
   Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
+- Dual-homed PC (2026-11-18): a PC on Ethernet and Wi-Fi answers its mDNS name with one address at a time, so
+  the endpoint flipped (.17 <-> .29); getent returns one address, so picking among answers cannot help. Set the
+  PC's Ethernet MAC as `[krpc] prefer_mac` in ~/ksphmi/config.local.toml (never ~/ksphmi/env: deploy_hmi rewrites
+  it; never commit a MAC). endpoint.cpp reads /proc/net/arp (a MAC appears only after traffic, so it pokes the
+  other answers with an empty UDP datagram) and stays sticky. A discovered kRPC number now gives way to the
+  configured name after one failed connection (the Mac kept a stale 192.168.0.152 for hours after a LAN change).
 
 ## Cockpit panel scene (2026-11-16, docs/hmi.rst "Cockpit panel")
 

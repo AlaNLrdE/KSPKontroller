@@ -10,6 +10,8 @@ rpc_port = 50000
 stream_port = 50001
 rate_hz = 10             # samples per second requested from the game
 retry_seconds = 3
+# prefer_mac = "aa:bb:cc:dd:ee:ff"  # the PC's Ethernet MAC when it is also on Wi-Fi: its address wins and never
+#                                   # flips (docs/hmi.rst "prefer_mac"). Private: set it in ~/ksphmi/config.local.toml.
 
 [demo]
 speed = 20               # time acceleration of the simulated orbit
