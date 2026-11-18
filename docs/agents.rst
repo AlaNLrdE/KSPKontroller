@@ -59,13 +59,14 @@ pi-claude (reviewed 2026-11-18)
 - Owns code: none exclusively. Coordination docs (this roster, :doc:`communication` roles) with the
   owner of the push; probe scripts it was assigned (``tools/latency/``, request #130).
 - Owns resources: **operation of the mailbox server** on the Pi (user unit ``agent-mailbox.service``,
-  port 50380, journal ``~/agent-mailbox``): health checks, restarts, journal integrity. None of the locks.
+  port 50380, journal ``~/agent-mailbox``): health checks, journal integrity and, only when the server is
+  unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. None of the locks.
   Host of the deployed HMI (``~/ksphmi``, read-only for pi-claude).
 - Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; read-only Pi/ksphmi
   diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user.
-- Cannot: deploy, flash, push, merge, restart ksphmi, use sudo, touch ``~/ksphmi``, GameData or boot
-  config, build hmi-cpp on the Pi, edit other repos. Restarting ``agent-mailbox.service`` and reading its
-  journal need the headless allowlist in ``tools/agent_daemon.py`` extended (assigned to pc-claude).
+- Cannot: deploy, flash, push, merge, restart ksphmi or any unit other than ``agent-mailbox.service``, use
+  sudo, touch ``~/ksphmi``, GameData or boot config, build hmi-cpp on the Pi, edit other repos. The headless
+  allowlist in ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
 - Skills: raspberry-pi-hmi (read-only diagnosis side), kspsim-testing.
 
 pc-claude (reviewed 2026-11-18)
@@ -97,7 +98,7 @@ mac-claude (reviewed 2026-11-18)
 pc-workbench (reviewed 2026-11-18)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- Owns code: ksp-workbench shared code (mods, Shared/, Tests/, docs/site, WorkbenchVersion, CHANGELOG)
+- Owns code: ksp-workbench shared code (mods, Shared/, Tests/, WorkbenchVersion, CHANGELOG)
   **jointly with mac-workbench**; Windows-only mod stacks (Parallax/Scatterer/EVE) and Windows deploy scripts.
 - Owns resources: wk-rea GameData for the workbench mods (``ksp-gamedata``), third-party mod install/removal
   in wk-rea (modding owner on Windows), Ships/ crafts, the arbiter ledger
@@ -129,8 +130,8 @@ Overlaps and splits
 
 - **mac-workbench vs pc-workbench** (same repo): ksp-workbench shared code is owned by both identities.
   Machine resources split by machine: pc-workbench owns Windows (wk-rea GameData, Windows-only stacks, the
-  ledger, "OK deploy"); mac-workbench owns macOS (Mac GameData, stock path, ``platform.sh``). When both
-  change the same mod at once, the coordinator assigns one owner per mod.
+  ledger, "OK deploy"); mac-workbench owns macOS (Mac GameData, stock path, ``platform.sh``, the docs
+  site). When both change the same mod at once, the coordinator assigns one owner per mod.
 - **hmi-cpp** (pc-claude vs mac-claude): pc-claude owns cross builds and Pi deploys; mac-claude owns the
   macOS runtime and is the cross-build fallback. Shared code changes get one owner per request.
 - **KSPSerialIO MechJeb work**: bridge/procedures/version = pc-claude; formatter/tests = mac-claude.
@@ -190,7 +191,7 @@ Rule: no dead agents (session takeover, user 2026-11-18)
 Rule: backup coordinator (user 2026-11-18)
 ------------------------------------------
 
-pc-claude is the backup coordinator. If pi-claude has not processed work (no STATUS/RESULT, an automatic
+pc-claude is the backup coordinator. If pi-claude has not processed work (no STATUS, RESULT or INFO; an automatic
 ACK does not count) for more than 30 minutes while it has pending REQUESTs, or its daemon log
 (``build/agent-mailbox/pi-claude.daemon/``) shows failed runs, pc-claude takes the coordinator role
 temporarily, announces it with INFO to all, and hands it back with INFO when pi-claude answers again.

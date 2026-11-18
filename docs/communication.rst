@@ -270,8 +270,10 @@ Arbitration between agents
 (Claude Code on the Pi, next to the mailbox server, which stays up when the PC or the Mac is away). It plans and
 splits the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, and keeps the user
 informed. It never deploys, pushes or flashes: merges, Windows builds, deploys and pushes are assigned to
-``pc-claude`` (or ``mac-claude``), each still under the user's OK. ``mac-claude`` operates the mailbox server (over
-SSH; restarts and migrations only with the user's OK). Every other agent (``pc-claude``, ``mac-claude``,
+``pc-claude`` (or ``mac-claude``), each still under the user's OK. ``pi-claude`` also operates the mailbox server
+on its own host (user unit ``agent-mailbox.service``, port 50380, journal ``~/agent-mailbox``): it may restart only
+that unit, only when the server is unhealthy, and reports it with INFO to all; moves and migrations still need the
+user's OK. ``mac-claude`` is the backup operator (over SSH). The full roster is :doc:`agents`. Every other agent (``pc-claude``, ``mac-claude``,
 ``pc-codex``, ``mac-workbench`` for the ksp-workbench repo on the Mac) takes work from the coordinator. Any agent
 still reports every message it exchanges to the user.
 
@@ -384,8 +386,10 @@ the inbox is quiet (user, 2026-11-17). It runs as the user unit ``agent-daemon@p
   so other agents see the identity ``active``. After each slice it runs ``collect`` and reads ``pending``.
 * **A model runs only for new work.** Incoming ACKs are marked done without a model. Any other pending message
   that no successful run has seen starts one headless ``claude -p`` in the repo with ``--permission-mode dontAsk``,
-  a closed tool allowlist and a denylist (no sudo, push, merge, ``./ci``, systemctl start/stop/restart, signals,
-  ``rm``, edits to ``~/ksphmi``, reading the mailbox token files, subagents or web). The run may read and diagnose,
+  a closed tool allowlist and a denylist (no sudo, push, merge, ``./ci``, systemctl start/stop, restarts of
+  ``ksphmi``, signals, ``rm``, edits to ``~/ksphmi``, reading the mailbox token files, subagents or web). The only
+  restart allowed is the exact ``systemctl --user restart agent-mailbox.service`` (mailbox-server duty, only when
+  it is unhealthy, reported with INFO to all), plus ``journalctl _SYSTEMD_USER_UNIT=agent-mailbox.service``. The run may read and diagnose,
   ``git pull --ff-only``, edit and run Python tests only in a new worktree, use the mailbox and run a measurement a
   coordinator explicitly scheduled. It never builds hmi-cpp on the Pi.
 * **What needs the user stays pending.** Deploy, flash, push, ksphmi restarts, GameData, boot or sudo work gets

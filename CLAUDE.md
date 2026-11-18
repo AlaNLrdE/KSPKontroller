@@ -52,10 +52,28 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - **Coordinator: `pi-claude`** (Claude Code on the Pi, user 2026-11-18; `pc-claude` until then): it plans,
   assigns one owner and the locks per job, watches `overdue` and reassigns. It never deploys, pushes or flashes:
   merges, PC builds, `deploy_hmi`, plugin deploys and pushes go to `pc-claude` (or `mac-claude`) as assigned work,
-  each still under the user's OK. `mac-claude` operates the mailbox server, which runs on the Pi
-  (`agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, since 2026-11-18). `pc-claude`, `mac-claude`,
-  `pc-codex` and `mac-workbench` (ksp-workbench repo on the Mac) take assigned work; requests from the user to
+  each still under the user's OK. `pi-claude` also operates the mailbox server, which runs on the Pi
+  (user unit `agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, journal `~/agent-mailbox`, since
+  2026-11-18); `mac-claude` is its backup operator. `pc-claude`, `mac-claude`
+  and `mac-workbench` (ksp-workbench repo on the Mac) take assigned work; requests from the user to
   another agent are reported to the coordinator.
+- **Roster** (user-approved 2026-11-18): `docs/agents.rst` is the canonical list of identities, owners, backups,
+  locks and routing rules; read it before assigning or taking work. This repo's identities, in short:
+  `pi-claude` coordinates and operates the mailbox server (may restart only `agent-mailbox.service`, when it is
+  unhealthy, with INFO to all); never deploys, flashes, pushes or restarts ksphmi.
+  `pc-claude` owns `KSPSerialIO/`, the firmware, `tools/`, `ci`, AGENTS.md/skills mirror, hmi-cpp cross builds and
+  Pi deploys, merges, the KSPSerialIO GameData/board-flash/pi-deploy/push-main locks; backup coordinator; edits
+  this file. `mac-claude` owns the macOS hmi-cpp runtime, kspsim/`ci` portability on the Mac, the Redux parser
+  side; cross-build fallback; backup mailbox-server operator.
+- **No dead agents** (user 2026-11-18): declare the identity in CLAUDE.md and its own config, never infer it from
+  the cwd. Take over only when the server shows `gone` and no live process of that agent exists on the machine
+  (alive lease, HTTP 409: work without the mailbox and tell the user); then `register --takeover`, `collect` +
+  `pending`, resume its work and send INFO HANDOVER to all under the same name. A returning old session that
+  gets 409 stops and tells the user. A session holding several identities watches all of them. An automatic ACK
+  is not a sign of life: only a recent STATUS, RESULT or INFO written by the agent counts.
+- **Backup coordinator = `pc-claude`**: when `pi-claude` sends no STATUS/RESULT/INFO for 30 min while REQUESTs
+  are pending, or its daemon log (`build/agent-mailbox/pi-claude.daemon/`) shows failed runs, `pc-claude` takes
+  over coordination, announces it with INFO to all and hands it back with INFO when `pi-claude` answers again.
 - **Delegate and stay available** (user, 2026-11-17): every agent on the mailbox bus that receives new work (from
   the user or another agent) delegates it right away to other agents (`kspcontroller-dev` subagents in their own
   worktrees, or an addressed mailbox REQUEST to another agent) and stays free to schedule further work in parallel.
