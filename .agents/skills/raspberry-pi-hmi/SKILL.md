@@ -413,3 +413,4 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   keypad) needs an opaque backdrop about 1u larger than its frame, and text-containment tests must use that backdrop.
 - The macOS KSPHMI_SHOTS / --screenshot runs are the quick review loop: `build/hmi-cpp/ksphmi --demo --skin S
   --flight-scene mechjeb --mechjeb-page ascent --size 1024x768 --screenshot X.png` catches cramped 4:3 layouts.
+- pi-claude's headless daemon (`tools/agent_daemon.py`) uses Claude Code rules where a deny beats an allow: to permit one command (the exact `systemctl --user restart agent-mailbox.service`), narrow the deny (ksphmi restarts, generic start/stop) instead of adding an allow under a broad deny. `tools/test_agent_daemon.py` skips on Windows (fcntl): run it with `wsl -e python3 -m unittest tools/test_agent_daemon.py`. Substring checks for `start` also match `restart`.

@@ -21,6 +21,19 @@ def msg(mid, kind='REQUEST', text='REQUEST: do it'):
     return dict(id=mid, seq=1, kind=kind, sender='pc-claude', text=text)
 
 
+def matches(rule, command):
+    """Claude Code Bash rule semantics: Bash(x:*) is a prefix match, Bash(x) an exact match."""
+    if not (rule.startswith('Bash(') and rule.endswith(')')):
+        return False
+    body = rule[5:-1]
+    return command.startswith(body[:-2]) if body.endswith(':*') else command == body
+
+
+def allows(allowed, denied, command):
+    """A deny wins over an allow; under dontAsk anything not allowed is refused."""
+    return not any(matches(r, command) for r in denied) and any(matches(r, command) for r in allowed)
+
+
 class SelectTest(unittest.TestCase):
     def test_new_request_starts_a_run(self):
         self.assertIs(daemon.select([msg('a')], {}, 6, time.time()), True)
@@ -59,8 +72,11 @@ class PermissionTest(unittest.TestCase):
     def test_allowlist_is_closed(self):
         rules = daemon.allowed_tools(Path('/repo'), 'build/agent-mailbox/pi-claude.json')
         joined = ' '.join(rules)
-        for forbidden in ('sudo', 'git push', 'git merge', './ci', 'restart', 'cmake', 'make:', 'Agent', 'rm:'):
+        for forbidden in ('sudo', 'git push', 'git merge', './ci', 'cmake', 'make:', 'Agent', 'rm:',
+                          'systemctl --user stop', 'systemctl --user start', 'kill'):
             self.assertNotIn(forbidden, joined)
+        restarts = [r for r in rules if 'restart' in r]
+        self.assertEqual(restarts, ['Bash(systemctl --user restart agent-mailbox.service)'])  # exact, no :*
         self.assertIn('Edit(//repo/.claude/worktrees/**)', rules)
         self.assertIn('Bash(python3 tools/agent_mailbox.py --config build/agent-mailbox/pi-claude.json:*)', rules)
         self.assertNotIn('Edit', [r for r in rules if r == 'Edit'])  # never unrestricted edits
@@ -70,6 +86,20 @@ class PermissionTest(unittest.TestCase):
         self.assertIn('build/agent-mailbox/*.json', joined)
         self.assertIn('ksphmi/**', joined)
         self.assertIn('Bash(git push:*)', daemon.DISALLOWED)
+
+    def test_only_the_mailbox_server_may_be_restarted(self):
+        rules = daemon.allowed_tools(Path('/repo'), 'build/agent-mailbox/pi-claude.json')
+        self.assertTrue(allows(rules, daemon.DISALLOWED, 'systemctl --user restart agent-mailbox.service'))
+        self.assertTrue(allows(rules, daemon.DISALLOWED, 'journalctl _SYSTEMD_USER_UNIT=agent-mailbox.service -n 50'))
+        for denied in ('systemctl --user restart ksphmi.service', 'systemctl --user restart ksphmi',
+                       'systemctl --user restart agent-mailbox.service ksphmi.service',
+                       'systemctl --user restart agent-daemon@pi-claude.service',
+                       'systemctl --user stop agent-mailbox.service', 'systemctl --user start ksphmi.service',
+                       'systemctl --user stop ksphmi.service'):
+            self.assertFalse(allows(rules, daemon.DISALLOWED, denied), denied)
+        self.assertIn('Bash(systemctl --user restart ksphmi:*)', daemon.DISALLOWED)
+        self.assertIn('Bash(systemctl --user stop:*)', daemon.DISALLOWED)
+        self.assertIn('Bash(systemctl --user start:*)', daemon.DISALLOWED)
 
 
 if __name__ == '__main__':
