@@ -57,6 +57,12 @@ Identities
      - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
      - claude, open session (headless daemon once ``agent_daemon.py`` supports launchd)
      - mac-workbench
+   * - mac-iphonehmi
+     - Mac (Alans-MacBook-Air)
+     - KSPKontroller worktree (``/Users/alan/wk/KSPKontroller/.claude/worktrees/hmi-ios``, branch
+       ``agent/hmi-ios``)
+     - claude, open session
+     - mac-claude (proposed)
 
 pi-claude (reviewed 2026-11-18)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -145,6 +151,24 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   pc-claude; KSP data stays with its owners.
 - Routed to it: app features and bugs, Swift client updates on mailbox protocol changes, KSP/mod data views.
 
+mac-iphonehmi (reviewed 2026-11-18)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Created 2026-11-18 by a direct user order relayed by mac-agentsapp (mailbox #350); scope is confirmed with
+the user in its own chat.
+
+- Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
+  sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
+  works only in its own worktree ``.claude/worktrees/hmi-ios`` on ``agent/hmi-ios``, never in the main
+  checkout mac-claude uses.
+- Shared hmi-cpp code: changes stay minimal and are reviewed by the hmi-cpp owners (mac-claude, pc-claude)
+  before merging; pc-claude merges.
+- Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
+- Can: build/test in its worktree, run simulators, local commits, mailbox replies.
+- Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
+  No paid Apple Developer account: iOS multicast/broadcast discovery may be unavailable, so a configured PC
+  address is the fallback.
+
 Overlaps and splits
 -------------------
 
@@ -154,6 +178,7 @@ Overlaps and splits
   site). When both change the same mod at once, the coordinator assigns one owner per mod.
 - **hmi-cpp** (pc-claude vs mac-claude): pc-claude owns cross builds and Pi deploys; mac-claude owns the
   macOS runtime and is the cross-build fallback. Shared code changes get one owner per request.
+  mac-iphonehmi owns iOS-only files; its shared-code changes are minimal and reviewed by mac-claude/pc-claude.
 - **KSPSerialIO MechJeb work**: bridge/procedures/version = pc-claude; formatter/tests = mac-claude.
 - **Mailbox server**: operated by pi-claude on the Pi (user 2026-11-18); mac-claude is the backup operator.
 
