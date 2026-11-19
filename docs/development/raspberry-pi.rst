@@ -215,7 +215,7 @@ Outputs and service lifecycle
 * macOS supports SDL and off-screen rendering, system font fallback and native executable lookup.
   Selecting Linux fbdev there raises an explicit error.
 
-The Pi user unit ``ksphmi.service`` executes ``~/ksphmi/cpp/build/ksphmi`` and restarts after process
+The Pi user unit ``ksphmi.service`` executes ``~/.local/bin/ksphmi`` and restarts after process
 exit. A separate system service from ``setup-kiosk.sh`` (``ksphmi-splash.service`` running
 ``systemd/ksphmi-intro.sh``) plays the intro video with mpv on DRM and holds its last frame; before SDL video starts
 the HMI waits for the end of the video on mpv's IPC socket ``/run/ksphmi-intro/mpv.sock``, makes mpv quit (it is
@@ -227,10 +227,11 @@ Use ``ssh ksphmi`` (configured locally); do not embed the Pi's address or accoun
 Configuration layers and operations
 -----------------------------------
 
-The deployed defaults live in ``~/ksphmi/cpp/config.toml``. The unit points
-``KSPHMI_LOCAL_CONFIG`` at ``~/ksphmi/config.local.toml`` for persistent user overrides, and loads
-``~/ksphmi/env`` for the deploy-provided server address. ``KSPHMI_APP_DIR`` fixes application-directory
-lookup. Explicit CLI switches override their corresponding effective options; a recognized runtime
+The installed defaults live in ``~/.local/share/ksphmi/config.toml``. The unit points
+``KSPHMI_LOCAL_CONFIG`` at ``~/dev/run/ksphmi/config.local.toml`` for persistent user overrides, and loads
+``~/dev/run/ksphmi/env`` for the installer-provided server address. ``KSPHMI_APP_DIR`` fixes application-directory
+lookup; without it the binary also finds ``<bin>/../share/ksphmi``. Sources and the Pi's own builds live in the
+``~/dev`` workspace; ``./ci install_hmi`` builds and installs there, ``./ci deploy_hmi`` from the PC/Mac. Explicit CLI switches override their corresponding effective options; a recognized runtime
 context skin can override configured skin selection. See :doc:`../hmi` for the full CLI and precedence.
 
 Build and test on a supported host:

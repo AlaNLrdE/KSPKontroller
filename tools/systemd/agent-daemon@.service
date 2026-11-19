@@ -1,5 +1,6 @@
 # Token-free mailbox listener for one agent identity (tools/agent_daemon.py, docs/communication.rst).
-# The instance is the identity: agent-daemon@pi-claude.service uses build/agent-mailbox/pi-claude.json.
+# The instance is the identity: agent-daemon@pi-claude.service uses build/agent-mailbox/pi-claude.json of the Pi's
+# checkout ~/dev/ksp1/KSPKontroller (on the Pi build/agent-mailbox links to ~/dev/run/agent-mailbox).
 # Install (user unit, no sudo): copy agent_daemon.py to ~/.local/lib/agent-daemon/, this file to
 # ~/.config/systemd/user/, then systemctl --user daemon-reload && systemctl --user enable --now agent-daemon@pi-claude
 [Unit]
@@ -9,10 +10,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/wk/KSPKontroller
-Environment=AGENT_DAEMON_REPO=%h/wk/KSPKontroller
+WorkingDirectory=%h/dev/ksp1/KSPKontroller
+Environment=AGENT_DAEMON_REPO=%h/dev/ksp1/KSPKontroller
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py --config %h/wk/KSPKontroller/build/agent-mailbox/%i.json run --max-runs 6
+ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py --config %h/dev/ksp1/KSPKontroller/build/agent-mailbox/%i.json run --max-runs 6
 Restart=on-failure
 RestartSec=30
 Nice=10

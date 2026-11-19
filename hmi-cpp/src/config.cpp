@@ -290,8 +290,10 @@ std::string find_app_dir() {
     if (n > 0) {
         exe[n] = 0;
         std::string dir = dirname(exe);
-        // next to config.toml, one level below it (~/ksphmi/cpp/build on the Pi), or a build tree build/hmi-cpp*
-        for (const char* rel : {"", "/..", "/../../hmi-cpp", "/../../../hmi-cpp"}) candidates.push_back(dir + rel);
+        // next to config.toml, one level below it (a build tree inside hmi-cpp), an installed prefix (bin/ksphmi with
+        // share/ksphmi: ~/.local on the Pi), or a build tree build/hmi-cpp*
+        for (const char* rel : {"", "/..", "/../share/ksphmi", "/../../hmi-cpp", "/../../../hmi-cpp"})
+            candidates.push_back(dir + rel);
     }
     candidates.push_back(".");
     candidates.push_back("hmi-cpp");

@@ -26,8 +26,9 @@ Always look first::
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-claude install --dry-run
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-workbench \\
        --repo C:/Users/alanl/wk/decompilation/ksp-workbench install --dry-run
-   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/ksp-workbench \\
-       --tools-dir /Users/alan/wk/KSPKontroller install --dry-run
+   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/devKSP/ksp1/ksp-workbench \\
+       --tools-dir /Users/alan/wk/devKSP/ksp1/KSPKontroller \\
+       --config /Users/alan/wk/devKSP/run/agent-mailbox/mac-workbench.json install --dry-run
    python3 tools/agent_daemon_install.py --identity mac-claude uninstall --dry-run
 
 ``--os`` renders another platform's service (for review); a real install only runs for the current platform.
@@ -108,12 +109,12 @@ def requirements(python, tools, config, work, system):
 
 def plan_linux(identity, tools, work, config, home, max_runs=6, python=None, **_):
     """systemd --user: the unit template stays the source and the Pi keeps it unchanged (tools home = work repo =
-    ~/wk/KSPKontroller); another tools home rewrites the template, another work repo, config or python goes into
+    ~/dev/ksp1/KSPKontroller); another tools home rewrites the template, another work repo, config or python goes into
     the identity's own drop-in."""
     home, tools, work = PurePosixPath(home), PurePosixPath(tools), PurePosixPath(work)
     unit = UNIT_TEMPLATE.read_text(encoding='utf-8').replace('\r\n', '\n')
-    if tools != home / 'wk' / 'KSPKontroller':
-        unit = unit.replace('%h/wk/KSPKontroller', str(tools))
+    if tools != home / 'dev' / 'ksp1' / 'KSPKontroller':
+        unit = unit.replace('%h/dev/ksp1/KSPKontroller', str(tools))
     if max_runs != 6:
         unit = unit.replace('run --max-runs 6', 'run --max-runs %d' % max_runs)
     service = 'agent-daemon@%s.service' % identity
@@ -302,7 +303,7 @@ def main(argv=None):
     ap.add_argument('--identity', required=True, help='HOST-AGENT, e.g. pi-claude; selects <identity>.json')
     ap.add_argument('--os', choices=sorted(PLANS), help='default: this machine; another OS is dry-run only')
     ap.add_argument('--tools-dir', help='tools home: python, agent_daemon.py, agent_mailbox.py (default: this '
-                    'checkout; for another --os ~/wk/KSPKontroller of this user)')
+                    'checkout; for another --os ~/wk/KSPKontroller of this user, ~/dev/ksp1/KSPKontroller on Linux)')
     ap.add_argument('--repo', '--workdir', dest='repo', help='work repo: service cwd, claude -p cwd and allowlist '
                     'root (default: the tools home)')
     ap.add_argument('--config', help='mailbox config (default: tools home, then work repo build/agent-mailbox/'
@@ -320,7 +321,7 @@ def main(argv=None):
     tools = args.tools_dir or str(HERE.parent)
     if system != here and not args.tools_dir:
         tools = (r'C:\Users\%s\wk\KSPKontroller' % getpass.getuser() if system == 'windows'
-                 else '/home/%s/wk/KSPKontroller' % getpass.getuser() if system == 'linux'
+                 else '/home/%s/dev/ksp1/KSPKontroller' % getpass.getuser() if system == 'linux'
                  else '/Users/%s/wk/KSPKontroller' % getpass.getuser())
     tools = str(pure(system)(tools))
     work = str(pure(system)(args.repo or tools))

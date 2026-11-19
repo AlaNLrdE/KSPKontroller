@@ -59,7 +59,7 @@ fake_cli() {
                     self.assertEqual((override / 'src/WDT.cpp').read_bytes(), (library / 'src/WDT.cpp').read_bytes())
 
     def test_pi_krpc_endpoint_prefers_override_then_kept_name_then_deployer_name(self):
-        """deploy_hmi's endpoint for ~/ksphmi/env: names survive IP changes and deploys from the Mac (user)."""
+        """deploy_hmi's endpoint for ~/dev/run/ksphmi/env: names survive IP changes and deploys from the Mac (user)."""
         ci = (ROOT / 'ci').read_text(encoding='utf-8')
         helper = re.search(r'^hmi_pc_address\(\) \{\n.*?^\}', ci, re.M | re.S)
         self.assertIsNotNone(helper)
@@ -327,6 +327,41 @@ hmi_kiosk() { record kiosk; }
                 self.assertEqual(trace.read_text().splitlines(), expected)
                 self.assertEqual('WARNING: no aarch64 cross compiler' in result.stdout, warned, result.stdout)
 
+    def test_install_hmi_builds_natively_and_runs_the_pi_steps_locally(self):
+        """./ci install_hmi on the Pi (user, 2026-11-19): a native build, then deploy_hmi's steps with HMI_HOST=local."""
+        stubs = self.STUBS + '''uname() { case "$1" in -s) echo "$FAKE_OS" ;; -m) echo "$FAKE_ARCH" ;; esac; }
+hmi_preflight() { record "preflight $HMI_HOST"; }
+hmi_deploy_lock() { record lock; }
+hmi_deploy_unlock() { record unlock; }
+hmi_pc_address() { echo gamepc.local; }
+build_hmi_pi_native() { record native; }
+build_hmi_pi() { record build_hmi_pi; }
+hmi_ship_cross() { record ship; }
+hmi_install_service() { record "install $1"; }
+hmi_kiosk() { record kiosk; }
+'''
+        script = stubs + ci_functions('install_hmi') + 'install_hmi\n'
+        for os_name, arch, expected in (
+                ('Linux', 'aarch64', ['preflight local', 'lock', 'native', 'ship', 'install gamepc.local', 'kiosk', 'unlock']),
+                ('Linux', 'x86_64', []), ('Darwin', 'arm64', [])):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                trace = Path(directory) / 'trace'
+                trace.write_text('')
+                result = run_bash(script, dict(os.environ, TRACE=trace.as_posix(), FAKE_OS=os_name, FAKE_ARCH=arch,
+                                               HMI_HOST='ksphmi'))
+                self.assertEqual(result.returncode == 0, bool(expected), result.stdout + result.stderr)
+                self.assertEqual(trace.read_text().splitlines(), expected)
+
+    def test_local_host_runs_the_pi_commands_here(self):
+        # The expected home comes from the same bash: Git Bash prints /tmp/... where Python sees C:\...\Temp\...
+        script = (self.STUBS + ci_functions('hmi_ssh') +
+                  'cd /; (cd "$HOME" && pwd); HMI_HOST=local hmi_ssh "pwd; echo \\$0" </dev/null\n')
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_bash(script, dict(os.environ, HOME=directory, TRACE=(Path(directory) / 't').as_posix()))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            home, here = result.stdout.split()[:2]
+            self.assertEqual(here, home)
+
     def ship(self, failing_test=''):
         """Run the real hmi_ship_cross against a fake Pi home (hmi_ssh = a local shell there)."""
         directory = tempfile.TemporaryDirectory()
@@ -347,16 +382,17 @@ hmi_kiosk() { record kiosk; }
         bin_dir.mkdir()
         (bin_dir / 'python3').write_text('#!/bin/sh\necho "python3 $*" >> "$HOME/ran"\n', newline='\n')
         (bin_dir / 'python3').chmod(0o755)  # macOS/Linux skip a non-executable file on PATH (Git Bash does not)
-        (home / 'ksphmi/cpp/build').mkdir(parents=True)
-        (home / 'ksphmi/cpp/config.toml').write_text('old config', newline='\n')
-        (home / 'ksphmi/cpp/build/ksphmi').write_text('old binary', newline='\n')
+        (home / '.local/share/ksphmi').mkdir(parents=True)
+        (home / '.local/bin').mkdir(parents=True)
+        (home / '.local/share/ksphmi/config.toml').write_text('old config', newline='\n')
+        (home / '.local/bin/ksphmi').write_text('old binary', newline='\n')
         stubs = self.STUBS + '''hmi_ssh() { HOME="$FAKE_HOME" PATH="$(cd "$FAKE_BIN" && pwd):$PATH" bash -c "$1"; }
 '''
-        script = stubs + ci_functions('hmi_pack_sources', 'hmi_ship_cross') + 'hmi_ship_cross\n'
+        script = stubs + ci_functions('hmi_pack_sources', 'hmi_ship_cross', 'hmi_test_and_install') + 'hmi_ship_cross\n'
         env = dict(os.environ, FAKE_HOME=home.as_posix(), FAKE_BIN=bin_dir.as_posix(), HMI_DIR=hmi.as_posix(),
                    HMI_PI_BUILD=build.as_posix(), HMI_PI_TESTS=' '.join(tests), HMI_HOST='fake-pi',
                    TRACE=(root / 'trace').as_posix())
-        return run_bash(script, env), home / 'ksphmi'
+        return run_bash(script, env), home / '.local'
 
     def test_binaries_staged_then_swapped_only_after_tests_pass(self):
         result, pi = self.ship()
@@ -365,20 +401,22 @@ hmi_kiosk() { record kiosk; }
         self.assertEqual(ran[:2], ['ran ksphmi_tests', 'ran ksphmi_render_tests'])
         self.assertIn('python3 -B tests/test_setup_kiosk.py', ran)  # the fake, never this machine's python3
         self.assertIn('python3 tests/test_screenshots.py', ' '.join(ran).replace('-B ', ''))
-        self.assertIn('ran ksphmi', (pi / 'cpp/build/ksphmi').read_text())
-        self.assertEqual((pi / 'cpp/build/ksphmi.prev').read_text(), 'old binary')
-        self.assertTrue((pi / 'cpp/build/ksphmi_render_tests').is_file())
-        self.assertEqual((pi / 'cpp/config.toml').read_text(), 'new config.toml')
-        self.assertFalse((pi / 'cpp.next').exists())
+        self.assertIn('ran ksphmi', (pi / 'bin/ksphmi').read_text())
+        self.assertEqual((pi / 'bin/ksphmi.prev').read_text(), 'old binary')
+        self.assertFalse((pi / 'share/ksphmi/build').exists())  # test programs are not installed
+        self.assertEqual((pi / 'share/ksphmi/config.toml').read_text(), 'new config.toml')
+        self.assertTrue((pi / 'share/ksphmi/systemd/file.txt').is_file())
+        self.assertFalse((pi / 'share/ksphmi.next').exists())
+        self.assertFalse((pi / 'share/ksphmi.old').exists())
 
     def test_failed_pi_test_leaves_the_running_hmi_untouched(self):
         result, pi = self.ship(failing_test='ksphmi_render_tests')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('DIE tests failed', result.stdout)
-        self.assertEqual((pi / 'cpp/build/ksphmi').read_text(), 'old binary')
-        self.assertEqual((pi / 'cpp/config.toml').read_text(), 'old config')
-        self.assertFalse((pi / 'cpp/build/ksphmi.prev').exists())
-        self.assertTrue((pi / 'cpp.next/build/ksphmi').is_file())  # kept for inspection
+        self.assertEqual((pi / 'bin/ksphmi').read_text(), 'old binary')
+        self.assertEqual((pi / 'share/ksphmi/config.toml').read_text(), 'old config')
+        self.assertFalse((pi / 'bin/ksphmi.prev').exists())
+        self.assertTrue((pi / 'share/ksphmi.next/build/ksphmi').is_file())  # kept for inspection
 
     def test_sysroot_copied_again_only_when_the_pi_packages_change(self):
         stubs = self.STUBS + '''hmi_ssh() {
@@ -416,16 +454,16 @@ hmi_sysroot_unpack() { record unpack; mkdir -p "$HMI_PI_SYSROOT"; }
             env = dict(os.environ, FAKE_HOME=home.as_posix(), HMI_HOST='fake-pi')
             first = run_bash(script + 'hmi_deploy_lock\necho held\n', env)  # exits while holding: the trap releases
             self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-            self.assertFalse((home / 'ksphmi/.deploy.lock').exists())
-            (home / 'ksphmi/.deploy.lock').mkdir()
-            (home / 'ksphmi/.deploy.lock/owner').write_text('Mac pid 1\n')
+            self.assertFalse((home / 'dev/run/ksphmi/.deploy.lock').exists())
+            (home / 'dev/run/ksphmi/.deploy.lock').mkdir()
+            (home / 'dev/run/ksphmi/.deploy.lock/owner').write_text('Mac pid 1\n')
             busy = run_bash(script + 'hmi_deploy_lock\n', env)
             self.assertNotEqual(busy.returncode, 0)
             self.assertIn('another ./ci deploy_hmi is running', busy.stdout)
             self.assertIn('Mac pid 1', busy.stdout)
-            self.assertTrue((home / 'ksphmi/.deploy.lock').exists())  # never removes another deploy's lock
+            self.assertTrue((home / 'dev/run/ksphmi/.deploy.lock').exists())  # never removes another deploy's lock
             old = 1_000_000_000
-            os.utime(home / 'ksphmi/.deploy.lock', (old, old))
+            os.utime(home / 'dev/run/ksphmi/.deploy.lock', (old, old))
             stale = run_bash(script + 'hmi_deploy_lock\nhmi_deploy_unlock\n', env)
             self.assertEqual(stale.returncode, 0, stale.stdout + stale.stderr)
             self.assertIn('older than 30 minutes', stale.stdout)

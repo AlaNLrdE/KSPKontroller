@@ -57,12 +57,17 @@ def sha(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
+# pgrep -f pattern (extended regex) for a running game: Linux runs KSP.x86_64, macOS KSP.app/Contents/MacOS/KSP.
+# Dots are escaped: an unescaped "KSP.app" also matched paths such as .../devKSP/apps/... (a Mac agent daemon's
+# command line, 2026-11-19). ./ci ksp_running uses the same pattern.
+KSP_PROCESS = r"KSP\.x86_64|KSP\.app/Contents/MacOS/"
+
+
 def ksp_running():
     if os.name == "nt":
         out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
         return "KSP_x64.exe" in out
-    # Linux runs KSP.x86_64, macOS KSP.app/Contents/MacOS/KSP (same patterns as ./ci ksp_running)
-    return subprocess.run(["pgrep", "-f", "KSP.x86_64|KSP.app"], capture_output=True).returncode == 0
+    return subprocess.run(["pgrep", "-f", KSP_PROCESS], capture_output=True).returncode == 0
 
 
 def sketch_text():
@@ -745,8 +750,8 @@ def check_hmi_render(ctx):
     """Draw time of the installed HMI on the Pi: ksphmi --bench draws demo frames in memory only (--offscreen never
     replaces the live framebuffer). The layout and clipping checks themselves are ctest's (./ci test_hmi)."""
     host = os.environ.get('HMI_HOST', 'ksphmi')
-    bench = ('KSPHMI_APP_DIR=~/ksphmi/cpp KSPHMI_LOCAL_CONFIG=/dev/null '
-             '~/ksphmi/cpp/build/ksphmi --bench 5 --offscreen --size 2520x1680')
+    bench = ('KSPHMI_APP_DIR=~/.local/share/ksphmi KSPHMI_LOCAL_CONFIG=/dev/null '
+             '~/.local/bin/ksphmi --bench 5 --offscreen --size 2520x1680')
     try:
         remote = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', host, bench],
                                 capture_output=True, text=True, timeout=30)
@@ -865,7 +870,7 @@ def check_hmi_intro(ctx):
         problems.append("setup-kiosk.sh does not mention ksphmi-intro.sh")
     if not script:
         problems.append("systemd/ksphmi-intro.sh missing")
-    if not re.search(r"^ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro\.sh$", unit, re.M):
+    if not re.search(r"^ExecStart=/bin/sh @HOME@/\.local/share/ksphmi/systemd/ksphmi-intro\.sh$", unit, re.M):
         problems.append("ksphmi-splash.service does not run ksphmi-intro.sh")
     run_dir = re.search(r"^RuntimeDirectory=(\S+)$", unit, re.M)
     hdr_dir = re.search(r'INTRO_DIR = "/run/([^"]+)"', header)
@@ -888,6 +893,31 @@ def check_hmi_intro(ctx):
     report("FAIL" if problems else "PASS", "hmi: boot intro",
            ", ".join(problems) if problems else "video asset, mpv install, unit, socket /run/%s/%s agree" %
            (hdr_dir.group(1), hdr_sock.group(1)))
+
+
+def check_hmi_wifi_fallback(ctx):
+    """The Pi's Wi-Fi fallback: setup-kiosk.sh installs (and --undo removes) the NetworkManager dispatcher
+    systemd/90-wifi-fallback, which takes the wifi-fallback profile down when eth0 comes up and up when it goes
+    down. The profile itself (network name, password) lives only on the Pi."""
+    problems = []
+    systemd = os.path.join(HMI_DIR, "systemd")
+    path = os.path.join(systemd, "90-wifi-fallback")
+    script = read(path) if os.path.isfile(path) else ""
+    kiosk = read(os.path.join(systemd, "setup-kiosk.sh"))
+    if not script:
+        problems.append("systemd/90-wifi-fallback missing")
+    else:
+        if '[ "$1" = eth0 ] || exit 0' not in script:
+            problems.append("dispatcher must act on eth0 only")
+        for action in ("up)   nmcli connection down wifi-fallback", "down) nmcli connection up wifi-fallback"):
+            if action not in script:
+                problems.append("dispatcher lacks '%s'" % action)
+    if 'wifi=/etc/NetworkManager/dispatcher.d/90-wifi-fallback' not in kiosk:
+        problems.append("setup-kiosk.sh does not install the dispatcher")
+    if '"$stamp" "$wifi"' not in kiosk:
+        problems.append("setup-kiosk.sh --undo keeps the dispatcher")
+    report("FAIL" if problems else "PASS", "hmi: wifi fallback",
+           ", ".join(problems) if problems else "dispatcher installed by setup-kiosk.sh, Ethernet preferred")
 
 
 # Boot command line flags setup-kiosk.sh adds so that nothing but the splash and the HMI reaches the screen.
@@ -979,7 +1009,7 @@ def check_hmi(ctx):
 
     host = os.environ.get("HMI_HOST", "ksphmi")
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
-             "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
+             "cat ~/dev/run/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
              "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"; "
              # The output the running HMI chose (its 'screen WxH (<kind>)' line) and every HDMI connector's state
              "echo \"screenline=$(journalctl --user -u ksphmi.service -b --no-pager -o cat 2>/dev/null "
@@ -1001,7 +1031,7 @@ def check_hmi(ctx):
              "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"; "
              "echo \"mpv=$(command -v mpv >/dev/null && echo yes || echo no)\"; "
              "echo \"journal=$(test -f /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf && echo yes || echo no)\"; "
-             "echo \"kioskwant=$(sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
+             "echo \"kioskwant=$(sha256sum ~/.local/share/ksphmi/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
              "echo \"kioskhave=$(cat /etc/ksphmi-kiosk.applied 2>/dev/null)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
@@ -1042,12 +1072,12 @@ def check_hmi(ctx):
            "service enabled with lingering" if autostart else "enable service and loginctl lingering")
     missing = kiosk_problems(env)
     report("WARN" if missing else "PASS", "hmi: kiosk boot",
-           "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi), "
+           "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh on the Pi), "
            "then reboot" % ", ".join(missing)
            if missing else "intro unit and mpv, quiet console, no firmware splash, login prompt masked")
-    cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
+    cpp = "/.local/bin/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
     report("PASS" if cpp else "WARN", "hmi: C++ unit",
-           "ksphmi.service runs ~/ksphmi/cpp/build/ksphmi" if cpp else
+           "ksphmi.service runs ~/.local/bin/ksphmi" if cpp else
            "ksphmi.service is not the C++ unit or ksphmi-cpp.service is left over: ./ci deploy_hmi")
 
 
@@ -1482,7 +1512,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_lan_mdns_single_address, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi_wifi_fallback, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_lan_mdns_single_address, check_git]
 
 
 def main():

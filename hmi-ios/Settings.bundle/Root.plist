@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- iOS Settings app page for KSP HMI. platform.mm reads these keys at launch and writes config.local.toml. -->
+<plist version="1.0">
+<dict>
+  <key>PreferenceSpecifiers</key>
+  <array>
+    <dict>
+      <key>Type</key>
+      <string>PSGroupSpecifier</string>
+      <key>Title</key>
+      <string>Game PC</string>
+      <key>FooterText</key>
+      <string>Name (e.g. MyPC.local) or IPv4 address of the PC running KSP with kRPC. iOS cannot discover it by broadcast without a paid developer account. Changes apply at the next launch.</string>
+    </dict>
+    <dict>
+      <key>Type</key>
+      <string>PSTextFieldSpecifier</string>
+      <key>Title</key>
+      <string>PC address</string>
+      <key>Key</key>
+      <string>pc_host</string>
+      <key>DefaultValue</key>
+      <string></string>
+      <key>KeyboardType</key>
+      <string>URL</string>
+      <key>AutocapitalizationType</key>
+      <string>None</string>
+      <key>AutocorrectionType</key>
+      <string>No</string>
+    </dict>
+    <dict>
+      <key>Type</key>
+      <string>PSMultiValueSpecifier</string>
+      <key>Title</key>
+      <string>Game</string>
+      <key>Key</key>
+      <string>source</string>
+      <key>DefaultValue</key>
+      <string>krpc</string>
+      <key>Titles</key>
+      <array>
+        <string>KSP 1 (kRPC)</string>
+        <string>KSP 2 Redux</string>
+        <string>Automatic</string>
+        <string>Demo (no game)</string>
+      </array>
+      <key>Values</key>
+      <array>
+        <string>krpc</string>
+        <string>redux</string>
+        <string>auto</string>
+        <string>demo</string>
+      </array>
+    </dict>
+    <dict>
+      <key>Type</key>
+      <string>PSGroupSpecifier</string>
+      <key>Title</key>
+      <string>Display</string>
+    </dict>
+    <dict>
+      <key>Type</key>
+      <string>PSMultiValueSpecifier</string>
+      <key>Title</key>
+      <string>Skin</string>
+      <key>Key</key>
+      <string>skin</string>
+      <key>DefaultValue</key>
+      <string>auto</string>
+      <key>Titles</key>
+      <array>
+        <string>Automatic</string>
+        <string>KSP1 Stock</string>
+        <string>KSP2 Redux</string>
+        <string>Apollo Flight Deck</string>
+        <string>Classic</string>
+        <string>Steampunk</string>
+      </array>
+      <key>Values</key>
+      <array>
+        <string>auto</string>
+        <string>ksp1</string>
+        <string>ksp2</string>
+        <string>apollo</string>
+        <string>classic</string>
+        <string>steampunk</string>
+      </array>
+    </dict>
+    <dict>
+      <key>Type</key>
+      <string>PSMultiValueSpecifier</string>
+      <key>Title</key>
+      <string>First flight scene</string>
+      <key>Key</key>
+      <string>flight_scene</string>
+      <key>DefaultValue</key>
+      <string>cockpit</string>
+      <key>Titles</key>
+      <array>
+        <string>Cockpit (touch panel)</string>
+        <string>Instruments</string>
+        <string>MechJeb</string>
+      </array>
+      <key>Values</key>
+      <array>
+        <string>cockpit</string>
+        <string>instruments</string>
+        <string>mechjeb</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
