@@ -258,6 +258,15 @@ class ProfileTest(unittest.TestCase):
             for rule in daemon.BASE_DENY:
                 self.assertIn(rule, p['deny'])
 
+    def test_tokens_next_to_an_outside_config_are_denied(self):
+        cases = (('/Users/a/dev/run/agent-mailbox/mac-claude.json', 'macos', 'Read(//Users/a/dev/run/agent-mailbox/*.json)'),
+                 ('C:\\run\\agent-mailbox\\pc-claude.json', 'windows', 'Read(//c/run/agent-mailbox/*.json)'))
+        for config, system, rule in cases:
+            for tools in (None, '/tools'):
+                p = daemon.load_profile(Path('/repo'), config, 'mac-claude', system=system, tools=tools)
+                self.assertIn(rule, p['deny'], (config, tools))
+        self.assertFalse(any('//./' in r for r in daemon.load_profile(Path('/repo'), 'c.json', 'pc-claude')['deny']))
+
     def test_default_profile_by_identity(self):
         self.assertEqual(daemon.default_profile('pi-claude'), 'pi')
         self.assertEqual(daemon.default_profile('pc-claude'), 'workstation')

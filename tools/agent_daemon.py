@@ -254,6 +254,11 @@ def load_profile(repo, config, identity, name=None, profile_file=None, system=No
     if name not in PROFILES:
         raise ValueError('unknown profile %r (known: %s)' % (name, ', '.join(sorted(PROFILES))))
     profile = PROFILES[name](repo, cmds, tools)
+    text = str(config)
+    if Path(text).is_absolute() or PureWindowsPath(text).is_absolute():  # a config kept outside the checkouts
+        rule = 'Read(%s/*.json)' % rule_path(PureWindowsPath(text).parent if '\\' in text else Path(text).parent)
+        if rule not in profile['deny']:
+            profile['deny'] = profile['deny'] + [rule]
     profile['allow'] = profile['allow'] + list(extra.get('allow', []))
     profile['deny'] = profile['deny'] + [r for r in extra.get('deny', []) if r not in profile['deny']]
     if extra.get('limits'):
