@@ -84,6 +84,10 @@ build + ctest before merge.
   `SDL_RenderClear` ignores the viewport: the margins are refilled black just before each present.
 - A turn LandscapeLeft <-> LandscapeRight keeps the window size: no SIZE_CHANGED, so the loop also polls
   `out.safe_area_moved()` every frame. Zero insets (all other platforms) never call SetViewport.
+- The window is not laid out yet when SDL_CreateRenderer returns: the first read gives zeros and the per-frame
+  poll catches the real insets a frame later (iPhone 18 Pro sim portrait, 2026-11-18: top 186, bottom 102 px of
+  1206x2622; `screen 1206x2334` follows). Manual `xcrun simctl` (e.g. shutting your device down after
+  `./ci ios_sim`) also needs `DEVELOPER_DIR` exported, or it fails with exit 72.
 
 ## Handing the branch to the PC
 
