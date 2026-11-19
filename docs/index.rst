@@ -27,6 +27,7 @@ implementation and extension; the project reference pages document settings and 
    development/arduino
    development/plugin
    development/raspberry-pi
+   development/ios
 
 .. toctree::
    :maxdepth: 2

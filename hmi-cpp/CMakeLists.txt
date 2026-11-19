@@ -42,33 +42,9 @@ if(WIN32)
   endforeach()
 endif()
 
-# Pure logic: formatting, attitude and orbit geometry, config, scenes, discovery, kRPC client, telemetry sources.
-add_library(ksphmi_core STATIC
-  src/bootstate.cpp
-  src/cockpitinput.cpp
-  src/config.cpp
-  src/discovery.cpp
-  src/endpoint.cpp
-  src/fmt.cpp
-  src/intro.cpp
-  src/editorpage.cpp
-  src/gauges.cpp
-  src/keyboard.cpp
-  src/krpc.cpp
-  src/log.cpp
-  src/mechjeb.cpp
-  src/mechjebinput.cpp
-  src/navmath.cpp
-  src/net.cpp
-  src/netinfo.cpp
-  src/orbitview.cpp
-  src/pb.cpp
-  src/redux_source.cpp
-  src/scenes.cpp
-  src/shipreport.cpp
-  src/telemetry.cpp
-  src/vec.cpp
-  src/vesselview.cpp)
+include(cmake/sources.cmake)  # KSPHMI_CORE_SOURCES, KSPHMI_UI_SOURCES (also used by hmi-ios/)
+
+add_library(ksphmi_core STATIC ${KSPHMI_CORE_SOURCES})
 target_include_directories(ksphmi_core PUBLIC include)
 target_compile_definitions(ksphmi_core PUBLIC KSPHMI_VERSION="${PROJECT_VERSION}")
 target_link_libraries(ksphmi_core PUBLIC Threads::Threads)
@@ -76,23 +52,7 @@ if(WIN32)
   target_link_libraries(ksphmi_core PUBLIC ws2_32 iphlpapi)
 endif()
 
-# Drawing: SDL2 renderer (GPU when available, software for /dev/fb0 and off-screen frames) and SDL2_ttf text.
-add_library(ksphmi_ui STATIC
-  src/apollo.cpp
-  src/canvas.cpp
-  src/cockpit.cpp
-  src/display.cpp
-  src/fbdev.cpp
-  src/flightdeck.cpp
-  src/gameskin.cpp
-  src/mechjebpage.cpp
-  src/navball.cpp
-  src/orbitart.cpp
-  src/png.cpp
-  src/segments.cpp
-  src/steampunk.cpp
-  src/steamdials.cpp
-  src/splash.cpp)
+add_library(ksphmi_ui STATIC ${KSPHMI_UI_SOURCES})
 target_link_libraries(ksphmi_ui PUBLIC ksphmi_core PkgConfig::SDL2 PkgConfig::SDL2TTF)
 if(WIN32)
   target_compile_definitions(ksphmi_ui PUBLIC SDL_MAIN_HANDLED)
