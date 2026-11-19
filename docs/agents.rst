@@ -54,7 +54,7 @@ Identities
      - any relief session in that repo; pc-claude covers urgent items meanwhile (same machine)
    * - mac-agentsapp
      - Mac (Alans-MacBook-Air)
-     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
+     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, private GitHub remote ``origin``)
      - claude, open session; headless wake daemon (launchd LaunchAgent, installed 2026-11-18, mailbox #420)
      - mac-workbench
    * - mac-iphonehmi
@@ -151,7 +151,9 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
   their own consent rules: push, deploy, install, flash and publish need the user's OK in their own chat.
 - Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
-- Cannot: push, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
+- Repo remote (user OK, mailbox #549): private GitHub repo ``AlaNLrdE/iKSPModAgentsApp`` as ``origin``;
+  every push of it needs the user's OK typed in mac-agentsapp's own chat.
+- Cannot: push without that OK, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
   pc-claude; KSP data stays with its owners.
 - Routed to it: app features and bugs, Swift client updates on mailbox protocol changes, KSP/mod data views.
 
