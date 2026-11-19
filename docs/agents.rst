@@ -73,13 +73,14 @@ pi-claude (reviewed 2026-11-18)
   unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. ``pi-deploy`` only
   for ``./ci install_hmi``. Host of the installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``,
   state in ``~/dev/run/ksphmi``).
-- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; read-only Pi/ksphmi
-  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user. In an
-  interactive session, ``./ci install_hmi`` on the Pi (native build from ``~/dev``, install, restart ksphmi)
-  under the ``pi-deploy`` lock with INFO to all (user, 2026-11-18/19).
-- Cannot: deploy from other machines, flash, push, merge, restart ksphmi outside ``install_hmi`` or any unit
+- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; merge agent branches into
+  KSPKontroller main with ``tools/merge_agent.py`` (user 2026-11-18); read-only Pi/ksphmi diagnostics; Python
+  tests and edits in its own worktrees; measurements scheduled by the user. In an interactive session,
+  ``./ci install_hmi`` on the Pi (native build from ``~/dev``, install, restart ksphmi) under the ``pi-deploy``
+  lock with INFO to all (user, 2026-11-18/19).
+- Cannot: deploy from other machines, flash, push, restart ksphmi outside ``install_hmi`` or any unit
   other than ``agent-mailbox.service``, use sudo, touch the installed HMI or ``~/dev/run`` by hand, GameData or
-  boot config, edit other repos. Headless daemon runs never install or deploy: the allowlist in
+  boot config, edit other repos. Headless daemon runs never merge, install or deploy: the allowlist in
   ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
 - Skills: raspberry-pi-hmi (read-only diagnosis side), kspsim-testing.
 
@@ -89,8 +90,8 @@ pc-claude (reviewed 2026-11-18)
 - Owns code: KSPKontroller ``KSPSerialIO/`` (plugin and the KSPHMI kRPC service),
   ``arduino-sketch/KSPIODemo9/``, ``tools/`` (verify, kspsim, merge_agent, mailbox client, daemon, windows
   scripts), ``ci``, the docs covering them, ``AGENTS.md`` and the ``.agents/skills`` mirror (absorbed from
-  pc-codex). hmi-cpp shared with mac-claude: pc-claude does the WSL cross builds and Pi deploys. Merges agent
-  branches into KSPKontroller main. Single editor of the KSPKontroller ``CLAUDE.md``.
+  pc-codex). hmi-cpp shared with mac-claude: pc-claude does the WSL cross builds and Pi deploys. Pushes the
+  main that pi-claude merged (with mac-claude, under ``push-main``; user 2026-11-18). Single editor of the KSPKontroller ``CLAUDE.md``.
 - Owns resources: wk-rea ``GameData/KSPSerialIO`` (lock ``ksp-gamedata`` + "OK deploy" with pc-workbench),
   UNO R4 on COM5 (``board-flash``), Pi HMI deploy (``pi-deploy``), push of KSPKontroller main (``push-main``).
 - Can / cannot: builds plugin, firmware and aarch64 hmi-cpp; ``./ci sim/verify/deploy/deploy_hmi/upload_sketch``.
@@ -177,7 +178,7 @@ the user in its own chat.
   daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
 - Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
   from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
-  ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
+  ``./ci test_hmi`` green on macOS and the Pi cross build; the coordinator pi-claude merges.
 - Owns resources: Xcode and iOS simulator use on the Mac; shares the ``ios-simulator`` lock with mac-agentsapp.
 - Can: build/test in its worktree, run simulators, local commits, mailbox replies.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.

@@ -28,7 +28,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
    (main menu or Space Center), a logged closed port, and ask the user to stay there. The user's explicit OK
    and the ksp-workbench OK are still required (rule 2).
    **Pi-only deploys (`./ci deploy_hmi`) need neither KSP closed nor an OK**: run them as soon as a Pi-only commit
-   is ready (user, 2026-11-15); the HMI reconnects to kRPC by itself.
+   is ready (user, 2026-11-15); the HMI reconnects to kRPC by itself. They need the `pi-deploy` lock plus INFO to
+   all, no user OK and no peer ACK, and never run headless (user, 2026-11-18).
 2. **The `wk-rea` KSP install is shared with another Claude session** (`ksp-workbench-*`, owns the other
    mods). Before `./ci deploy` or flashing: SendMessage it, wait for "OK deploy", tell it when done.
    We only write `GameData/KSPSerialIO`, never `--remove`, never touch other mods. `./ci verify` checks it.
@@ -50,21 +51,23 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 ## Working with agents (learned from the ksp-workbench project)
 
 - **Coordinator: `pi-claude`** (Claude Code on the Pi, user 2026-11-18; `pc-claude` until then): it plans,
-  assigns one owner and the locks per job, watches `overdue` and reassigns. It never deploys, pushes or flashes:
-  merges, PC builds, `deploy_hmi`, plugin deploys and pushes go to `pc-claude` (or `mac-claude`) as assigned work,
-  each still under the user's OK. Exception (user, 2026-11-18/19): on the Pi it may run `./ci install_hmi` under
-  the `pi-deploy` lock with INFO to all, never from a headless run. `pi-claude` also operates the mailbox server, which runs on the Pi
+  assigns one owner and the locks per job, watches `overdue`, reassigns and merges agent branches (user
+  2026-11-18). It never deploys, pushes or flashes: PC builds, `deploy_hmi`, plugin deploys and the push of main
+  go to `pc-claude` (or `mac-claude`, under `push-main`) as assigned work, each under its own rules. Exception
+  (user, 2026-11-18/19): on the Pi it may run `./ci install_hmi` under the `pi-deploy` lock with INFO to all, never
+  from a headless run. `pi-claude` also operates the mailbox server, which runs on the Pi
   (user unit `agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, journal `~/dev/run/mailbox`, since
   2026-11-18); `mac-claude` is its backup operator. `pc-claude`, `mac-claude`
   and `mac-workbench` (ksp-workbench repo on the Mac) take assigned work; requests from the user to
   another agent are reported to the coordinator.
 - **Roster** (user-approved 2026-11-18): `docs/agents.rst` is the canonical list of identities, owners, backups,
   locks and routing rules; read it before assigning or taking work. This repo's identities, in short:
-  `pi-claude` coordinates and operates the mailbox server (may restart only `agent-mailbox.service`, when it is
-  unhealthy, with INFO to all); never deploys, flashes, pushes or restarts ksphmi, except `./ci install_hmi` on
-  the Pi under `pi-deploy` with INFO to all (user, 2026-11-18/19; never headless).
-  `pc-claude` owns `KSPSerialIO/`, the firmware, `tools/`, `ci`, AGENTS.md/skills mirror, hmi-cpp cross builds and
-  Pi deploys, merges, the KSPSerialIO GameData/board-flash/pi-deploy/push-main locks; backup coordinator; edits
+  `pi-claude` coordinates, merges agent branches (user 2026-11-18) and operates the mailbox server (may restart
+  only `agent-mailbox.service`, when it is unhealthy, with INFO to all); never deploys, flashes, pushes or restarts
+  ksphmi, except `./ci install_hmi` on the Pi under `pi-deploy` with INFO to all (user, 2026-11-18/19; never
+  headless). `pc-claude` owns `KSPSerialIO/`, the firmware, `tools/`, `ci`, AGENTS.md/skills mirror, hmi-cpp cross
+  builds and Pi deploys, the push of main (with `mac-claude`, under `push-main`), the KSPSerialIO
+  GameData/board-flash/pi-deploy/push-main locks; backup coordinator; edits
   this file. `mac-claude` owns the macOS hmi-cpp runtime, kspsim/`ci` portability on the Mac, the Redux parser
   side; cross-build fallback; backup mailbox-server operator.
 - **No dead agents** (user 2026-11-18): declare the identity in CLAUDE.md and its own config, never infer it from
@@ -87,7 +90,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   worktrees, or an addressed mailbox REQUEST to another agent) and stays free to schedule further work in parallel.
   The coordinator plans, assigns one owner and the needed locks per job, reviews/merges and reports every exchange
   to the user; inline work is limited to what is too small to delegate. This user request is the standing
-  permission to spawn agents for this project.
+  permission to spawn agents for this project. Exception (user 2026-11-18): headless runs cannot spawn subagents;
+  they do the work their allowlist permits themselves, and anything larger is `needs user` for the interactive
+  session, which delegates it.
 
 - Parallel agents get **their own git worktree and branch** (`isolation: worktree`) and commit only on that branch.
   The coordinator merges with `build/venv/Scripts/python.exe tools/merge_agent.py <branch>` and then runs `./ci verify`.
@@ -97,7 +102,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - Do not repeat what the other session or an agent already investigated: ask first (SendMessage), it costs less.
 - Waiting for KSP to close: a background shell loop `while tasklist | grep -qi KSP_x64; do sleep 3; done`
   (the harness notifies when it ends). Never an agent polling.
-- Every lesson learned goes into a skill (`.claude/skills/*/SKILL.md`) or this file before the task is finished.
+- Every lesson learned or procedure goes into a skill (`.claude/skills/*/SKILL.md`) before the task is finished;
+  this file holds only rules that apply in every session (user 2026-11-18).
   Session handoffs (what is deployed, what is pending) go in commit messages or the docs, not in this file.
 - `AGENTS.md` (Codex) only points here: keep a single contract in this file. `.agents/skills/` is an exact copy of
   `.claude/skills/` for Codex: after editing a skill, copy it there (`cp .claude/skills/X/SKILL.md .agents/skills/X/`).
@@ -109,6 +115,14 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   temporary `git worktree add --detach` copy, never from the folder the agent is changing.
 - `installed == built` compares bytes, and a DLL built in a worktree differs from the same commit built in the main
   checkout (paths are embedded): after merging, reinstall from `main` with KSP closed before trusting that check.
+
+## Agent bus duties (user, 2026-11-18)
+- Delegate and stay available: on any new request, start subagent(s) in their own worktree/branch or send
+  an addressed mailbox REQUEST to the owner. The main mailbox session always stays free and listening.
+- Save a skill: every newly discovered procedure, command, workaround or gotcha goes into a skill before
+  the task is finished.
+- Details: `.claude/skills/agent-mailbox-etiquette/SKILL.md`, copied verbatim from the agent-bus-handbook
+  repo (owner pi-claude). Never edit the copy; send changes to pi-claude.
 
 ## Documentation maintenance
 
