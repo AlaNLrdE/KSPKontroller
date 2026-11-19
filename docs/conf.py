@@ -26,7 +26,8 @@ _here = os.path.dirname(os.path.abspath(__file__))
 _jar = os.environ.get(
     "PLANTUML_JAR", os.path.join(_here, "..", "build", "tools", "plantuml.jar")
 )
-plantuml = "java -jar " + shlex.quote(_jar)
+# Headless: on macOS each AWT start otherwise flashes a Java app in the Dock (one per diagram).
+plantuml = "java -Djava.awt.headless=true -jar " + shlex.quote(_jar)
 plantuml_output_format = "svg"
 
 # --- HTML ---------------------------------------------------------------------------------

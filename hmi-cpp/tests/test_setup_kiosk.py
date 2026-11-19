@@ -78,22 +78,41 @@ class KioskTest(unittest.TestCase):
             self.assertEqual(args.count('quiet'), 1)
 
     def test_script_names_its_deployed_path(self):
-        self.assertIn('~/ksphmi/cpp/systemd/setup-kiosk.sh', SCRIPT.read_text())
+        self.assertIn('~/.local/share/ksphmi/systemd/setup-kiosk.sh', SCRIPT.read_text())
 
     def test_script_installs_the_splash_and_can_undo(self):
         text = SCRIPT.read_text()
         for needle in ('--undo', 'ksphmi-splash.service', 'TAG+="systemd"', 'mask --now getty@tty1',
                        'apt-get install -y --no-install-recommends mpv', '/etc/ksphmi-mpv.installed',
                        'unmask getty@tty1', 'enable-linger', '.ksphmi-backup', 'Storage=persistent',
-                       '/etc/ksphmi-kiosk.applied', 'ATTR{name}=="vc4drmfb"', 'disable --now ksphmi-splash'):
+                       '/etc/ksphmi-kiosk.applied', 'ATTR{name}=="vc4drmfb"', 'disable --now ksphmi-splash',
+                       '"$here/90-wifi-fallback" "$wifi"', '"$stamp" "$wifi"'):
             self.assertIn(needle, text)
+
+    def test_wifi_fallback_follows_the_ethernet_link(self):
+        dispatcher = SCRIPT.parent / '90-wifi-fallback'
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / 'nmcli.log'
+            fake = Path(folder) / 'nmcli'
+            fake.write_text('#!/bin/sh\necho "$*" >> "%s"\n' % log)
+            fake.chmod(0o755)
+            env = dict(os.environ, PATH=folder + os.pathsep + os.environ['PATH'])
+            for iface, action in (('eth0', 'up'), ('eth0', 'down'), ('wlan0', 'up'), ('wlan0', 'down'),
+                                  ('eth0', 'dhcp4-change')):
+                subprocess.run(['sh', str(dispatcher), iface, action], env=env, check=True)
+            deadline = time.time() + 5  # "down" starts nmcli in the background
+            while time.time() < deadline and log.exists() and len(log.read_text().splitlines()) < 2:
+                time.sleep(0.05)
+            self.assertEqual(log.read_text().splitlines(),
+                             ['connection down wifi-fallback', 'connection up wifi-fallback'])
 
     def test_splash_unit_is_early_long_running_and_never_holds_up_the_boot(self):
         unit = (SCRIPT.parent / 'ksphmi-splash.service').read_text()
         lines = [l.strip() for l in unit.splitlines() if l.strip() and not l.startswith('#')]
         for line in ('DefaultDependencies=no', 'After=local-fs.target', 'Type=simple', 'User=@USER@',
                      'Group=video', 'SupplementaryGroups=video render audio', 'TimeoutStopSec=3',
-                     'RuntimeDirectory=ksphmi-intro', 'ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh',
+                     'RuntimeDirectory=ksphmi-intro', 'ExecStart=/bin/sh @HOME@/.local/share/ksphmi/systemd/ksphmi-intro.sh',
+                     'Environment=KSPHMI_BIN=@HOME@/.local/bin/ksphmi',
                      'WantedBy=sysinit.target'):
             self.assertIn(line, lines)
         # dev-fb0.device timed out on late monitors and the unit never ran: the script waits for the screen itself.
@@ -160,7 +179,8 @@ class KioskTest(unittest.TestCase):
     def test_intro_script_falls_back_to_the_loading_screen(self):
         text = INTRO.read_text()
         self.assertIn('command -v mpv', text)
-        self.assertIn('exec "$app/build/ksphmi" --splash', text)
+        self.assertIn('bin="${KSPHMI_BIN:-$HOME/.local/bin/ksphmi}"', text)
+        self.assertIn('exec "$bin" --splash', text)
         self.assertIn('$dir/mpv.sock', text)
 
 

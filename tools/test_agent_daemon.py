@@ -298,6 +298,15 @@ class ProfileTest(unittest.TestCase):
             for rule in daemon.BASE_DENY:
                 self.assertIn(rule, p['deny'])
 
+    def test_tokens_next_to_an_outside_config_are_denied(self):
+        cases = (('/Users/a/dev/run/agent-mailbox/mac-claude.json', 'macos', 'Read(//Users/a/dev/run/agent-mailbox/*.json)'),
+                 ('C:\\run\\agent-mailbox\\pc-claude.json', 'windows', 'Read(//c/run/agent-mailbox/*.json)'))
+        for config, system, rule in cases:
+            for tools in (None, '/tools'):
+                p = daemon.load_profile(Path('/repo'), config, 'mac-claude', system=system, tools=tools)
+                self.assertIn(rule, p['deny'], (config, tools))
+        self.assertFalse(any('//./' in r for r in daemon.load_profile(Path('/repo'), 'c.json', 'pc-claude')['deny']))
+
     def test_default_profile_by_identity(self):
         self.assertEqual(daemon.default_profile('pi-claude'), 'pi')
         self.assertEqual(daemon.default_profile('pc-claude'), 'workstation')
@@ -513,16 +522,16 @@ class InstallerTest(unittest.TestCase):
         return '\n'.join(out)
 
     def test_linux_keeps_the_systemd_unit(self):
-        plan = installer.make_plan('linux', 'pi-claude', '/home/pi/wk/KSPKontroller', '/home/pi')
+        plan = installer.make_plan('linux', 'pi-claude', '/home/pi/dev/ksp1/KSPKontroller', '/home/pi')
         self.assertEqual([p for p, _ in plan['files']], ['/home/pi/.local/lib/agent-daemon/agent_daemon.py',
                                                          '/home/pi/.config/systemd/user/agent-daemon@.service'])
         unit = plan['files'][1][1]
         self.assertEqual(unit, installer.UNIT_TEMPLATE.read_text(encoding='utf-8'))  # universal newlines: LF
-        text = self.dry('linux', identity='pi-claude', tools='/home/pi/wk/KSPKontroller')
+        text = self.dry('linux', identity='pi-claude', tools='/home/pi/dev/ksp1/KSPKontroller')
         self.assertIn('ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py', text)
         self.assertNotIn('.service.d', text.split('run systemctl')[0])  # Pi: tools home = work repo, no drop-in
         self.assertIn('run systemctl --user enable --now agent-daemon@pi-claude.service', text)
-        self.assertIn('copy /home/pi/wk/KSPKontroller/tools/agent_daemon.py -> ', text)
+        self.assertIn('copy /home/pi/dev/ksp1/KSPKontroller/tools/agent_daemon.py -> ', text)
         self.assertIn('disable --now agent-daemon@pi-claude.service', self.dry('linux', 'uninstall', 'pi-claude'))
 
     def test_macos_launch_agent(self):

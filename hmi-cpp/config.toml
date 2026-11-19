@@ -1,5 +1,5 @@
-# KSP HMI settings. On the Pi, ~/ksphmi/config.local.toml (kept across deploys) overrides any of these,
-# and ./ci deploy_hmi sets the kRPC address to the PC it was run from (KSPHMI_KRPC_ADDRESS in ~/ksphmi/env).
+# KSP HMI settings. On the Pi, ~/dev/run/ksphmi/config.local.toml (kept across installs) overrides any of these,
+# and ./ci deploy_hmi sets the kRPC address to the PC it was run from (KSPHMI_KRPC_ADDRESS in ~/dev/run/ksphmi/env).
 
 source = "krpc"          # krpc = the game through the kRPC mod; demo = a simulated orbit, no game needed
                          # redux = KSP 2 Redux (UDP 50003); auto = Redux, else kRPC (docs/hmi.rst)
@@ -11,7 +11,7 @@ stream_port = 50001
 rate_hz = 10             # samples per second requested from the game
 retry_seconds = 3
 # prefer_mac = "aa:bb:cc:dd:ee:ff"  # the PC's Ethernet MAC when it is also on Wi-Fi: its address wins and never
-#                                   # flips (docs/hmi.rst "prefer_mac"). Private: set it in ~/ksphmi/config.local.toml.
+#                                   # flips (docs/hmi.rst "prefer_mac"). Private: set it in ~/dev/run/ksphmi/config.local.toml.
 
 [demo]
 speed = 20               # time acceleration of the simulated orbit

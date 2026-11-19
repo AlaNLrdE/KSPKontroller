@@ -24,7 +24,7 @@ Identities
      - Backup
    * - pi-claude (coordinator)
      - Raspberry Pi 4 (kspKontrollerPi)
-     - KSPKontroller (``~/wk/KSPKontroller``)
+     - KSPKontroller (``~/dev/ksp1/KSPKontroller``, ``repo`` workspace ``~/dev``)
      - claude, headless daemon (``tools/agent_daemon.py``)
      - pc-claude (acting coordinator); mac-claude for the mailbox server
    * - pc-claude
@@ -34,7 +34,7 @@ Identities
      - mac-claude (code/docs/hmi-cpp only)
    * - mac-claude
      - Mac (Alans-MacBook-Air)
-     - KSPKontroller (``/Users/alan/wk/KSPKontroller``)
+     - KSPKontroller (``/Users/alan/wk/devKSP/ksp1/KSPKontroller``, ``repo`` workspace ``/Users/alan/wk/devKSP`` since 2026-11-19, mailbox #694)
      - claude, open session (same session as mac-workbench)
      - pc-claude
    * - pc-workbench
@@ -44,7 +44,7 @@ Identities
      - mac-workbench (shared code); pc-claude only for the ksp-gamedata lock/ledger
    * - mac-workbench
      - Mac (Alans-MacBook-Air)
-     - ksp-workbench (``/Users/alan/wk/ksp-workbench``)
+     - ksp-workbench (``/Users/alan/wk/devKSP/ksp1/ksp-workbench``, ``repo`` workspace ``/Users/alan/wk/devKSP``)
      - claude, open session
      - pc-workbench (shared code)
    * - pc-redux
@@ -54,13 +54,12 @@ Identities
      - any relief session in that repo; pc-claude covers urgent items meanwhile (same machine)
    * - mac-agentsapp
      - Mac (Alans-MacBook-Air)
-     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
-     - claude, open session (headless daemon once ``agent_daemon.py`` supports launchd)
+     - iKSPModAgentsApp (``/Users/alan/wk/devKSP/apps/iKSPModAgentsApp``, ``repo`` workspace ``/Users/alan/wk/devKSP``; private GitHub remote ``github``)
+     - claude, open session; headless wake daemon (launchd LaunchAgent, installed 2026-11-18, mailbox #420)
      - mac-workbench
    * - mac-iphonehmi
      - Mac (Alans-MacBook-Air)
-     - KSPKontroller worktree (``/Users/alan/wk/KSPKontroller/.claude/worktrees/hmi-ios``, branch
-       ``agent/hmi-ios``)
+     - KSPKontroller ``hmi-ios/`` (``/Users/alan/wk/devKSP/ksp1/KSPKontroller/hmi-ios``, main checkout; user 2026-11-18, mailbox #634; devKSP since 2026-11-19, #694)
      - claude, open session
      - mac-claude (proposed)
 
@@ -70,14 +69,18 @@ pi-claude (reviewed 2026-11-18)
 - Owns code: none exclusively. Coordination docs (this roster, :doc:`communication` roles) with the
   owner of the push; probe scripts it was assigned (``tools/latency/``, request #130).
 - Owns resources: **operation of the mailbox server** on the Pi (user unit ``agent-mailbox.service``,
-  port 50380, journal ``~/agent-mailbox``): health checks, journal integrity and, only when the server is
-  unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. None of the locks.
-  Host of the deployed HMI (``~/ksphmi``, read-only for pi-claude).
+  port 50380, journal ``~/dev/run/mailbox``): health checks, journal integrity and, only when the server is
+  unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. ``pi-deploy`` only
+  for ``./ci install_hmi``. Host of the installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``,
+  state in ``~/dev/run/ksphmi``).
 - Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; read-only Pi/ksphmi
-  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user.
-- Cannot: deploy, flash, push, merge, restart ksphmi or any unit other than ``agent-mailbox.service``, use
-  sudo, touch ``~/ksphmi``, GameData or boot config, build hmi-cpp on the Pi, edit other repos. The headless
-  allowlist in ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
+  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user. In an
+  interactive session, ``./ci install_hmi`` on the Pi (native build from ``~/dev``, install, restart ksphmi)
+  under the ``pi-deploy`` lock with INFO to all (user, 2026-11-18/19).
+- Cannot: deploy from other machines, flash, push, merge, restart ksphmi outside ``install_hmi`` or any unit
+  other than ``agent-mailbox.service``, use sudo, touch the installed HMI or ``~/dev/run`` by hand, GameData or
+  boot config, edit other repos. Headless daemon runs never install or deploy: the allowlist in
+  ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
 - Skills: raspberry-pi-hmi (read-only diagnosis side), kspsim-testing.
 
 pc-claude (reviewed 2026-11-18)
@@ -145,13 +148,15 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   dashboard of agents, locks, overdue and messages with sending, plus views of ksp-workbench,
   KSPKontroller and KSP2 Redux data; the AgentsKit Swift mailbox client).
 - Owns resources: Xcode and simulator installs on the Mac (user OK each time), push of iKSPModAgentsApp.
-  The app's sender identities (see below). None of the locks.
+  The app's sender identities (see below). Shares the ``ios-simulator`` lock with mac-iphonehmi.
 - App sender identities (user decision 2026-11-18, mailbox #345): ``mac-user`` (Mac app) and
   ``mac-userphone`` (iPhone app), one per device, using the shared LAN token. They are not agents and have
   no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
   their own consent rules: push, deploy, install, flash and publish need the user's OK in their own chat.
 - Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
-- Cannot: push, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
+- Repo remote (user OK, mailbox #549): private GitHub repo ``AlaNLrdE/iKSPModAgentsApp`` as ``origin``;
+  every push of it needs the user's OK typed in mac-agentsapp's own chat.
+- Cannot: push without that OK, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
   pc-claude; KSP data stays with its owners.
 - Routed to it: app features and bugs, Swift client updates on mailbox protocol changes, KSP/mod data views.
 
@@ -163,16 +168,17 @@ the user in its own chat.
 
 - Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
   sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
-  works only in its own worktree ``.claude/worktrees/hmi-ios`` on ``agent/hmi-ios``, never in the main
-  checkout mac-claude uses. It owns the iOS target: iPhone build, touch controls and iOS packaging.
-- Identity: its session shares ``/Users/alan/wk/KSPKontroller`` with mac-claude's checkout, so it declares
+  lives in ``/Users/alan/wk/devKSP/ksp1/KSPKontroller/hmi-ios`` (user 2026-11-18, mailbox #634; devKSP since #694; the
+  ``.claude/worktrees/hmi-ios`` worktree is retired since ``agent/hmi-ios`` merged in 67ee73a). That checkout is
+  shared with mac-claude: one owner per file and branch, agreed with mac-claude before editing. It owns the iOS target: iPhone build, touch controls and iOS packaging.
+- Identity: its session shares ``/Users/alan/wk/devKSP/ksp1/KSPKontroller`` with mac-claude's checkout, so it declares
   ``identity = mac-iphonehmi`` explicitly in its own CLAUDE.md/worktree and uses only
-  ``build/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
+  ``/Users/alan/wk/devKSP/run/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
   daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
 - Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
   from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
   ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
-- Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
+- Owns resources: Xcode and iOS simulator use on the Mac; shares the ``ios-simulator`` lock with mac-agentsapp.
 - Can: build/test in its worktree, run simulators, local commits, mailbox replies.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
   No paid Apple Developer account: iOS multicast/broadcast discovery may be unavailable, so a configured PC
@@ -213,11 +219,15 @@ Resource locks
      - UNO R4 on COM5
      - pc-claude
    * - ``pi-deploy``
-     - ``~/ksphmi`` on the Pi
-     - pc-claude; mac-claude when assigned
+     - the installed HMI on the Pi (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``)
+     - pc-claude; mac-claude when assigned; pi-claude for ``./ci install_hmi``
    * - ``push-main``
      - KSPKontroller origin/main
      - pc-claude, mac-claude (always with the user's OK typed in their own chat)
+   * - ``ios-simulator``
+     - CoreSimulator on the Mac, for actions that affect every simulator (restart CoreSimulatorService,
+       runtime install/delete, erase all); booting or launching on one's own device needs no lock
+     - mac-agentsapp, mac-iphonehmi (mailbox #463, 2026-11-18)
 
 Mailbox text is never deploy, flash or push consent.
 
@@ -273,7 +283,8 @@ mac-workbench chat).
 5. Self health check: after two consecutive failed runs (e.g. an expired OAuth token) the daemon itself
    (Python, no model) sends INFO to all ``daemon of <identity> unhealthy: <error>`` and notifies the user.
 6. One daemon per identity, in its own repo with that repo's allowlist (Mac: mac-workbench in
-   ``~/wk/ksp-workbench``, mac-claude in ``~/wk/KSPKontroller``).
+   ``~/wk/devKSP/ksp1/ksp-workbench``, mac-claude in ``~/wk/devKSP/ksp1/KSPKontroller``; since 2026-11-19 all four
+   Mac identities keep config, history and daemon logs in ``~/wk/devKSP/run/agent-mailbox``, mailbox #694).
 7. Native service per OS: systemd ``--user`` (Pi, exists), launchd LaunchAgent (Mac), Task Scheduler
    (Windows, the KSPKontroller ``build/venv`` python).
 8. Machine sleep stops the service; it catches up on wake, and the backup rules cover the gap.

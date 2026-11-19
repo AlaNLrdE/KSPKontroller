@@ -34,11 +34,19 @@
 #                            replace the running one, install ksphmi.service and restart; builds on the Pi only when no
 #                            cross compiler is available here. Then applies the kiosk boot (setup-kiosk.sh, asks for
 #                            the sudo password) when it changed
+#   ./ci install_hmi         On the Pi itself: build the HMI natively from this checkout into build/hmi-cpp-pi, then
+#                            the same tests, install, restart and kiosk steps as deploy_hmi, with local commands
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
 #   ./ci test_sim            Simulator tests, including the krpc client against the simulated kRPC server
+#   ./ci ios_build           macOS + Xcode: build the iPhone HMI (hmi-ios/) for the arm64 iOS Simulator into
+#                            build/hmi-ios (configures it once, downloading the pinned SDL2) and sign it ad hoc
+#   ./ci ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS]  macOS: ios_build, kspsim on 127.0.0.1 for N s
+#                            (default 1800), boot NAME (default "iPhone 18 Pro"), install, set the app to kRPC at
+#                            127.0.0.1 with the cockpit scene, launch; logs and screen.png in build/hmi-ios-sim.
+#                            Neither target needs the mailbox lock ios-simulator: they never act on all simulators
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -52,7 +60,8 @@
 #   NO_UPLOAD     Set to 1 to make test_arduino test the firmware already on the board
 #   NO_TEST       Set to 1 to skip the board test at the end of deploy_all
 #   RESET_CONFIG  Set to 1 to make install/deploy replace an existing config.xml (backup kept as .bak)
-#   HMI_HOST      SSH destination of the Raspberry Pi (default: ksphmi, a Host entry in ~/.ssh/config)
+#   HMI_HOST      SSH destination of the Raspberry Pi (default: ksphmi, a Host entry in ~/.ssh/config); install_hmi
+#                 sets it to local (the Pi's commands then run on this machine)
 #   HMI_KRPC_ADDRESS  kRPC server address the Pi uses (default: this PC's <hostname>.local when the Pi resolves it
 #                     to this PC, else this PC's address as the Pi sees it)
 #   NO_KIOSK      Set to 1 to make deploy_hmi only report an outdated kiosk boot instead of applying it
@@ -335,7 +344,7 @@ ksp_list() {
 
 ksp_running() {
   if command -v tasklist >/dev/null 2>&1; then tasklist 2>/dev/null | grep -qi "KSP_x64.exe"
-  else pgrep -f "KSP.x86_64|KSP.app" >/dev/null 2>&1; fi
+  else pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1; fi  # same as tools/verify.py KSP_PROCESS
 }
 
 # Copy the built plugin into a KSP install (the one from find_kspdir)
@@ -458,7 +467,7 @@ diagrams() {
   ensure_plantuml
   log "Rendering diagrams"
   mkdir -p "$BUILD/diagrams"
-  java -jar "$PLANTUML_JAR" -tsvg -o "$BUILD/diagrams" "$ROOT"/docs/diagrams/*.puml
+  java -Djava.awt.headless=true -jar "$PLANTUML_JAR" -tsvg -o "$BUILD/diagrams" "$ROOT"/docs/diagrams/*.puml
   log "Output: $BUILD/diagrams"
 }
 
@@ -593,6 +602,167 @@ test_sim() {
   (cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest tools/kspsim/test_kspsim.py)
 }
 
+# ------------------------------------------------------------------ iPhone HMI (hmi-ios/, macOS + Xcode only)
+# docs/development/ios.rst and .claude/skills/iphone-hmi/SKILL.md. Neither target touches other agents' simulator
+# devices or shuts CoreSimulator down, so the mailbox lock ios-simulator (for actions affecting all simulators) is
+# not needed for them.
+IOS_BUILD="$BUILD/hmi-ios"
+IOS_SIM_OUT="$BUILD/hmi-ios-sim"
+IOS_APP="$IOS_BUILD/Debug-iphonesimulator/KSPHMI.app"
+IOS_SIM_PID=""
+IOS_SKILL=".claude/skills/iphone-hmi/SKILL.md"
+
+# Dies off macOS; selects Xcode when xcode-select still names the Command Line Tools (no sudo needed)
+ios_require_mac() {
+  [ "$(uname -s)" = Darwin ] || die "$1 needs macOS with Xcode (the iOS SDK and the iOS Simulator exist only there)"
+  if [ -z "${DEVELOPER_DIR:-}" ]; then
+    case "$(xcode-select -p 2>/dev/null || true)" in
+      ""|*CommandLineTools*) DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer; export DEVELOPER_DIR ;;
+    esac
+  fi
+  if [ -n "${DEVELOPER_DIR:-}" ]; then
+    [ -d "$DEVELOPER_DIR" ] || die "DEVELOPER_DIR=$DEVELOPER_DIR does not exist: install Xcode (not only the Command Line Tools)"
+  fi
+  xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1 \
+    || die "no iOS Simulator SDK in ${DEVELOPER_DIR:-$(xcode-select -p)}: install Xcode and its iOS platform"
+  command -v cmake >/dev/null 2>&1 || die "cmake not found (brew install cmake)"
+}
+
+# ios_timeout SECONDS CMD...: macOS has no timeout(1); simctl calls can hang forever. SIGALRM exits with 142.
+ios_timeout() {
+  local secs="$1" rc=0
+  shift
+  perl -e 'alarm shift; exec @ARGV' "$secs" "$@" || rc=$?
+  if [ "$rc" -eq 142 ]; then
+    die "timed out after ${secs}s: $* (the Mac may be overloaded, check the load average with uptime; a device can also stay half booted, see $IOS_SKILL)"
+  fi
+  return "$rc"
+}
+
+# Build KSPHMI.app for the arm64 iOS Simulator into build/hmi-ios and sign it ad hoc
+ios_build() {
+  ios_require_mac ios_build
+  if ! ls -d "$IOS_BUILD"/*.xcodeproj >/dev/null 2>&1; then
+    # KSPHMI_IOS_FETCH downloads the hash-pinned SDL2/SDL2_ttf archives (user-approved, hmi-ios/CMakeLists.txt)
+    log "Configuring hmi-ios into $IOS_BUILD (Xcode generator, downloads the pinned SDL2 / SDL2_ttf)"
+    cmake -S "$ROOT/hmi-ios" -B "$IOS_BUILD" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DKSPHMI_IOS_FETCH=ON \
+      || die "hmi-ios configure failed"
+  fi
+  local build_log="$IOS_BUILD/build.log" rc=0
+  log "Building ksphmi_ios for the iOS Simulator (arm64); full log: $build_log"
+  cmake --build "$IOS_BUILD" --config Debug --target ksphmi_ios -- \
+    -sdk iphonesimulator -arch arm64 CODE_SIGNING_ALLOWED=NO >"$build_log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    grep -E 'error:|BUILD FAILED' "$build_log" | tail -20 >&2 || true
+    die "ksphmi_ios build failed (exit $rc), see $build_log"
+  fi
+  grep -F "BUILD SUCCEEDED" "$build_log" | tail -1 || true
+  [ -d "$IOS_APP" ] || die "build succeeded but $IOS_APP is missing"
+  codesign --force --sign - --timestamp=none "$IOS_APP" || die "ad-hoc signing of $IOS_APP failed"
+  codesign --verify "$IOS_APP" || die "codesign --verify failed for $IOS_APP"
+  log "Signed ad hoc: $IOS_APP"
+}
+
+ios_stop_sim() {
+  if [ -n "$IOS_SIM_PID" ]; then
+    kill "$IOS_SIM_PID" 2>/dev/null || true
+    wait "$IOS_SIM_PID" 2>/dev/null || true
+    IOS_SIM_PID=""
+  fi
+}
+
+# ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS...]: the app in the iOS Simulator against kspsim on loopback
+ios_sim() {
+  local device="iPhone 18 Pro" seconds=1800
+  local extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --device)  [ $# -ge 2 ] || die "--device needs a device name"; device="$2"; shift 2 ;;
+      --seconds) [ $# -ge 2 ] || die "--seconds needs a number"
+                 case "$2" in ""|*[!0-9]*) die "--seconds needs a whole number of seconds, got '$2'" ;; esac
+                 seconds="$2"; shift 2 ;;
+      --) shift; extra=("$@"); break ;;
+      *) die "ios_sim: unknown option '$1' (kspsim options go after --)" ;;
+    esac
+  done
+  ios_build
+
+  mkdir -p "$IOS_SIM_OUT"
+  local bin
+  bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
+  # Loopback only: the real Pi never discovers this kspsim; the simulator shares the Mac's loopback.
+  log "Starting kspsim on 127.0.0.1 for ${seconds}s; log: $IOS_SIM_OUT/kspsim.log"
+  (cd "$ROOT/tools" && exec "$bin/python" -m kspsim --no-board --address 127.0.0.1 --headless \
+     --seconds "$seconds" ${extra[@]+"${extra[@]}"}) >"$IOS_SIM_OUT/kspsim.log" 2>&1 &
+  IOS_SIM_PID=$!
+  trap ios_stop_sim EXIT
+  trap 'ios_stop_sim; exit 130' INT TERM
+  sleep 2
+  if ! kill -0 "$IOS_SIM_PID" 2>/dev/null; then
+    tail -20 "$IOS_SIM_OUT/kspsim.log" >&2 || true
+    die "kspsim exited at start, see $IOS_SIM_OUT/kspsim.log"
+  fi
+
+  local load
+  load="$(sysctl -n vm.loadavg | awk '{ print $2 }')"
+  if awk -v l="$load" 'BEGIN { exit !(l > 15) }'; then
+    log "WARNING: 1-minute load average is $load (above 15): simctl may be very slow or time out"
+  fi
+
+  local line udid
+  line="$(ios_timeout 60 xcrun simctl list devices available | awk -v n="$device" '
+    { s = $0; sub(/^ +/, "", s); if (index(s, n " (") == 1) { print s; exit } }')" \
+    || die "simctl list devices failed"
+  [ -n "$line" ] || die "no available simulator device named '$device' (xcrun simctl list devices available)"
+  udid="$(printf '%s\n' "$line" | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)).*/\1/p')"
+  [ -n "$udid" ] || die "could not read the UDID of '$device' from: $line"
+  # One booted simulator at a time: the 8 GB Mac swaps and simctl hangs with two (iphone-hmi skill).
+  local others
+  others="$(ios_timeout 60 xcrun simctl list devices booted | grep "(Booted)" | grep -v "$udid" || true)"
+  [ -z "$others" ] || die "another simulator is booted; ask its owner to shut it down (mailbox lock ios-simulator): $others"
+  case "$line" in
+    *"(Booted)"*) log "$device ($udid) is already booted" ;;
+    *) log "Booting $device ($udid)"
+       ios_timeout 120 xcrun simctl boot "$udid" || die "simctl boot $udid failed" ;;
+  esac
+  log "Waiting for the boot to finish (about 4 min on a first boot)"
+  ios_timeout 600 xcrun simctl bootstatus "$udid" >/dev/null || die "simctl bootstatus $udid failed"
+
+  local bundle
+  bundle="$(plutil -extract CFBundleIdentifier raw -o - "$IOS_APP/Info.plist")" || die "no CFBundleIdentifier in $IOS_APP"
+  log "Installing $bundle"
+  ios_timeout 300 xcrun simctl install "$udid" "$IOS_APP" || die "simctl install failed"
+  ios_timeout 60 xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
+
+  # Never 'simctl spawn ... defaults write': it hangs. Write the Settings.bundle keys into the data container.
+  local container prefs
+  container="$(ios_timeout 60 xcrun simctl get_app_container "$udid" "$bundle" data)" \
+    || die "simctl get_app_container failed"
+  prefs="$container/Library/Preferences/$bundle.plist"
+  mkdir -p "$(dirname "$prefs")"
+  [ -f "$prefs" ] || plutil -create xml1 "$prefs"
+  plutil -replace pc_host -string 127.0.0.1 "$prefs"
+  plutil -replace source -string krpc "$prefs"
+  plutil -replace flight_scene -string cockpit "$prefs"
+
+  log "Launching $bundle"
+  rm -f "$IOS_SIM_OUT/app.out" "$IOS_SIM_OUT/app.err" "$IOS_SIM_OUT/screen.png"
+  ios_timeout 120 xcrun simctl launch --terminate-running-process \
+    --stdout="$IOS_SIM_OUT/app.out" --stderr="$IOS_SIM_OUT/app.err" "$udid" "$bundle" \
+    || die "simctl launch failed"
+  sleep 15
+  ios_timeout 60 xcrun simctl io "$udid" screenshot "$IOS_SIM_OUT/screen.png" >/dev/null \
+    || die "simctl screenshot failed"
+
+  log "App stdout:  $IOS_SIM_OUT/app.out"
+  log "App stderr:  $IOS_SIM_OUT/app.err"
+  log "kspsim log:  $IOS_SIM_OUT/kspsim.log"
+  log "Screenshot:  $IOS_SIM_OUT/screen.png"
+  log "kspsim keeps running for ${seconds}s (Ctrl+C stops it; the simulator device stays booted)"
+  wait "$IOS_SIM_PID" 2>/dev/null || true
+  IOS_SIM_PID=""
+}
+
 # ------------------------------------------------------------------ Raspberry Pi HMI (hmi-cpp/, C++)
 # Built with CMake: on the Pi by ./ci deploy_hmi; on Windows natively with MSYS2 UCRT64 (gcc, Ninja, SDL2 from
 # pacman) into build/hmi-cpp-win, or inside WSL into build/hmi-cpp when MSYS2 is not installed.
@@ -632,12 +802,16 @@ hmi_ssh_client() {
   printf '%s\n' "$client"
 }
 
+# HMI_HOST=local (./ci install_hmi on the Pi itself): the same commands run here, from the home directory like an
+# SSH session.
 hmi_ssh() {
+  if [ "$HMI_HOST" = local ]; then (cd ~ && bash -c "$*"); return; fi
   "$(hmi_ssh_client)" -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
 }
 
 # With a terminal, for commands that prompt on the Pi (sudo's password).
 hmi_ssh_tty() {
+  if [ "$HMI_HOST" = local ]; then (cd ~ && bash -c "$*"); return; fi
   "$(hmi_ssh_client)" -tt -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" "$@"
 }
 
@@ -1020,7 +1194,7 @@ hmi_pi_abi_check() {
 hmi_deploy_lock() {
   local me state
   me="$(hostname 2>/dev/null || echo unknown) pid $$ at $(date '+%F %T')"
-  state="$(hmi_ssh "mkdir -p ~/ksphmi; l=~/ksphmi/.deploy.lock
+  state="$(hmi_ssh "mkdir -p ~/dev/run/ksphmi; l=~/dev/run/ksphmi/.deploy.lock
     # GNU stat on the Pi (and Git Bash); BSD stat when the tests run this on macOS. An unknown age counts as new:
     # never take over a lock that may be live.
     now=\$(date +%s); t=\$now
@@ -1029,7 +1203,7 @@ hmi_deploy_lock() {
     if mkdir \$l 2>/dev/null; then echo '$me' > \$l/owner; echo locked; else echo \"busy \$(cat \$l/owner 2>/dev/null)\"; fi" </dev/null)" ||
     die "cannot reach '$HMI_HOST' over SSH"
   case "$state" in
-    *busy*) die "another ./ci deploy_hmi is running on $HMI_HOST (${state#*busy }); if it died: ssh $HMI_HOST rm -r ~/ksphmi/.deploy.lock" ;;
+    *busy*) die "another ./ci deploy_hmi is running on $HMI_HOST (${state#*busy }); if it died: ssh $HMI_HOST rm -r ~/dev/run/ksphmi/.deploy.lock" ;;
     *locked*) ;;
     *) die "could not take the deploy lock on $HMI_HOST: $state" ;;
   esac
@@ -1042,13 +1216,15 @@ hmi_deploy_unlock() {
   [ "${HMI_DEPLOY_LOCKED:-0}" = 1 ] || return 0
   HMI_DEPLOY_LOCKED=0
   trap - EXIT
-  hmi_ssh 'rm -rf ~/ksphmi/.deploy.lock' </dev/null || log "WARNING: could not remove ~/ksphmi/.deploy.lock on $HMI_HOST"
+  hmi_ssh 'rm -rf ~/dev/run/ksphmi/.deploy.lock' </dev/null ||
+    log "WARNING: could not remove ~/dev/run/ksphmi/.deploy.lock on $HMI_HOST"
 }
 
-# Layout on the Pi: ~/ksphmi/cpp (hmi-cpp sources and config.toml, replaced on every deploy; build/ksphmi and the
-# test programs, cross-built here, or built on the Pi by the fallback, which keeps build/ for incremental CMake
-# builds), ~/ksphmi/cpp.next (the next version while its tests run), ~/ksphmi/env (kRPC address),
-# ~/ksphmi/config.local.toml (yours, never touched).
+# Layout on the Pi (user, 2026-11-19): ~/.local/bin/ksphmi (the program; ksphmi.prev the one before),
+# ~/.local/share/ksphmi (hmi-cpp's config.toml, assets, systemd scripts, sources and test data, replaced on every
+# install), ~/.local/share/ksphmi.next (the next version while its tests run), ~/.cache/ksphmi-build (the fallback's
+# incremental build on the Pi), ~/dev/run/ksphmi (private state: env with the kRPC address, config.local.toml and
+# intro.env, yours and never touched, the deploy lock). Sources and the Pi's own builds live in ~/dev (repo).
 hmi_preflight() {
   hmi_ssh true || die "cannot reach '$HMI_HOST' over SSH; add a 'Host ksphmi' entry to ~/.ssh/config or set HMI_HOST (docs/hmi.rst)"
   local missing
@@ -1059,14 +1235,16 @@ $missing
 run on the Pi: sudo apt install -y $HMI_APT_PACKAGES && sudo loginctl enable-linger \$USER"
 }
 
-# The kRPC endpoint the Pi keeps in ~/ksphmi/env (user, 2026-11-16: names that survive IP changes), in order:
+# The kRPC endpoint the Pi keeps in ~/dev/run/ksphmi/env (user, 2026-11-16: names that survive IP changes), in order:
 # HMI_KRPC_ADDRESS if set; else the name already in the Pi's env (the game PC: a deploy from the Mac, which runs no
 # game, or a cold mDNS lookup must not replace it); else this computer's <hostname>.local when the Pi resolves it to
 # the address this SSH session comes from; else that numeric address (first setup). The HMI re-resolves at reconnect.
 hmi_pc_address() {
   if [ -n "${HMI_KRPC_ADDRESS:-}" ]; then echo "$HMI_KRPC_ADDRESS"; return; fi
   local current ip name short
-  current="$(hmi_ssh "sed -n 's/^KSPHMI_KRPC_ADDRESS=//p' ~/ksphmi/env 2>/dev/null" </dev/null || true)"
+  # ~/ksphmi/env: the layout before 2026-11-19, read once so the first install keeps the Pi's endpoint.
+  current="$(hmi_ssh "sed -n 's/^KSPHMI_KRPC_ADDRESS=//p' ~/dev/run/ksphmi/env ~/ksphmi/env 2>/dev/null | head -n 1" \
+    </dev/null || true)"
   case "$current" in
     *:*|'') ;;                 # IPv6 or nothing: not a name to keep
     *[!0-9.]*)                 # a name (letters), not a dotted IPv4 address
@@ -1074,6 +1252,7 @@ hmi_pc_address() {
       echo "$current"
       return ;;
   esac
+  [ "$HMI_HOST" != local ] || die "no kRPC server name in ~/dev/run/ksphmi/env: set HMI_KRPC_ADDRESS (e.g. GAMEPC.local)"
   # Over IPv4: with ksphmi reached by its .local name, ssh may prefer IPv6 link-local, which the HMI cannot use.
   ip="$("$(hmi_ssh_client)" -4 -o BatchMode=yes -o ConnectTimeout=5 "$HMI_HOST" 'echo "${SSH_CLIENT%% *}"' </dev/null)"
   ip="${ip%%\%*}"
@@ -1125,74 +1304,121 @@ deploy_hmi() {
   log "Done: HMI running on $HMI_HOST"
 }
 
-# Cross-built programs and hmi-cpp's files go to ~/ksphmi/cpp.next and the tests run there; only when they pass do
-# they replace ~/ksphmi/cpp (ksphmi by rename, the previous one kept as build/ksphmi.prev). The running service
-# keeps its binary until hmi_install_service restarts it; a failed test leaves ~/ksphmi/cpp untouched.
+# On the Pi itself (user, 2026-11-19: the Pi builds and runs from its ~/dev checkout): deploy_hmi's steps with a
+# native build of this checkout and local commands instead of SSH, under the same lock.
+install_hmi() {
+  [ "$(uname -s)/$(uname -m)" = Linux/aarch64 ] || die "install_hmi runs on the Pi itself; from another computer: ./ci deploy_hmi"
+  HMI_HOST=local
+  hmi_preflight
+  hmi_deploy_lock
+  local pc_ip
+  pc_ip="$(hmi_pc_address)"
+  log "kRPC server for the Pi: $pc_ip"
+  build_hmi_pi_native
+  hmi_ship_cross
+  hmi_install_service "$pc_ip"
+  hmi_kiosk
+  hmi_deploy_unlock
+  log "Done: HMI installed and running"
+}
+
+# Native build on the Pi: the cross build's options (the test programs read config.toml and tests/data from their
+# working directory, the staged copy), into the same build/hmi-cpp-pi.
+build_hmi_pi_native() {
+  local start=$SECONDS gen=()
+  if command -v ninja >/dev/null 2>&1; then gen=(-G Ninja); fi
+  log "Building the HMI and its tests natively (Release) in build/hmi-cpp-pi"
+  # shellcheck disable=SC2086
+  cmake -S "$HMI_DIR" -B "$HMI_PI_BUILD" ${gen[@]+"${gen[@]}"} -DCMAKE_BUILD_TYPE=Release -DKSPHMI_TEST_SOURCE_DIR=. \
+    >/dev/null
+  # shellcheck disable=SC2086
+  cmake --build "$HMI_PI_BUILD" -j"$(nproc 2>/dev/null || echo 4)" --target ksphmi $HMI_PI_TESTS
+  log "Native build done in $((SECONDS - start)) s: build/hmi-cpp-pi"
+}
+
+# The programs (cross-built here, or built on the Pi by install_hmi) and hmi-cpp's files go to
+# ~/.local/share/ksphmi.next; hmi_test_and_install runs the tests there and installs only when they pass.
 hmi_ship_cross() {
   local b bins=()
   for b in ksphmi $HMI_PI_TESTS; do
     [ -f "$HMI_PI_BUILD/$b" ] || die "missing build/hmi-cpp-pi/$b: run ./ci build_hmi_pi"
     bins+=("$b")
   done
-  log "Copying the cross-built HMI, its tests and hmi-cpp to $HMI_HOST:~/ksphmi/cpp.next"
-  hmi_pack_sources | hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.next; mkdir -p cpp.next/build; tar -C cpp.next -xf -'
+  log "Copying the HMI, its tests and hmi-cpp to $HMI_HOST:~/.local/share/ksphmi.next"
+  hmi_pack_sources |
+    hmi_ssh 'set -e; mkdir -p ~/.local/share; cd ~/.local/share; rm -rf ksphmi.next; mkdir -p ksphmi.next/build
+      tar -C ksphmi.next -xf -'
   (cd "$HMI_PI_BUILD" && tar -cf - "${bins[@]}") |
-    hmi_ssh 'set -e; cd ~/ksphmi/cpp.next/build; tar -xf -; chmod +x ./*'
+    hmi_ssh 'set -e; cd ~/.local/share/ksphmi.next/build; tar -xf -; chmod +x ./*'
+  hmi_test_and_install
+}
+
+# Tests in ~/.local/share/ksphmi.next; when they pass, ksphmi replaces ~/.local/bin/ksphmi by rename (the previous one
+# kept as ksphmi.prev) and the staged files replace ~/.local/share/ksphmi (without the test programs). The running
+# service keeps its binary until hmi_install_service restarts it; a failed test leaves the installed HMI untouched.
+hmi_test_and_install() {
   log "Running the tests on $HMI_HOST"
-  hmi_ssh "set -e; cd ~/ksphmi/cpp.next
+  hmi_ssh "set -e; cd ~/.local/share/ksphmi.next
     for t in $HMI_PI_TESTS; do echo \"==> \$t\"; ./build/\$t; done
     if command -v python3 >/dev/null; then
       echo '==> test_setup_kiosk.py'; python3 -B tests/test_setup_kiosk.py
       echo '==> test_screenshots.py'; python3 -B tests/test_screenshots.py \"\$PWD/build/ksphmi\"
-    fi" </dev/null || die "tests failed on $HMI_HOST: the HMI was not replaced (the new one is in ~/ksphmi/cpp.next)"
-  log "Tests passed: replacing ~/ksphmi/cpp (previous binary kept as build/ksphmi.prev)"
-  hmi_ssh 'set -e; cd ~/ksphmi; mkdir -p cpp/build
-    if [ -f cpp/build/ksphmi ]; then ln -f cpp/build/ksphmi cpp/build/ksphmi.prev; fi
-    find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
-    for f in cpp.next/*; do [ "$f" = cpp.next/build ] || mv "$f" cpp/; done
-    for f in cpp.next/build/*; do [ "$f" = cpp.next/build/ksphmi ] || mv -f "$f" cpp/build/; done
-    mv -f cpp.next/build/ksphmi cpp/build/ksphmi
-    rm -rf cpp.next' </dev/null
+    fi" </dev/null ||
+    die "tests failed on $HMI_HOST: the HMI was not replaced (the new one is in ~/.local/share/ksphmi.next)"
+  log "Tests passed: installing ~/.local/bin/ksphmi (previous one kept as ksphmi.prev) and ~/.local/share/ksphmi"
+  hmi_ssh 'set -e; mkdir -p ~/.local/bin; cd ~/.local/share
+    if [ -f ~/.local/bin/ksphmi ]; then ln -f ~/.local/bin/ksphmi ~/.local/bin/ksphmi.prev; fi
+    mv -f ksphmi.next/build/ksphmi ~/.local/bin/ksphmi
+    rm -rf ksphmi.next/build ksphmi.old
+    if [ -d ksphmi ]; then mv ksphmi ksphmi.old; fi
+    mv ksphmi.next ksphmi
+    rm -rf ksphmi.old' </dev/null
 }
 
-# Fallback without a cross compiler: the sources go to ~/ksphmi/cpp and the Pi builds them (slow).
+# Fallback without a cross compiler: hmi-cpp's files go to ~/.local/share/ksphmi.next and the Pi builds them (slow)
+# in ~/.cache/ksphmi-build, kept between deploys for incremental CMake builds.
 hmi_copy_sources() {
-  log "Copying hmi-cpp to $HMI_HOST:~/ksphmi/cpp"
+  log "Copying hmi-cpp to $HMI_HOST:~/.local/share/ksphmi.next"
   hmi_pack_sources |
-    # Extracted files get the current time (-m), then unchanged ones get their old time back: a changed source is
-    # always newer than the Pi's objects, even when another machine deployed (and built) in between with a later
-    # clock time than this checkout's edit; unchanged sources keep the build incremental.
-    hmi_ssh 'set -e; cd ~/ksphmi; rm -rf cpp.new; mkdir -p cpp.new cpp; tar -C cpp.new -mxf -
-      (cd cpp.new && find . -type f) | while IFS= read -r f; do
-        if [ -f "cpp/$f" ] && cmp -s "cpp.new/$f" "cpp/$f"; then touch -r "cpp/$f" "cpp.new/$f"; fi
-      done
-      find cpp -mindepth 1 -maxdepth 1 ! -name build -exec rm -rf {} +
-      mv cpp.new/* cpp/; rmdir cpp.new'
+    # Extracted files get the current time (-m), then files equal to the installed copy (the last build's sources)
+    # get its time back: a changed source is always newer than the build's objects, even when another machine
+    # deployed in between with a later clock time than this checkout's edit; unchanged sources keep it incremental.
+    hmi_ssh 'set -e; mkdir -p ~/.local/share; cd ~/.local/share; rm -rf ksphmi.next; mkdir -p ksphmi.next
+      tar -C ksphmi.next -mxf -
+      (cd ksphmi.next && find . -type f) | while IFS= read -r f; do
+        if [ -f "ksphmi/$f" ] && cmp -s "ksphmi.next/$f" "ksphmi/$f"; then touch -r "ksphmi/$f" "ksphmi.next/$f"; fi
+      done'
 }
 
 hmi_build_on_pi() {
-  # The running service keeps its binary until the restart below: a failed build or test leaves it untouched.
-  log "Building on $HMI_HOST (CMake Release, -j4) and running the tests there"
-  hmi_ssh 'set -e; cd ~/ksphmi/cpp
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null
-    cmake --build build -j4
-    cd build && ctest --output-on-failure' || die "build or tests failed on $HMI_HOST: the service was not restarted"
+  # The running service keeps its binary until hmi_install_service restarts it: a failed build or test leaves it.
+  log "Building on $HMI_HOST (CMake Release, -j4) in ~/.cache/ksphmi-build"
+  hmi_ssh "set -e
+    cmake -S ~/.local/share/ksphmi.next -B ~/.cache/ksphmi-build -DCMAKE_BUILD_TYPE=Release \
+      -DKSPHMI_TEST_SOURCE_DIR=. >/dev/null
+    cmake --build ~/.cache/ksphmi-build -j4 --target ksphmi $HMI_PI_TESTS
+    mkdir -p ~/.local/share/ksphmi.next/build
+    cd ~/.cache/ksphmi-build && cp ksphmi $HMI_PI_TESTS ~/.local/share/ksphmi.next/build/" </dev/null ||
+    die "build failed on $HMI_HOST: the service was not restarted"
+  hmi_test_and_install
 }
 
 hmi_install_service() {
   local pc_ip="$1"
   log "Installing ksphmi.service and restarting it"
   hmi_ssh "set -e
-    cd ~/ksphmi
-    printf 'KSPHMI_KRPC_ADDRESS=%s\n' '$pc_ip' > env
-    mkdir -p ~/.config/systemd/user
-    # the C++ trial unit and the Python runtime (app/, venv/) are gone: ksphmi.service is the C++ HMI now
+    mkdir -p ~/dev/run/ksphmi ~/.config/systemd/user
+    # The layout before 2026-11-19 kept the private files in ~/ksphmi: copied once, the old folder is left as it is.
+    for f in config.local.toml intro.env; do
+      if [ ! -e ~/dev/run/ksphmi/\$f ] && [ -e ~/ksphmi/\$f ]; then cp -p ~/ksphmi/\$f ~/dev/run/ksphmi/; fi
+    done
+    printf 'KSPHMI_KRPC_ADDRESS=%s\n' '$pc_ip' > ~/dev/run/ksphmi/env
+    # the C++ trial unit is gone: ksphmi.service is the C++ HMI
     if [ -f ~/.config/systemd/user/ksphmi-cpp.service ]; then
       systemctl --user disable --now ksphmi-cpp.service 2>/dev/null || true
       rm -f ~/.config/systemd/user/ksphmi-cpp.service
     fi
-    rm -rf app venv
-    cp cpp/systemd/ksphmi.service ~/.config/systemd/user/
+    cp ~/.local/share/ksphmi/systemd/ksphmi.service ~/.config/systemd/user/
     systemctl --user daemon-reload
     systemctl --user enable ksphmi.service 2>/dev/null
     systemctl --user restart ksphmi.service"
@@ -1205,24 +1431,24 @@ hmi_install_service() {
 }
 
 # Kiosk boot (no console text, loading screen, cursor off, persistent journal): setup-kiosk.sh needs root, so it
-# runs only when the deployed script differs from the one last applied (/etc/ksphmi-kiosk.applied holds its sha256).
+# runs only when the installed script differs from the one last applied (/etc/ksphmi-kiosk.applied holds its sha256).
 # Without a terminal (or with NO_KIOSK=1) it only prints the command; it never reboots the Pi by itself.
 hmi_kiosk() {
-  local want have cmd='sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh'
-  want="$(hmi_ssh "sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh | cut -d' ' -f1")"
+  local want have cmd='sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh'
+  want="$(hmi_ssh "sha256sum ~/.local/share/ksphmi/systemd/setup-kiosk.sh | cut -d' ' -f1")"
   have="$(hmi_ssh 'cat /etc/ksphmi-kiosk.applied 2>/dev/null' || true)"
   if [ -n "$want" ] && [ "$want" = "$have" ]; then
     log "Kiosk boot up to date on $HMI_HOST"
     return
   fi
   if [ "${NO_KIOSK:-0}" = "1" ] || [ ! -t 0 ] || [ ! -t 1 ]; then
-    log "WARNING: the kiosk boot on $HMI_HOST is not the deployed version. Run it (sudo password), then reboot:"
-    log "  ssh -t $HMI_HOST '$cmd && sudo reboot'"
+    log "WARNING: the kiosk boot on $HMI_HOST is not the installed version. Run it (sudo password), then reboot:"
+    if [ "$HMI_HOST" = local ]; then log "  $cmd && sudo reboot"; else log "  ssh -t $HMI_HOST '$cmd && sudo reboot'"; fi
     return
   fi
   log "Applying the kiosk boot on $HMI_HOST: sudo asks for the Pi user's password"
-  hmi_ssh_tty "$cmd" || die "setup-kiosk.sh failed on $HMI_HOST (the HMI itself is deployed and running)"
-  log "Kiosk boot applied; it takes effect at the next reboot: ssh -t $HMI_HOST sudo reboot"
+  hmi_ssh_tty "$cmd" || die "setup-kiosk.sh failed on $HMI_HOST (the HMI itself is installed and running)"
+  log "Kiosk boot applied; it takes effect at the next reboot (sudo reboot on the Pi)"
 }
 
 hmi_logs() {
@@ -1267,6 +1493,7 @@ case "${1:-help}" in
   hmi_desktop) test_hmi_container desktop ;;
   test_hmi_desktop) test_hmi_container desktop-smoke ;;
   deploy_hmi)        deploy_hmi ;;
+  install_hmi)       install_hmi ;;
   hmi_sysroot)       shift; hmi_sysroot "$@" ;;
   build_hmi_pi)      build_hmi_pi ;;
   # internal: what Windows runs inside WSL for the two targets above, and deploy_hmi's toolchain probe
@@ -1276,6 +1503,8 @@ case "${1:-help}" in
   hmi_logs)          shift; hmi_logs "$@" ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
+  ios_build)         ios_build ;;
+  ios_sim)           shift; ios_sim "$@" ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;

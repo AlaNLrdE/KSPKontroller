@@ -164,7 +164,8 @@ PI_LIMITS = """read-only diagnostics of the Pi and of ksphmi
    `git pull --ff-only` in the main checkout, Python tests and edits only inside a new worktree under
    .claude/worktrees/ (never build hmi-cpp on the Pi), and measurements the request explicitly scheduled (e.g.
    tools/latency only after the coordinator's GO).
-3. Never deploy, flash, push, merge, restart/signal ksphmi, touch ~/ksphmi, GameData or boot config, or use sudo.
+3. Never deploy, flash, push, merge, restart/signal ksphmi, touch the installed HMI (~/.local/bin/ksphmi,
+   ~/.local/share/ksphmi) or ~/dev/run, GameData or boot config, or use sudo.
    The only restart allowed is `systemctl --user restart agent-mailbox.service` (you operate the mailbox server),
    only when the server is unhealthy (check status and journalctl _SYSTEMD_USER_UNIT=agent-mailbox.service first);
    report every such restart with INFO to all."""
@@ -256,6 +257,11 @@ def load_profile(repo, config, identity, name=None, profile_file=None, system=No
     if name not in PROFILES:
         raise ValueError('unknown profile %r (known: %s)' % (name, ', '.join(sorted(PROFILES))))
     profile = PROFILES[name](repo, cmds, tools)
+    text = str(config)
+    if Path(text).is_absolute() or PureWindowsPath(text).is_absolute():  # a config kept outside the checkouts
+        rule = 'Read(%s/*.json)' % rule_path(PureWindowsPath(text).parent if '\\' in text else Path(text).parent)
+        if rule not in profile['deny']:
+            profile['deny'] = profile['deny'] + [rule]
     profile['allow'] = profile['allow'] + list(extra.get('allow', []))
     profile['deny'] = profile['deny'] + [r for r in extra.get('deny', []) if r not in profile['deny']]
     if extra.get('limits'):
