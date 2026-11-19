@@ -27,6 +27,7 @@
 #include "redux_source.hpp"
 #include "log.hpp"
 #include "png.hpp"
+#include "safearea.hpp"
 #include "intro.hpp"
 #include "splash.hpp"
 #include "telemetry.hpp"
@@ -200,7 +201,10 @@ public:
     }
 
     void present() {
-        if (window_) SDL_RenderPresent(renderer_);
+        if (window_) {
+            if (inset_.any()) fill_margins();
+            SDL_RenderPresent(renderer_);
+        }
         else {
             // The CPU surface must include every queued software-renderer command before scanout.
             if (SDL_RenderFlush(renderer_) != 0)
@@ -218,23 +222,26 @@ public:
         return ok;
     }
 
-    /// Re-reads the renderer's pixel size after a window or display change; true when it differs.
+    /// Re-reads the renderer's pixel size and the safe area after a window or display change; true when the
+    /// canvas size or position differs. The canvas (w(), h()) is the drawable minus the safe-area insets.
     bool refresh_size() {
         if (!window_) return false;
-        int w = 0, h = 0;
-        if (SDL_GetRendererOutputSize(renderer_, &w, &h) != 0 || w <= 0 || h <= 0) return false;
-        if (w == w_ && h == h_) return false;
-        w_ = w, h_ = h;
-        return true;
+        return measure();
     }
 
-    /// Window coordinates of a mouse event -> canvas pixels (HiDPI: the renderer has more pixels than points).
+    /// True when the platform's safe area moved since the last refresh_size() (iOS: a rotation between the two
+    /// landscape orientations keeps the window size, so no SIZE_CHANGED arrives). Always false elsewhere.
+    bool safe_area_moved() const { return window_ && safe_insets() != asked_; }
+
+    /// Window coordinates of a mouse event -> canvas pixels (HiDPI: the renderer has more pixels than points;
+    /// the canvas starts at the safe area's top-left corner).
     std::pair<int, int> to_canvas(int x, int y) const {
         if (!window_) return {x, y};
         int ww = 0, wh = 0;
         SDL_GetWindowSize(window_, &ww, &wh);
         if (ww <= 0 || wh <= 0) return {x, y};
-        return {int(std::lround(double(x) * w_ / ww)), int(std::lround(double(y) * h_ / wh))};
+        return {int(std::lround(double(x) * dw_ / ww)) - inset_.left,
+                int(std::lround(double(y) * dh_ / wh)) - inset_.top};
     }
     /// A full-screen HMI hides the cursor; moving the mouse shows it until CURSOR_IDLE seconds pass without motion.
     static constexpr double CURSOR_IDLE = 3.0;
@@ -306,9 +313,68 @@ private:
         accelerated_ = (info.flags & SDL_RENDERER_ACCELERATED) != 0;
         if (need_gpu && !accelerated_) return why = std::string("only a software renderer (") + info.name + ")", false;
         SDL_GetRendererOutputSize(renderer_, &w_, &h_);
+        dw_ = w_, dh_ = h_;
+        measure();
         if (fullscreen) SDL_ShowCursor(SDL_DISABLE), hide_cursor_ = true;
         kind_ = std::string("SDL ") + SDL_GetCurrentVideoDriver() + " / " + info.name;
         return true;
+    }
+
+    /// Drawable size and safe area (safearea.hpp) -> canvas size, and the renderer viewport at the insets' offset.
+    /// Zero insets (every platform but iOS) never touch the viewport. SDL resets the viewport to the whole
+    /// drawable on every SIZE_CHANGED, so a non-zero inset is applied again on each call. True when changed.
+    bool measure() {
+        int dw = 0, dh = 0;
+        if (SDL_GetRendererOutputSize(renderer_, &dw, &dh) != 0 || dw <= 0 || dh <= 0) return false;
+        asked_ = safe_insets();
+        SafeInsets s = asked_;
+        s.left = std::max(0, s.left), s.top = std::max(0, s.top);
+        s.right = std::max(0, s.right), s.bottom = std::max(0, s.bottom);
+        if (2 * (s.left + s.right) >= dw || 2 * (s.top + s.bottom) >= dh) {  // nonsense: keep the whole screen
+            if (s.any()) log::warning(LOG, fmt::str("safe area insets %d %d %d %d ignored for a %dx%d drawable",
+                                                    s.left, s.top, s.right, s.bottom, dw, dh));
+            s = SafeInsets{};
+        }
+        const int w = dw - s.left - s.right, h = dh - s.top - s.bottom;
+        const bool was_inset = inset_.any();
+        const bool changed = w != w_ || h != h_ || s != inset_;
+        if (s != inset_)
+            log::info(LOG, fmt::str("safe area insets left %d top %d right %d bottom %d (drawable %dx%d)", s.left,
+                                    s.top, s.right, s.bottom, dw, dh));
+        dw_ = dw, dh_ = dh, w_ = w, h_ = h, inset_ = s;
+        if (s.any()) {
+            const SDL_Rect viewport{s.left, s.top, w, h};
+            SDL_RenderSetViewport(renderer_, &viewport);
+        } else if (was_inset) {
+            SDL_RenderSetViewport(renderer_, nullptr);
+        }
+        return changed;
+    }
+
+    /// Black margins outside the safe area, drawn just before each present (the back buffer is undefined after
+    /// a page flip). Leaves the viewport, clip, colour and blend mode as the Canvas set them.
+    void fill_margins() {
+        SDL_Rect viewport, clip;
+        SDL_RenderGetViewport(renderer_, &viewport);
+        const bool clipped = SDL_RenderIsClipEnabled(renderer_) == SDL_TRUE;
+        SDL_RenderGetClipRect(renderer_, &clip);
+        Uint8 r = 0, g = 0, b = 0, a = 0;
+        SDL_GetRenderDrawColor(renderer_, &r, &g, &b, &a);
+        SDL_BlendMode blend = SDL_BLENDMODE_NONE;
+        SDL_GetRenderDrawBlendMode(renderer_, &blend);
+        SDL_RenderSetViewport(renderer_, nullptr);
+        SDL_RenderSetClipRect(renderer_, nullptr);
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+        SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_NONE);
+        const SafeInsets& s = inset_;
+        const SDL_Rect margins[] = {{0, 0, dw_, s.top}, {0, dh_ - s.bottom, dw_, s.bottom},
+                                    {0, s.top, s.left, h_}, {dw_ - s.right, s.top, s.right, h_}};
+        for (const SDL_Rect& m : margins)
+            if (m.w > 0 && m.h > 0) SDL_RenderFillRect(renderer_, &m);
+        SDL_RenderSetViewport(renderer_, &viewport);
+        SDL_RenderSetClipRect(renderer_, clipped ? &clip : nullptr);
+        SDL_SetRenderDrawColor(renderer_, r, g, b, a);
+        SDL_SetRenderDrawBlendMode(renderer_, blend);
     }
 
     void close_sdl() {
@@ -325,7 +391,10 @@ private:
     bool video_ = false, accelerated_ = false;
     bool hide_cursor_ = false, cursor_shown_ = false;
     double cursor_at_ = -1e9;
-    int w_ = 0, h_ = 0;
+    int w_ = 0, h_ = 0;    // the canvas: the drawable minus the safe-area insets
+    int dw_ = 0, dh_ = 0;  // the whole drawable (window output size), SDL windows only
+    SafeInsets inset_;     // applied insets (drawable pixels), zero except on iOS
+    SafeInsets asked_;     // what the platform last reported, before sanity checks
     std::string kind_;
 };
 
@@ -548,6 +617,10 @@ int run(int argc, char** argv) {
                 last = nullptr;  // redraw now in the chosen skin
             }
         };
+        // iOS ends an app that renders in the background: between SDL_APP_WILLENTERBACKGROUND and
+        // SDL_APP_DIDENTERFOREGROUND nothing is drawn or presented. The event pump keeps running and the
+        // telemetry source keeps its own thread and reconnect logic. Other platforms never send these events.
+        bool background = false;
         for (int i = 0; !quit_signal; ++i) {
             double tick = monotonic();
             if (out.video()) {
@@ -611,11 +684,28 @@ int run(int argc, char** argv) {
                         resized = true;
                     else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
                         reset = true;  // cached textures are gone: rebuild them even at the same size
+                    else if (ev.type == SDL_APP_WILLENTERBACKGROUND || ev.type == SDL_APP_DIDENTERBACKGROUND) {
+                        if (!background) {
+                            log::info(LOG, "app entering background: drawing paused");
+                            apply_keys(keyboard.release_all());  // no key-up or touch-up events follow
+                            send(cockpit_input.release(tick));
+                        }
+                        background = true;
+                    } else if (ev.type == SDL_APP_DIDENTERFOREGROUND && background) {
+                        log::info(LOG, "app back in foreground: drawing resumed");
+                        background = false;
+                        resized = true;  // a rotation while away left no size event behind
+                        last = nullptr;  // full redraw: the screen was not ours while away
+                    }
                 }
                 apply_keys(keyboard.tick(tick));
                 if (source) source->hold(keyboard.held(tick));
+                if (background) {  // keep pumping events, but slowly, and never touch the renderer
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
                 out.cursor_tick(tick);
-                const bool changed = (resized || reset) && out.refresh_size();
+                const bool changed = (resized || reset || out.safe_area_moved()) && out.refresh_size();
                 if (changed || reset) {
                     build_view();
                     last = nullptr;  // full redraw at the new size

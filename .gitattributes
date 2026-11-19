@@ -2,6 +2,7 @@ ci text eol=lf
 ci.cmd text eol=crlf
 Doxyfile text eol=lf
 hmi-cpp/** text eol=lf
+hmi-ios/** text eol=lf
 hmi-cpp/assets/**/*.png binary
 hmi-cpp/assets/**/*.bmp binary
 hmi-cpp/assets/**/*.ttf binary

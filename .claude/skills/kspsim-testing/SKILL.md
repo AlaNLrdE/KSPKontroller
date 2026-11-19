@@ -97,3 +97,4 @@ want COM5 and port 50000 (it checks).
   loopback with `KSPHMI_REDUX_PORT` (tests/test_redux.cpp fake plugin). On macOS `tools/verify.py` runs the sim tests
   with system python3, which has no krpc: "sim: tests" FAILs there; run `build/venv/bin/python -m unittest
   kspsim.test_kspsim` from tools/ instead.
+- Pixel A/B of two HMI builds (2026-11-19): `./ci sim --headless --no-board --address 127.0.0.1 --warp 0 --scene S --skin K` freezes physics (dt = 0), so off-screen `ksphmi --config F --size WxH --screenshot` frames of flight, editor and facility scenes are byte-identical run to run (config: `[krpc]` 127.0.0.1, `discovery = false`). The waiting screen's link-search dot animates: ~390 px differ even for one binary against itself, so compare a same-binary pair before calling it a regression.

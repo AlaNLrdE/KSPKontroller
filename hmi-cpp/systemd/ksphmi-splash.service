@@ -15,7 +15,7 @@ DefaultDependencies=no
 After=local-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target
-ConditionPathExists=@HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh
+ConditionPathExists=@HOME@/.local/share/ksphmi/systemd/ksphmi-intro.sh
 
 [Service]
 Type=simple
@@ -23,12 +23,13 @@ User=@USER@
 Group=video
 # video: /dev/dri/card1 and /dev/fb0; render: V3D (GPU scaling); audio: the HDMI ALSA device.
 SupplementaryGroups=video render audio
-Environment=KSPHMI_APP_DIR=@HOME@/ksphmi/cpp
-EnvironmentFile=-@HOME@/ksphmi/intro.env
+Environment=KSPHMI_APP_DIR=@HOME@/.local/share/ksphmi
+Environment=KSPHMI_BIN=@HOME@/.local/bin/ksphmi
+EnvironmentFile=-@HOME@/dev/run/ksphmi/intro.env
 # /run/ksphmi-intro (mpv.sock, starting): owned by the HMI user, removed when the unit stops.
 RuntimeDirectory=ksphmi-intro
 RuntimeDirectoryMode=0750
-ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh
+ExecStart=/bin/sh @HOME@/.local/share/ksphmi/systemd/ksphmi-intro.sh
 Restart=no
 RuntimeMaxSec=660
 TimeoutStopSec=3
