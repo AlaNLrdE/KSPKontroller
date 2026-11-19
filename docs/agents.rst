@@ -34,7 +34,7 @@ Identities
      - mac-claude (code/docs/hmi-cpp only)
    * - mac-claude
      - Mac (Alans-MacBook-Air)
-     - KSPKontroller (``/Users/alan/wk/KSPKontroller``)
+     - KSPKontroller (``/Users/alan/wk/devKSP/ksp1/KSPKontroller``, ``repo`` workspace ``/Users/alan/wk/devKSP`` since 2026-11-19, mailbox #694)
      - claude, open session (same session as mac-workbench)
      - pc-claude
    * - pc-workbench
@@ -44,7 +44,7 @@ Identities
      - mac-workbench (shared code); pc-claude only for the ksp-gamedata lock/ledger
    * - mac-workbench
      - Mac (Alans-MacBook-Air)
-     - ksp-workbench (``/Users/alan/wk/ksp-workbench``)
+     - ksp-workbench (``/Users/alan/wk/devKSP/ksp1/ksp-workbench``, ``repo`` workspace ``/Users/alan/wk/devKSP``)
      - claude, open session
      - pc-workbench (shared code)
    * - pc-redux
@@ -54,12 +54,12 @@ Identities
      - any relief session in that repo; pc-claude covers urgent items meanwhile (same machine)
    * - mac-agentsapp
      - Mac (Alans-MacBook-Air)
-     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, private GitHub remote ``origin``)
+     - iKSPModAgentsApp (``/Users/alan/wk/devKSP/apps/iKSPModAgentsApp``, ``repo`` workspace ``/Users/alan/wk/devKSP``; private GitHub remote ``github``)
      - claude, open session; headless wake daemon (launchd LaunchAgent, installed 2026-11-18, mailbox #420)
      - mac-workbench
    * - mac-iphonehmi
      - Mac (Alans-MacBook-Air)
-     - KSPKontroller ``hmi-ios/`` (``/Users/alan/wk/KSPKontroller/hmi-ios``, main checkout; user 2026-11-18, mailbox #634)
+     - KSPKontroller ``hmi-ios/`` (``/Users/alan/wk/devKSP/ksp1/KSPKontroller/hmi-ios``, main checkout; user 2026-11-18, mailbox #634; devKSP since 2026-11-19, #694)
      - claude, open session
      - mac-claude (proposed)
 
@@ -164,12 +164,12 @@ the user in its own chat.
 
 - Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
   sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
-  lives in ``/Users/alan/wk/KSPKontroller/hmi-ios`` (user 2026-11-18, mailbox #634; the
+  lives in ``/Users/alan/wk/devKSP/ksp1/KSPKontroller/hmi-ios`` (user 2026-11-18, mailbox #634; devKSP since #694; the
   ``.claude/worktrees/hmi-ios`` worktree is retired since ``agent/hmi-ios`` merged in 67ee73a). That checkout is
   shared with mac-claude: one owner per file and branch, agreed with mac-claude before editing. It owns the iOS target: iPhone build, touch controls and iOS packaging.
-- Identity: its session shares ``/Users/alan/wk/KSPKontroller`` with mac-claude's checkout, so it declares
+- Identity: its session shares ``/Users/alan/wk/devKSP/ksp1/KSPKontroller`` with mac-claude's checkout, so it declares
   ``identity = mac-iphonehmi`` explicitly in its own CLAUDE.md/worktree and uses only
-  ``build/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
+  ``/Users/alan/wk/devKSP/run/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
   daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
 - Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
   from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
@@ -278,7 +278,8 @@ mac-workbench chat).
 5. Self health check: after two consecutive failed runs (e.g. an expired OAuth token) the daemon itself
    (Python, no model) sends INFO to all ``daemon of <identity> unhealthy: <error>`` and notifies the user.
 6. One daemon per identity, in its own repo with that repo's allowlist (Mac: mac-workbench in
-   ``~/wk/ksp-workbench``, mac-claude in ``~/wk/KSPKontroller``).
+   ``~/wk/devKSP/ksp1/ksp-workbench``, mac-claude in ``~/wk/devKSP/ksp1/KSPKontroller``; since 2026-11-19 all four
+   Mac identities keep config, history and daemon logs in ``~/wk/devKSP/run/agent-mailbox``, mailbox #694).
 7. Native service per OS: systemd ``--user`` (Pi, exists), launchd LaunchAgent (Mac), Task Scheduler
    (Windows, the KSPKontroller ``build/venv`` python).
 8. Machine sleep stops the service; it catches up on wake, and the backup rules cover the gap.
