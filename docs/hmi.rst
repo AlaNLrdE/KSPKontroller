@@ -872,14 +872,15 @@ every marker distance. The golden body from the KSP2 workbench's spec is ``hmi-c
 Settings
 --------
 
-``hmi-cpp/config.toml`` (deployed to ``~/ksphmi/cpp``) holds the defaults: kRPC ports and sample rate, ``fps``,
+``hmi-cpp/config.toml`` (installed to ``~/.local/share/ksphmi`` on the Pi) holds the defaults: kRPC ports and sample rate, ``fps``,
 screen size (0 = the monitor's own) and ``day_hours`` (6 for the KSP calendar, 24 for Earth time).
 ``format.day_hours`` must be a finite positive integer within the C++ ``int`` range; zero, negative,
 fractional and out-of-range values are rejected with the configuration filename before the display starts.
 The binary finds it through
-``KSPHMI_APP_DIR`` (the unit sets ``~/ksphmi/cpp``), else next to or one level above itself, so a build tree
-under ``build/hmi-cpp`` uses the repo's file. On the Pi, ``~/ksphmi/config.local.toml``
-(``KSPHMI_LOCAL_CONFIG``) overrides any key and is never touched by a deploy; ``~/ksphmi/env`` holds
+``KSPHMI_APP_DIR`` (the unit sets ``~/.local/share/ksphmi``), else next to or one level above itself, else
+``<bin>/../share/ksphmi`` (the installed ``~/.local/bin/ksphmi``), so a build tree under ``build/hmi-cpp`` uses
+the repo's file. On the Pi, ``~/dev/run/ksphmi/config.local.toml`` (``KSPHMI_LOCAL_CONFIG``) overrides any key
+and is never touched by an install; ``~/dev/run/ksphmi/env`` holds
 ``KSPHMI_KRPC_ADDRESS``, which ``./ci deploy_hmi`` sets to the PC's mDNS name (``<hostname>.local``)
 when the Pi resolves it to the address the SSH session comes from, so a DHCP change needs no
 redeploy; otherwise to the PC's address as the Pi sees it, or to ``HMI_KRPC_ADDRESS`` if set. The HMI resolves
@@ -911,13 +912,13 @@ Without ``/proc/net/arp`` (macOS, Windows), with a numeric address or with ``pre
 applies: the resolver's first answer. The rule covers the Redux source and kRPC (``kRPC endpoint NAME is IP
 (...)``, also used for the UDP 50002 context requests); a discovered kRPC number gives way to the configured name
 as soon as a connection to it fails, so a LAN change never keeps a stale number. The MAC is private to each
-installation: never commit it. On the Pi put it in ``~/ksphmi/config.local.toml``::
+installation: never commit it. On the Pi put it in ``~/dev/run/ksphmi/config.local.toml``::
 
     [krpc]
     prefer_mac = "aa:bb:cc:dd:ee:ff"
 
-and restart ``ksphmi.service`` (``systemctl --user restart ksphmi``). Not in ``~/ksphmi/env``: every
-``./ci deploy_hmi`` rewrites that file with only ``KSPHMI_KRPC_ADDRESS``. ``KSPHMI_PREFER_MAC`` suits a Mac or
+and restart ``ksphmi.service`` (``systemctl --user restart ksphmi``). Not in ``~/dev/run/ksphmi/env``: every
+``./ci deploy_hmi`` and ``./ci install_hmi`` rewrites that file with only ``KSPHMI_KRPC_ADDRESS``. ``KSPHMI_PREFER_MAC`` suits a Mac or
 PC shell. The log line ``KSP 2 Redux UDP source at ...,
 preferring the PC's Ethernet MAC`` confirms it. Reading the MAC: on the PC, PowerShell ``Get-NetAdapter``
 (``MacAddress`` of the Ethernet adapter); or on the Pi ``ping -c1 <Ethernet IP>`` then ``ip neigh show``.
@@ -1103,15 +1104,15 @@ On the Pi (Raspberry Pi OS Lite 64-bit, bookworm, wired to the same LAN), as you
    echo 'w /sys/class/graphics/fbcon/cursor_blink - - - - 0' | sudo tee /etc/tmpfiles.d/ksphmi-cursor.conf
    sudo systemd-tmpfiles --create /etc/tmpfiles.d/ksphmi-cursor.conf
 
-``./ci deploy_hmi`` applies the kiosk boot at its end whenever the deployed ``setup-kiosk.sh`` differs from the
-one last applied (``/etc/ksphmi-kiosk.applied`` holds its sha256): it runs the script over ``ssh -t`` and sudo
-asks for the Pi user's password. Without a terminal, or with ``NO_KIOSK=1``, it only prints the command. It never
+``./ci deploy_hmi`` and ``./ci install_hmi`` apply the kiosk boot at their end whenever the installed
+``setup-kiosk.sh`` differs from the one last applied (``/etc/ksphmi-kiosk.applied`` holds its sha256): the script
+runs over ``ssh -t`` (locally for ``install_hmi``) and sudo asks for the Pi user's password. Without a terminal, or with ``NO_KIOSK=1``, it only prints the command. It never
 reboots the Pi; do that yourself so the boot changes take effect. By hand (``--undo`` reverts all of it except
 lingering):
 
 .. code-block:: bash
 
-   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh && sudo reboot
+   sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh && sudo reboot
 
 The script is idempotent and keeps SSH, the network and the serial console. It:
 
@@ -1135,9 +1136,11 @@ The script is idempotent and keeps SSH, the network and the serial console. It:
   the user and home filled in): ``Type=simple``, ``DefaultDependencies=no``, ``After=local-fs.target``,
   ``WantedBy=sysinit.target``, no ``Before=`` on the boot or the logins and no device dependency (with a monitor
   detected late, ``dev-fb0.device`` timed out and the old unit never ran), ``RuntimeDirectory=ksphmi-intro``,
-  ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``, running ``~/ksphmi/cpp/systemd/ksphmi-intro.sh`` as the HMI user
-  with the groups ``video``, ``render`` and ``audio``;
-* enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci deploy_hmi`` does that).
+  ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``, running ``~/.local/share/ksphmi/systemd/ksphmi-intro.sh`` as the
+  HMI user with the groups ``video``, ``render`` and ``audio`` (``KSPHMI_BIN=~/.local/bin/ksphmi`` for the
+  fallback loading screen);
+* enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci install_hmi`` or
+  ``./ci deploy_hmi`` does that).
 
 What the screen shows at boot: black while the firmware and kernel start (no rainbow, no logo, no text), then the
 intro video ``hmi-cpp/assets/intro/KSPKontroller_pi_Intro.mp4`` (10 s, 1276x720 H.264 with AAC sound) once, with
@@ -1150,10 +1153,10 @@ the video to the monitor's native mode; ``--vo=drm`` would scale on the CPU), ``
 ``--hwdec=v4l2m2m-copy`` (first boot, 2026-11-16: with the default high-quality scaling to 4096x2160 and
 software decoding the picture ended ~3 s after its sound; with these it ends 0.2 s after), 
 ``--audio-device=alsa/hdmi:CARD=vc4hdmi0,DEV=0`` (``--audio-fallback-to-null=yes``: no sound card, still the
-video), ``--keep-open=always``, ``--no-terminal`` (its log goes to ``~/ksphmi/intro-mpv.log``) and
+video), ``--keep-open=always``, ``--no-terminal`` (its log goes to ``~/dev/run/ksphmi/intro-mpv.log``) and
 ``--input-ipc-server=/run/ksphmi-intro/mpv.sock``, and removes ``starting`` once the socket exists. Settings in
-``~/ksphmi/intro.env`` (read by the unit): ``KSPHMI_INTRO_VIDEO``, ``KSPHMI_INTRO_AUDIO``, ``KSPHMI_INTRO_DRM``, ``KSPHMI_INTRO_HWDEC``,
-``KSPHMI_INTRO_VO``, ``KSPHMI_INTRO_LOG``.
+``~/dev/run/ksphmi/intro.env`` (read by the unit): ``KSPHMI_BIN``, ``KSPHMI_INTRO_VIDEO``, ``KSPHMI_INTRO_AUDIO``,
+``KSPHMI_INTRO_DRM``, ``KSPHMI_INTRO_HWDEC``, ``KSPHMI_INTRO_VO``, ``KSPHMI_INTRO_LOG``.
 
 Hand-over from the video: mpv is DRM master while it holds the last frame, so SDL's kmsdrm cannot open the display
 until mpv quits. Before SDL video starts, ``ksphmi`` (Linux kiosk run only: not ``--splash``, ``--screenshot``,
@@ -1261,22 +1264,36 @@ port 50000 (and COM5).
 Deploy
 ------
 
+Pi layout (user, 2026-11-19): sources and the Pi's own builds live in the ``~/dev`` ``repo`` workspace
+(KSPKontroller is ``~/dev/ksp1/KSPKontroller``). The installed HMI is the program ``~/.local/bin/ksphmi`` (the
+previous one kept as ``ksphmi.prev``) and hmi-cpp's files (``config.toml``, assets, systemd scripts, sources, test
+data) in ``~/.local/share/ksphmi``, staged in ``~/.local/share/ksphmi.next`` while the tests run. Private state is
+in ``~/dev/run/ksphmi``: ``env``, ``config.local.toml``, ``intro.env``, ``intro-mpv.log`` and the deploy lock.
+
 ``./ci deploy_hmi`` (KSP may be running; it only talks to the Pi over SSH):
 
 #. checks the apt packages above and lingering on the Pi (prints the one-time ``sudo`` command if missing) and
    warns when the console cursor rule is missing;
-#. takes the Pi's deploy lock (``~/ksphmi/.deploy.lock``: one ``deploy_hmi`` at a time, from the Mac or the PC);
-#. cross-compiles ``ksphmi`` and its test programs here (``./ci build_hmi_pi``, see :doc:`building`; the Pi never
-   compiles), copies them with the ``hmi-cpp/`` files (``config.toml``, ``assets``, ``systemd``, ``tests``,
-   sources) to ``~/ksphmi/cpp.next`` and runs the C++ tests and the kiosk and screenshot tests there. Only when
-   they pass does it replace ``~/ksphmi/cpp``, keeping the previous binary as ``build/ksphmi.prev``. A failure
-   stops here and the running service keeps its old binary. Without a cross compiler it warns and builds on
-   the Pi instead (``cmake`` Release, ``-j4``, ``ctest``), which is much slower;
-#. writes ``~/ksphmi/env``, disables and removes a leftover ``ksphmi-cpp.service`` (the trial unit) and the old
-   Python ``~/ksphmi/app`` and ``~/ksphmi/venv``, installs ``hmi-cpp/systemd/ksphmi.service`` into
-   ``~/.config/systemd/user``, enables and restarts it;
+#. takes the Pi's deploy lock (``~/dev/run/ksphmi/.deploy.lock``: one deploy or install at a time, from the Mac,
+   the PC or the Pi);
+#. cross-compiles ``ksphmi`` and its test programs here (``./ci build_hmi_pi``, see :doc:`building`), copies them
+   with the ``hmi-cpp/`` files (``config.toml``, ``assets``, ``systemd``, ``tests``, sources) to
+   ``~/.local/share/ksphmi.next`` and runs the C++ tests and the kiosk and screenshot tests there. Only when they
+   pass does it install ``~/.local/bin/ksphmi`` by rename (the previous one kept as ``ksphmi.prev``) and replace
+   ``~/.local/share/ksphmi`` with the staged files. A failure stops here and the running service keeps its old
+   binary. Without a cross compiler it warns and builds on the Pi instead (``cmake`` Release, ``-j4``, in
+   ``~/.cache/ksphmi-build``, kept for incremental builds), which is much slower;
+#. writes ``~/dev/run/ksphmi/env`` (copying ``config.local.toml`` and ``intro.env`` once from the old
+   ``~/ksphmi`` when present; the first install also reads the endpoint from the old ``~/ksphmi/env``), disables
+   and removes a leftover ``ksphmi-cpp.service`` (the trial unit), installs ``~/.local/share/ksphmi/systemd/
+   ksphmi.service`` into ``~/.config/systemd/user``, enables and restarts it;
 #. waits 8 s, requires ``active`` with ``NRestarts=0`` (``Restart=always`` hides a crash loop behind
    ``active``) and prints the last 15 log lines.
+
+``./ci install_hmi`` runs on the Pi itself (Linux/aarch64 only; user, 2026-11-19): it builds ``ksphmi`` and its
+test programs natively from that checkout into ``build/hmi-cpp-pi``, then takes the same lock and runs the same
+test, install, restart and kiosk steps with local commands instead of SSH (``HMI_HOST=local``). The kRPC endpoint
+comes from ``HMI_KRPC_ADDRESS`` or the name already in ``~/dev/run/ksphmi/env``; without either it stops.
 
 Interactive HMI and test app without the Pi
 -------------------------------------------
@@ -1428,8 +1445,10 @@ Commands
 ``./ci build_hmi``          Build into ``build/hmi-cpp`` (``build/hmi-cpp-win`` with MSYS2 on Windows)
 ``./ci test_hmi [--sim]``   Build and run ctest; ``--sim`` adds the run against ``tools/kspsim``
 ``./ci build_hmi_pi``       Cross-compile it for the Pi into ``build/hmi-cpp-pi`` (``./ci hmi_sysroot`` first)
-``./ci deploy_hmi``         Cross-build, test the binaries on the Pi in ``~/ksphmi/cpp.next``, swap them into
-                            ``~/ksphmi/cpp``, restart the ``ksphmi`` user service, print its log
+``./ci deploy_hmi``         Cross-build, test the binaries on the Pi in ``~/.local/share/ksphmi.next``, install
+                            them (``~/.local/bin/ksphmi``), restart the ``ksphmi`` user service, print its log
+``./ci install_hmi``        On the Pi itself: native build from its checkout, then the same steps as
+                            ``deploy_hmi`` with local commands
 ``./ci hmi_logs [N]``       Last N lines of the service log on the Pi
 ``./ci verify``             ``hmi:`` lines: views and resources, local test build current, service state and
                             unit, kRPC address still this PC, screen, cursor, kiosk, Pi render budget

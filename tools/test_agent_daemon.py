@@ -482,16 +482,16 @@ class InstallerTest(unittest.TestCase):
         return '\n'.join(out)
 
     def test_linux_keeps_the_systemd_unit(self):
-        plan = installer.make_plan('linux', 'pi-claude', '/home/pi/wk/KSPKontroller', '/home/pi')
+        plan = installer.make_plan('linux', 'pi-claude', '/home/pi/dev/ksp1/KSPKontroller', '/home/pi')
         self.assertEqual([p for p, _ in plan['files']], ['/home/pi/.local/lib/agent-daemon/agent_daemon.py',
                                                          '/home/pi/.config/systemd/user/agent-daemon@.service'])
         unit = plan['files'][1][1]
         self.assertEqual(unit, installer.UNIT_TEMPLATE.read_text(encoding='utf-8'))  # universal newlines: LF
-        text = self.dry('linux', identity='pi-claude', tools='/home/pi/wk/KSPKontroller')
+        text = self.dry('linux', identity='pi-claude', tools='/home/pi/dev/ksp1/KSPKontroller')
         self.assertIn('ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py', text)
         self.assertNotIn('.service.d', text.split('run systemctl')[0])  # Pi: tools home = work repo, no drop-in
         self.assertIn('run systemctl --user enable --now agent-daemon@pi-claude.service', text)
-        self.assertIn('copy /home/pi/wk/KSPKontroller/tools/agent_daemon.py -> ', text)
+        self.assertIn('copy /home/pi/dev/ksp1/KSPKontroller/tools/agent_daemon.py -> ', text)
         self.assertIn('disable --now agent-daemon@pi-claude.service', self.dry('linux', 'uninstall', 'pi-claude'))
 
     def test_macos_launch_agent(self):

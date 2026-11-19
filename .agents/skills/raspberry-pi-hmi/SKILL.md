@@ -13,22 +13,32 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
 
 ## Layout on the Pi
 
-- `~/ksphmi/cpp`: the `hmi-cpp/` sources and `config.toml` (replaced by every deploy), `build/` (kept: incremental
-  CMake build), binary `~/ksphmi/cpp/build/ksphmi`. `~/ksphmi/env` (`KSPHMI_KRPC_ADDRESS`, written by the deploy),
-  `~/ksphmi/config.local.toml` (the user's, never touched).
-- User unit `ksphmi.service` (from `hmi-cpp/systemd/`): `KSPHMI_OUTPUT=fbdev`, `KSPHMI_APP_DIR=%h/ksphmi/cpp`,
-  `KSPHMI_LOCAL_CONFIG=%h/ksphmi/config.local.toml`, `EnvironmentFile=-%h/ksphmi/env`.
-- History (2026-11-14): a Python/pygame runtime (`hmi-pi/`, `~/ksphmi/app`, `~/ksphmi/venv`) ran first, then the
-  C++ port ran as `ksphmi-cpp.service`. Measured on the Pi: Python ~91 % of a core, C++ ~43 %. Python was dropped;
-  the deploy removes the old unit, `app/` and `venv/`. Tests and tooling (`tools/kspsim`, `verify.py`) stay Python.
+- One workspace (user, 2026-11-19): sources and the Pi's own builds in `~/dev` (`repo` workspace from the private
+  manifest AlaNLrdE/ksp-manifest; this repo is `~/dev/ksp1/KSPKontroller`, replacing `~/wk/KSPKontroller`).
+- Installed HMI: program `~/.local/bin/ksphmi` (previous one `ksphmi.prev`), hmi-cpp's files (`config.toml`, assets,
+  systemd scripts, sources, test data) in `~/.local/share/ksphmi`, replaced by every install; staging
+  `~/.local/share/ksphmi.next` while the tests run; fallback on-Pi build (deploy_hmi without a cross compiler) in
+  `~/.cache/ksphmi-build`. The binary finds its files via `KSPHMI_APP_DIR` or `<bin>/../share/ksphmi`.
+- Private state `~/dev/run/ksphmi`: `env` (`KSPHMI_KRPC_ADDRESS`, written by the installer), `config.local.toml`
+  and `intro.env` (the user's, never touched), `intro-mpv.log`, `.deploy.lock`. The first install copies
+  `config.local.toml`/`intro.env` once from the old `~/ksphmi` and reads the endpoint from the old `~/ksphmi/env`.
+- User unit `ksphmi.service` (from `hmi-cpp/systemd/`): `KSPHMI_OUTPUT=auto`, `KSPHMI_APP_DIR=%h/.local/share/ksphmi`,
+  `KSPHMI_LOCAL_CONFIG=%h/dev/run/ksphmi/config.local.toml`, `EnvironmentFile=-%h/dev/run/ksphmi/env`,
+  `ExecStart=%h/.local/bin/ksphmi`.
+- History (2026-11-14, old paths): a Python/pygame runtime (`hmi-pi/`, `~/ksphmi/app`, `~/ksphmi/venv`) ran first,
+  then the C++ port ran as `ksphmi-cpp.service`. Measured on the Pi: Python ~91 % of a core, C++ ~43 %. Python was
+  dropped. Tests and tooling (`tools/kspsim`, `verify.py`) stay Python.
 
 ## Deploy and check
 
-- Only one machine deploys at a time: Mac and PC both run `./ci deploy_hmi` against the same `~/ksphmi/cpp.next`
-  and build directory. Two runs at once (2026-11-16) mixed trees and objects (tests SegFault, `tar: Cannot mkdir`).
-  `deploy_hmi` now refuses to start while `~/ksphmi/.deploy.lock` is held (taken over after 30 min). Still take the
-  mailbox `pi-deploy` lock first.
-- Cross build, never on the Pi (2026-11-17, docs/building.rst "Cross-compiling the Pi HMI"): `./ci hmi_sysroot`
+- Only one machine deploys at a time: Mac, PC (`./ci deploy_hmi`) and the Pi (`./ci install_hmi`) all use the same
+  `~/.local/share/ksphmi.next`. Two runs at once (2026-11-16) mixed trees and objects (tests SegFault,
+  `tar: Cannot mkdir`). Both refuse to start while `~/dev/run/ksphmi/.deploy.lock` is held (taken over after
+  30 min). Still take the mailbox `pi-deploy` lock first and announce with INFO to all.
+- On the Pi itself (user, 2026-11-19): `./ci install_hmi` builds natively from `~/dev/ksp1/KSPKontroller` into
+  `build/hmi-cpp-pi`, then the same lock/tests/install/restart/kiosk steps as deploy_hmi with local commands
+  (`HMI_HOST=local`). pi-claude may run it interactively under `pi-deploy` with INFO to all; never headless.
+- From the PC/Mac, cross build (2026-11-17, docs/building.rst "Cross-compiling the Pi HMI"): `./ci hmi_sysroot`
   copies about 60 MB from the Pi into build/pi-sysroot (only when its dpkg list changes), and `./ci build_hmi_pi`
   builds in WSL with Ubuntu's cross g++ 13 and Ninja, both unpacked without root (WSL here has no sudo). Measured:
   22 s cold, 6 s for one .cpp, 4 s no-op, against minutes on the Pi. Keep the WSL build tree on ext4
@@ -43,9 +53,9 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   `._*` files stayed in `cpp.new` after `mv cpp.new/*`, so `rmdir cpp.new` failed the copy.
 
 1. `./ci test_hmi` (native MSYS2 here), then `./ci deploy_hmi`: package/linger check (prints the one-time `sudo apt ...`
-   command), Pi lock, cross build, copy to `~/ksphmi/cpp.next`, test programs + kiosk/screenshot tests **on the Pi**
-   (a failure stops before the swap and the restart, and the old binary keeps running), swap into `~/ksphmi/cpp`
-   (`build/ksphmi.prev` kept), install the unit, restart. The on-Pi CMake build happens only without a cross
+   command), Pi lock, cross build, copy to `~/.local/share/ksphmi.next`, test programs + kiosk/screenshot tests
+   **on the Pi** (a failure stops before the install and the restart, and the old binary keeps running), install
+   `~/.local/bin/ksphmi` (`ksphmi.prev` kept) and `~/.local/share/ksphmi`, install the unit, restart. The on-Pi CMake build happens only without a cross
    compiler (WARN). It requires `active` **and**
    `NRestarts=0` after 8 s: `Restart=always` makes a crash loop look `active` at a glance.
 2. `./ci verify` -> `hmi:` lines: views and resources, local ctest build current, service, C++ unit (ExecStart,
@@ -93,7 +103,7 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   late the job timed out and the unit never ran (two boots); wait in the script for
   `/sys/class/drm/card*-HDMI-A-*/status` = connected (20 s). Use `--vo=gpu --gpu-context=drm`: `--vo=drm` scales
   on the CPU (1276x720 to 4096x2160). Without mpv/the video the script execs the old `ksphmi --splash`.
-  mpv's log (`--no-terminal`) is `~/ksphmi/intro-mpv.log`; overrides go in `~/ksphmi/intro.env`. Real boots
+  mpv's log (`--no-terminal`) is `~/dev/run/ksphmi/intro-mpv.log`; overrides go in `~/dev/run/ksphmi/intro.env`. Real boots
   2026-11-16: default gpu scaling + software decode put the picture ~3 s behind the sound ("Audio/Video
   desynchronisation" in the log); `--profile=fast --hwdec=v4l2m2m-copy` ends 0.2 s apart. Judge sync from
   `audio EOF reached` vs `[vf] filter input EOF` in that log. To test renders without a reboot, stop
@@ -316,9 +326,9 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 
 - The Pi is shared with the KSP2 Redux port (C:\Users\alanl\wk\KSP2_decompilation). Its drop-in
   ~/.config/systemd/user/ksphmi.service.d/60-redux.conf overrides ExecStart with a ~/ksphmi-redux build, so
-  `./ci deploy_hmi` then rebuilds ~/ksphmi/cpp but the screen keeps the Redux binary. Before trusting a deploy,
-  check `systemctl --user cat ksphmi.service`; never remove the drop-in without the user. Per-user settings
-  (skin etc.) go in ~/ksphmi/config.local.toml, which deploys never replace.
+  `./ci deploy_hmi` then installs ~/.local/bin/ksphmi but the screen keeps the Redux binary. Before trusting a
+  deploy, check `systemctl --user cat ksphmi.service`; never remove the drop-in without the user. Per-user settings
+  (skin etc.) go in ~/dev/run/ksphmi/config.local.toml, which installs never replace.
 
 - `./ci hmi` natively: game on 127.0.0.1; `--desktop` fills a secondary monitor with
   SDL_WINDOW_FULLSCREEN_DESKTOP (plain window when there is only one display). Unverified on the real
@@ -350,7 +360,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   The ORBIT view fit has hysteresis (grows at once, shrinks after 2 s under 60 %): a test that draws a big
   orbit then a small one on the same Display must advance `Snapshot::received` by more than 2 s.
 - Names, not IPs (2026-11-16): Pi kspKontrollerPi.local (ssh alias ksphmi), PC <hostname>.local (Windows' own
-  mDNS), Mac Alans-MacBook-Air.local. `deploy_hmi` writes the PC name into ~/ksphmi/env when the Pi resolves it
+  mDNS), Mac Alans-MacBook-Air.local. `deploy_hmi` writes the PC name into ~/dev/run/ksphmi/env when the Pi resolves it
   to the PC; the probe uses `ssh -4` because a .local alias makes ssh arrive over IPv6 link-local (fe80::...%eth0,
   unusable by the IPv4-only HMI). Windows' first getaddrinfo of a .local name can fail once (11001/11003): retry.
 - PC on Ethernet and Wi-Fi in one LAN (2026-11-17): Dnscache answers <hostname>.local on both, the Redux source
@@ -362,7 +372,7 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
   Git Bash `sed -i` rewrites CRLF files as LF: edit docs with Python only.
 - Dual-homed PC (2026-11-18): a PC on Ethernet and Wi-Fi answers its mDNS name with one address at a time, so
   the endpoint flipped (.17 <-> .29); getent returns one address, so picking among answers cannot help. Set the
-  PC's Ethernet MAC as `[krpc] prefer_mac` in ~/ksphmi/config.local.toml (never ~/ksphmi/env: deploy_hmi rewrites
+  PC's Ethernet MAC as `[krpc] prefer_mac` in ~/dev/run/ksphmi/config.local.toml (never .../env: deploy_hmi rewrites
   it; never commit a MAC). endpoint.cpp reads /proc/net/arp (a MAC appears only after traffic, so it pokes the
   other answers with an empty UDP datagram) and stays sticky. A discovered kRPC number now gives way to the
   configured name after one failed connection (the Mac kept a stale 192.168.0.152 for hours after a LAN change).

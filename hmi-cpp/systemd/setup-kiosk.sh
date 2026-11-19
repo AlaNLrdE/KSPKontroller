@@ -1,7 +1,7 @@
 #!/bin/sh
 # Kiosk boot for the KSP HMI: from power-on the screen shows only the intro video (its last frame held), then the HMI.
-# Run once as root after ./ci deploy_hmi:   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh
-# Undo everything (restores the boot file backups):   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh --undo
+# Run once as root after ./ci install_hmi (or deploy_hmi):   sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh
+# Undo everything (restores the boot file backups):   sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh --undo
 # Idempotent: run it again after any change to this script. SSH, Wi-Fi/LAN and the serial console stay as they are.
 #
 # What it changes (each step is reverted by --undo):
@@ -23,7 +23,7 @@
 #  - /etc/ksphmi-kiosk.applied: sha256 of this script, so ./ci deploy_hmi knows when to run it again.
 set -eu
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Run with sudo: sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh [--undo]" >&2
+    echo "Run with sudo: sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh [--undo]" >&2
     exit 1
 fi
 
@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do
 done
 here="$(cd "$(dirname "$0")" && pwd)"
 if [ -z "$user" ] || [ "$user" = root ]; then
-    user="$(stat -c %U "$here")"  # the owner of ~/ksphmi/cpp/systemd
+    user="$(stat -c %U "$here")"  # the owner of ~/.local/share/ksphmi/systemd
 fi
 home="$(getent passwd "$user" | cut -d: -f6)"
 [ -n "$home" ] || { echo "Unknown user '$user' (use --user NAME)" >&2; exit 1; }
@@ -129,8 +129,8 @@ if ! command -v mpv >/dev/null 2>&1; then
         echo "WARNING: could not install mpv (no network?): the boot shows the loading screen instead of the intro"              "video; run this script again later" >&2
     fi
 fi
-[ -r "$home/ksphmi/cpp/assets/intro/KSPKontroller_pi_Intro.mp4" ] ||
-    echo "WARNING: no intro video in $home/ksphmi/cpp/assets/intro: run ./ci deploy_hmi" >&2
+[ -r "$home/.local/share/ksphmi/assets/intro/KSPKontroller_pi_Intro.mp4" ] ||
+    echo "WARNING: no intro video in $home/.local/share/ksphmi/assets/intro: run ./ci install_hmi" >&2
 
 # The unit runs as the HMI user: group video opens /dev/dri/card1 and /dev/fb0, render the GPU, audio the HDMI
 # sound card (the unit adds them as supplementary groups too); systemd only sees fb0 when udev tags it.
@@ -155,9 +155,9 @@ systemctl restart systemd-journald || true
 loginctl enable-linger "$user"
 sha256sum "$here/$(basename "$0")" | cut -d' ' -f1 > "$stamp"
 if [ ! -e "$home/.config/systemd/user/default.target.wants/ksphmi.service" ]; then
-    echo "WARNING: ksphmi.service is not enabled for $user: run ./ci deploy_hmi from the PC" >&2
+    echo "WARNING: ksphmi.service is not enabled for $user: run ./ci install_hmi" >&2
 fi
-if [ ! -x "$home/ksphmi/cpp/build/ksphmi" ]; then
-    echo "WARNING: $home/ksphmi/cpp/build/ksphmi missing: run ./ci deploy_hmi (the HMI and its fallback loading screen)" >&2
+if [ ! -x "$home/.local/bin/ksphmi" ]; then
+    echo "WARNING: $home/.local/bin/ksphmi missing: run ./ci install_hmi (the HMI and its fallback loading screen)" >&2
 fi
 echo "Kiosk configured for $user. Takes effect at the next reboot (sudo reboot); SSH stays enabled."

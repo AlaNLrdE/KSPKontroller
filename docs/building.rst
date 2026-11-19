@@ -94,8 +94,10 @@ failure does not roll back a successful Pi deployment. See :doc:`hmi` for the Pi
 Cross-compiling the Pi HMI
 --------------------------
 
-The Pi never compiles the HMI (user, 2026-11-17: it builds far slower than the PC). This PC (inside WSL) or a
-Linux machine builds ``ksphmi`` and its test programs for the Pi's aarch64 Debian 13:
+Deploys from the PC or the Mac cross-compile the HMI (user, 2026-11-17: the Pi builds far slower than the PC);
+on the Pi itself ``./ci install_hmi`` builds natively from its ``~/dev`` checkout (user, 2026-11-19, see
+:doc:`hmi`). This PC (inside WSL) or a Linux machine builds ``ksphmi`` and its test programs for the Pi's
+aarch64 Debian 13:
 
 ``./ci hmi_sysroot [--force]``
    Copies the Pi's headers, gcc runtime, crt objects, pkg-config files and the libraries SDL2, SDL2_ttf and
@@ -124,14 +126,19 @@ Once installed, the toolchain is one line in WSL or Ubuntu: ``sudo apt install -
 ninja-build``. Without sudo the unpacked copy is enough.
 
 ``./ci deploy_hmi`` uses this path whenever a cross compiler is available. It takes a lock on the Pi
-(``~/ksphmi/.deploy.lock``, so only one deploy runs at a time; a lock older than 30 minutes is taken over with a
-warning). It then cross-builds, copies the programs and the hmi-cpp files (``config.toml``, assets, systemd,
-test data) to ``~/ksphmi/cpp.next`` and runs ``ksphmi_tests``, ``ksphmi_redux_tests``, ``ksphmi_intro_tests``,
-``ksphmi_render_tests``, ``test_setup_kiosk.py`` and ``test_screenshots.py`` there. Only when all of them
-pass does it replace ``~/ksphmi/cpp``: ``build/ksphmi`` is replaced by a rename, and the previous binary stays
-as ``build/ksphmi.prev``. Then it restarts the service. A failed test leaves the running HMI untouched and the
-new one in ``cpp.next`` for inspection. Without a cross compiler it prints a warning and falls back to the old
-on-Pi CMake build.
+(``~/dev/run/ksphmi/.deploy.lock``, so only one deploy runs at a time; a lock older than 30 minutes is taken over
+with a warning). It then cross-builds, copies the programs and the hmi-cpp files (``config.toml``, assets, systemd,
+test data) to ``~/.local/share/ksphmi.next`` and runs ``ksphmi_tests``, ``ksphmi_redux_tests``,
+``ksphmi_intro_tests``, ``ksphmi_render_tests``, ``test_setup_kiosk.py`` and ``test_screenshots.py`` there. Only
+when all of them pass does it install: ``~/.local/bin/ksphmi`` is replaced by a rename, the previous binary stays
+as ``~/.local/bin/ksphmi.prev``, and the staged files (without the test programs) replace
+``~/.local/share/ksphmi``. Then it restarts the service. A failed test leaves the running HMI untouched and the
+new one in ``ksphmi.next`` for inspection. Without a cross compiler it prints a warning and falls back to an
+on-Pi CMake build in ``~/.cache/ksphmi-build``.
+
+``./ci install_hmi`` (on the Pi itself, Linux/aarch64 only) builds the same targets natively with the same
+options (``-DKSPHMI_TEST_SOURCE_DIR=.``, Ninja when installed) into ``build/hmi-cpp-pi`` of that checkout, then
+runs the same lock, staging, tests, install, restart and kiosk steps with local commands.
 
 macOS (not implemented yet): clang is already a cross compiler. ``./ci hmi_sysroot`` works there. A Darwin
 branch of ``build_hmi_pi_here`` would pass ``--target=aarch64-linux-gnu``, ``-fuse-ld=lld`` (Homebrew
