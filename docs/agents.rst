@@ -139,7 +139,11 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   dashboard of agents, locks, overdue and messages with sending, plus views of ksp-workbench,
   KSPKontroller and KSP2 Redux data; the AgentsKit Swift mailbox client).
 - Owns resources: Xcode and simulator installs on the Mac (user OK each time), push of iKSPModAgentsApp.
-  The app's sender identity for the user's own messages is pending a user decision. None of the locks.
+  The app's sender identities (see below). None of the locks.
+- App sender identities (user decision 2026-11-18, mailbox #345): ``mac-user`` (Mac app) and
+  ``mac-userphone`` (iPhone app), one per device, using the shared LAN token. They are not agents and have
+  no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
+  their own consent rules: push, deploy, install, flash and publish need the user's OK in their own chat.
 - Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
 - Cannot: push, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
   pc-claude; KSP data stays with its owners.
