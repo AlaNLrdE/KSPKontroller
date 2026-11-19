@@ -145,6 +145,37 @@ class CycleTest(unittest.TestCase):
         _, launch = self.cycle([msg('i', 'INFO', 'INFO: fyi'), msg('a')])
         self.assertEqual([i['id'] for i in launch.call_args[0][2]], ['i', 'a'])
 
+    def test_a_released_identity_registers_again_and_collects(self):
+        released = subprocess.CompletedProcess([], 1, '', 'HTTP 409: identity pi-claude released its registration; '
+                                               'run register again')
+        ok = subprocess.CompletedProcess([], 0, '', '')
+        with mock.patch.object(daemon, 'mailbox', side_effect=[released, ok, ok]) as mailbox, \
+                mock.patch.object(daemon, 'pending', return_value=(self.mb, {}, [msg('a')])), \
+                mock.patch.object(daemon, 'launch') as launch:
+            self.assertTrue(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+        self.assertEqual([c.args for c in mailbox.call_args_list],
+                         [('cfg.json', 'collect'), ('cfg.json', 'register'), ('cfg.json', 'collect')])
+        launch.assert_called_once()
+
+    def test_other_collect_failures_do_not_register_and_report_failure(self):
+        down = subprocess.CompletedProcess([], 1, '', 'connection refused')
+        with mock.patch.object(daemon, 'mailbox', return_value=down) as mailbox, \
+                mock.patch.object(daemon, 'launch') as launch:
+            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+        mailbox.assert_called_once_with('cfg.json', 'collect')
+        launch.assert_not_called()
+
+    def test_failed_register_reports_failure(self):
+        released = subprocess.CompletedProcess([], 1, '', 'HTTP 409: identity x released its registration')
+        refused = subprocess.CompletedProcess([], 1, '', 'HTTP 409: in use by a live session')
+        with mock.patch.object(daemon, 'mailbox', side_effect=[released, refused]) as mailbox:
+            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+        self.assertEqual(mailbox.call_count, 2)  # no second collect without a registration
+
+    def test_backoff_grows_and_is_capped(self):
+        self.assertEqual([daemon.backoff(n) for n in (0, 1, 2, 3)], [0, 2, 4, 8])
+        self.assertEqual(daemon.backoff(30), daemon.BACKOFF_MAX)
+
 
 class PauseTest(unittest.TestCase):
     def test_pause_expires_and_resume_clears(self):
@@ -158,10 +189,19 @@ class PauseTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 daemon.main(['--config', str(Path(d) / 'pi-claude.json'), 'pause', '--minutes', '1'])
             self.assertTrue(daemon.paused_until(f))
-            with contextlib.redirect_stdout(io.StringIO()):
+            ok = subprocess.CompletedProcess([], 0, '', '')
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    mock.patch.object(daemon, 'mailbox', return_value=ok) as mailbox:
                 daemon.main(['--config', str(Path(d) / 'pi-claude.json'), 'resume'])
             self.assertFalse(daemon.paused_until(f))
+            mailbox.assert_called_once_with((Path(d) / 'pi-claude.json').resolve(), 'register')  # takes it back
             daemon.resume(f)  # idempotent
+
+    def test_resume_survives_a_failed_register(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as out, \
+                mock.patch.object(daemon, 'mailbox', side_effect=OSError('server down')):
+            daemon.main(['--config', str(Path(d) / 'pi-claude.json'), 'resume'])
+        self.assertIn('listener retries', out.getvalue())
 
     def test_one_daemon_per_identity(self):
         with tempfile.TemporaryDirectory() as d:

@@ -54,6 +54,8 @@ MAX_FAILURES = 3
 UNHEALTHY_AFTER = 2  # consecutive failed runs
 RUN_TIMEOUT = 20 * 60
 SLEEP_GAP = WATCH_SLICE + 90  # a loop iteration longer than this means the machine slept
+BACKOFF_MAX = 300  # s; repeated collect failures wait 2, 4, 8 ... up to this
+RELEASED = 'released its registration'  # server 409 after 'register --release': the daemon registers again
 WAKE_KINDS = ('REQUEST', 'NOTICE')
 KINDS = ('REQUEST', 'ACK', 'RESULT', 'NOTICE')  # as agent_mailbox.kind_of: anything else is INFO
 HOSTS = ('mac', 'pc', 'pi')
@@ -381,6 +383,32 @@ def send(config, to, message_id, text):
         return False
 
 
+def reregister(config):
+    """Take the identity back after an interactive session released it (same config and session file). Best
+    effort: a failure is logged and the next cycle tries again."""
+    try:
+        r = mailbox(config, 'register')
+    except (OSError, subprocess.SubprocessError) as e:
+        log('register again failed: %r' % e)
+        return False
+    log('registered again' if r.returncode == 0 else
+        'register again failed: ' + (r.stderr or r.stdout).strip()[-300:])
+    return r.returncode == 0
+
+
+def collect(config):
+    """collect; on the 'released' 409 register again and retry once. Returns the failing output, or None."""
+    r = mailbox(config, 'collect')
+    if r.returncode and RELEASED in (r.stderr or '') + (r.stdout or '') and reregister(config):
+        r = mailbox(config, 'collect')
+    return (r.stderr or r.stdout or 'rc=%s' % r.returncode).strip()[-300:] if r.returncode else None
+
+
+def backoff(streak):
+    """Seconds to wait after `streak` consecutive collect failures (0 when healthy)."""
+    return min(BACKOFF_MAX, 2 ** streak) if streak else 0
+
+
 def pending(config):
     mb = mailbox_module()
     cfg = json.loads(Path(config).read_text(encoding='utf-8'))
@@ -576,12 +604,13 @@ def finish(config, identity, items, f, state, rc, output, name, ids, started, sy
 
 
 def cycle(config, identity, f, max_runs, profile):
+    """One collect + pending + maybe a run. False only when collect failed (the caller backs off)."""
     if paused_until(f):
-        return  # never collect while an interactive session owns the identity
-    r = mailbox(config, 'collect')
-    if r.returncode:
-        log('collect failed: ' + (r.stderr or r.stdout).strip()[-300:])
-        return
+        return True  # never collect while an interactive session owns the identity
+    failed = collect(config)
+    if failed:
+        log('collect failed: ' + failed)
+        return False
     mb, cfg, items = pending(config)
     state = read_json(f['state'], {})
     for item in [i for i in items if is_ack(i)]:
@@ -593,6 +622,7 @@ def cycle(config, identity, f, max_runs, profile):
         log('rate limit: %d runs in the last hour; new messages wait' % max_runs)
     elif decision:
         launch(config, identity, items, f, state, profile)
+    return True
 
 
 def resolve_config(value):
@@ -623,6 +653,7 @@ def run(args):
         identity, WORK, TOOLS, config, profile['name'], args.max_runs))
     was_paused = False
     last = time.time()
+    streak = 0  # consecutive failed collects: watch returns at once then, so back off instead of spinning
     while True:
         if time.time() - last > SLEEP_GAP + (PAUSE_POLL if was_paused else 0):
             log('woke after %.0f s (machine sleep?): catching up' % (time.time() - last))
@@ -644,10 +675,17 @@ def run(args):
             log('watch failed: %r' % e)
             time.sleep(30)
         try:
-            cycle(config, identity, f, args.max_runs, profile)
+            ok = cycle(config, identity, f, args.max_runs, profile)
         except Exception as e:  # keep listening through server outages
             log('cycle failed: %r' % e)
-            time.sleep(30)
+            ok = False
+        if ok:
+            if streak:
+                log('collect works again after %d failures' % streak)
+            streak = 0
+        else:
+            streak += 1
+            time.sleep(backoff(streak))
 
 
 def main(argv=None):
@@ -706,7 +744,10 @@ def main(argv=None):
         print('listener paused until %s' % dt.datetime.fromtimestamp(until).isoformat(timespec='seconds'))
     elif args.command == 'resume':
         resume(f)
-        print('listener resumed')
+        # an interactive 'register --release' before resume left the identity released: take it back now
+        # (same session file, so no takeover); the run loop also does this on the 409 if this fails
+        registered = reregister(resolve_config(args.config))
+        print('listener resumed' + ('' if registered else ' (register failed; the listener retries)'))
     else:
         state = read_json(f['state'], {})
         if args.mark_seen:
