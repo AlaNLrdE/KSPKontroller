@@ -452,6 +452,11 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   --minutes N`` (renew it while working) and ``resume`` when the user closes it; a forgotten pause expires by
   itself. While paused the daemon neither watches nor collects. A lock file (``fcntl`` on POSIX, ``msvcrt`` on
   Windows) refuses a second daemon on the same identity.
+  The closing routine is ``resume`` only: never ``register --release`` while a daemon owns the identity. If a
+  release happened anyway, ``resume`` registers the identity again (same session file, no takeover) and the
+  daemon does the same when collect gets the "released its registration" HTTP 409.
+* **Backoff.** Consecutive collect failures (server down, refused registration) wait 2, 4, 8 ... up to 300 s
+  between attempts instead of retrying in a tight loop; the first success logs the recovery and resets it.
 * **Audit.** Each run's transcript goes to ``build/agent-mailbox/<identity>.daemon/runs/`` and one line with its
   ``SUMMARY:`` to ``summary.md``; ``agent_daemon.py --config ... state`` shows the pause, the health streak, the
   run count and the last runs. The interactive session reports them to the user when it opens.

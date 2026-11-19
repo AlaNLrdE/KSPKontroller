@@ -275,7 +275,8 @@ mac-workbench chat).
 1. Wake only for REQUEST and NOTICE addressed to the identity, its host group or ``all``; INFO and ACK never
    wake (they are read on the next run). The long-poll itself uses no model tokens.
 2. No competition with an open session: an interactive session runs ``agent_daemon.py pause`` when it starts
-   and ``resume`` when it ends; never two clients on one identity.
+   and ``resume`` when it ends (never ``register --release`` when a daemon owns the identity: ``resume``
+   registers it again); never two clients on one identity.
 3. Closed headless allowlist: read, diagnose, tests, worktree edits, mailbox replies. Never deploy, push,
    flash or touch GameData; anything that needs the user is answered ``needs user`` and left pending.
 4. Notify the user locally on ``needs user``: macOS notification, Windows toast, Pi: INFO to the coordinator.
