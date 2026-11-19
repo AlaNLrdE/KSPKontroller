@@ -59,8 +59,7 @@ Identities
      - mac-workbench
    * - mac-iphonehmi
      - Mac (Alans-MacBook-Air)
-     - KSPKontroller worktree (``/Users/alan/wk/KSPKontroller/.claude/worktrees/hmi-ios``, branch
-       ``agent/hmi-ios``)
+     - KSPKontroller ``hmi-ios/`` (``/Users/alan/wk/KSPKontroller/hmi-ios``, main checkout; user 2026-11-18, mailbox #634)
      - claude, open session
      - mac-claude (proposed)
 
@@ -165,8 +164,9 @@ the user in its own chat.
 
 - Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
   sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
-  works only in its own worktree ``.claude/worktrees/hmi-ios`` on ``agent/hmi-ios``, never in the main
-  checkout mac-claude uses. It owns the iOS target: iPhone build, touch controls and iOS packaging.
+  lives in ``/Users/alan/wk/KSPKontroller/hmi-ios`` (user 2026-11-18, mailbox #634; the
+  ``.claude/worktrees/hmi-ios`` worktree is retired since ``agent/hmi-ios`` merged in 67ee73a). That checkout is
+  shared with mac-claude: one owner per file and branch, agreed with mac-claude before editing. It owns the iOS target: iPhone build, touch controls and iOS packaging.
 - Identity: its session shares ``/Users/alan/wk/KSPKontroller`` with mac-claude's checkout, so it declares
   ``identity = mac-iphonehmi`` explicitly in its own CLAUDE.md/worktree and uses only
   ``build/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
