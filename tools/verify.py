@@ -890,6 +890,31 @@ def check_hmi_intro(ctx):
            (hdr_dir.group(1), hdr_sock.group(1)))
 
 
+def check_hmi_wifi_fallback(ctx):
+    """The Pi's Wi-Fi fallback: setup-kiosk.sh installs (and --undo removes) the NetworkManager dispatcher
+    systemd/90-wifi-fallback, which takes the wifi-fallback profile down when eth0 comes up and up when it goes
+    down. The profile itself (network name, password) lives only on the Pi."""
+    problems = []
+    systemd = os.path.join(HMI_DIR, "systemd")
+    path = os.path.join(systemd, "90-wifi-fallback")
+    script = read(path) if os.path.isfile(path) else ""
+    kiosk = read(os.path.join(systemd, "setup-kiosk.sh"))
+    if not script:
+        problems.append("systemd/90-wifi-fallback missing")
+    else:
+        if '[ "$1" = eth0 ] || exit 0' not in script:
+            problems.append("dispatcher must act on eth0 only")
+        for action in ("up)   nmcli connection down wifi-fallback", "down) nmcli connection up wifi-fallback"):
+            if action not in script:
+                problems.append("dispatcher lacks '%s'" % action)
+    if 'wifi=/etc/NetworkManager/dispatcher.d/90-wifi-fallback' not in kiosk:
+        problems.append("setup-kiosk.sh does not install the dispatcher")
+    if '"$stamp" "$wifi"' not in kiosk:
+        problems.append("setup-kiosk.sh --undo keeps the dispatcher")
+    report("FAIL" if problems else "PASS", "hmi: wifi fallback",
+           ", ".join(problems) if problems else "dispatcher installed by setup-kiosk.sh, Ethernet preferred")
+
+
 # Boot command line flags setup-kiosk.sh adds so that nothing but the splash and the HMI reaches the screen.
 KIOSK_CMDLINE = ("quiet", "logo.nologo", "vt.global_cursor_default=0", "consoleblank=0", "systemd.show_status=false")
 
@@ -1482,7 +1507,7 @@ def check_board(ctx):
 
 
 CHECKS = [check_protocol_sizes, check_pins, check_baud, check_versions, check_config_defaults, check_ci_deploy, check_firmware_receiver, check_firmware_matrix, check_button_events, check_plugin_receiver, check_plugin_connection, check_plugin_safety, check_no_direct_debug_log,
-          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_lan_mdns_single_address, check_git]
+          check_reconnect_guards, check_install, check_install_hmi_service, check_gamedata_snapshot, check_log, check_reconnect_log, check_hmi_context, check_hmi_cpp_layout, check_hmi_cpp, check_hmi_intro, check_hmi_wifi_fallback, check_hmi, check_hmi_render, check_krpc, check_sim, check_ship_report_contract, check_vessel_view_contract, check_editor_modes, check_verify_newlines, check_documentation, check_skill_mirrors, check_hmi_desktop, check_lan_names, check_lan_mdns_single_address, check_git]
 
 
 def main():

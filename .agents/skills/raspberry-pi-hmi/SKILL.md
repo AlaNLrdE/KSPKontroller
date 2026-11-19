@@ -107,6 +107,14 @@ description: How to reach, deploy, diagnose and change the Raspberry Pi 4 flight
   disables a unit without root access. A "no signal" monitor plus `Cannot find any crtc or sizes` in dmesg means
   the HDMI cable/monitor was not detected, not a software fault. `/dev/fb0` first appears as `simplefb` (~4.5 s)
   and is replaced by `vc4drmfb` (~6.5 s).
+- Screen going black for a second or two while mpv or ksphmi keep drawing (2026-11-19): first check that it is
+  not software. `blackdetect` on the video, mpv's log (no reconfig between first frame and EOF), a replay without
+  reboot (stop ksphmi.service, same mpv command, start it again) and a passive watcher (`udevadm monitor --kernel
+  --subsystem-match=drm` + connector status). Without hotplug events or a mode change the monitor/cable dropped the
+  signal. Boots were intermittent (with and without Ethernet); the 1 Gbps link coming up mid-video did not cut it.
+- Wi-Fi is a fallback only: `setup-kiosk.sh` installs `systemd/90-wifi-fallback` (NetworkManager dispatcher; eth0
+  up takes the `wifi-fallback` profile down, so `kspKontrollerPi.local` keeps one address). The profile (SSID and
+  password) is created on the Pi with `sudo nmcli --ask device wifi connect <SSID> name wifi-fallback`, never in git.
 - Render screens on the PC to review them: `./ci hmi --demo --size 2520x1680 --screenshot out.png` (the
   path is relative to the repo), then look at the PNG.
 - Static instrument art (dial faces: chrome bezel, shaded face, ticks, E/F, icon, window) is drawn once per
