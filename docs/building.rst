@@ -43,6 +43,94 @@ Everything goes through the ``ci`` script at the repository root (``./ci`` in Gi
    * - ``./ci clean``
      - Remove build output.
 
+The ci convention
+-----------------
+
+Every repo in this agent network follows the same rules for its build/test entry point, so that the user and
+agents can drive any of them in the same way. KSPKontroller's ``ci`` is the reference implementation.
+
+Entry points
+   ``ci`` at the repository root is one bash script, stored with ``eol=lf``. ``ci.cmd``, stored with
+   ``eol=crlf``, is a thin Windows launcher. It runs Git for Windows' ``bash.exe``, never a ``bash`` from
+   ``PATH``, which may be WSL. It passes every argument through and returns bash's exit code. The user runs
+   targets from PowerShell as ``.\ci.cmd <target>``. A macOS/Linux-only repo needs only ``ci``.
+Portability
+   The script must run on macOS ``/bin/bash`` 3.2 with ``set -euo pipefail``. It uses no associative arrays and no
+   ``mapfile``, and expands arrays that may be empty as ``${a[@]+"${a[@]}"}``. It resolves ``ROOT`` from
+   ``BASH_SOURCE`` so it works from any working directory. Platform-specific tools (``tasklist``, ``netsh``,
+   ``cygpath``, ``xcrun``) sit behind an ``is_windows`` or ``uname`` check.
+Help
+   The header comment is the help text: one ``#   ./ci TARGET [ARGS]  what it does`` line per target, followed
+   by an ``Environment overrides`` block. ``usage()`` prints that block. ``./ci``, ``./ci help``, ``-h`` and
+   ``--help`` print it to stdout with exit code 0. An unknown target prints it to stderr with exit code 1.
+   Dispatch is a single ``case "${1:-help}"`` block at the end of the file. Internal helper targets carry an
+   ``# internal`` comment and stay out of the help text.
+Exit codes and output
+   0 means success and any other value means failure. ``die`` prints ``error: ...`` to stderr and exits 1, and
+   progress lines start with ``==>``. A test target may document extra codes, such as ``test_arduino``'s 2 for
+   "no board answered". Helpers whose output is captured with ``$(...)`` print only their value on stdout and
+   send status messages to stderr.
+Outputs
+   Everything generated, downloaded or logged goes under ``build/``, which is git-ignored. That covers the venv
+   (``build/venv``), toolchains, per-target build trees, saved logs (``build/perf/LABEL``), screenshots and the
+   mailbox configs. ``./ci clean`` removes it. Tools are downloaded on first use rather than assumed to be
+   installed.
+Configuration
+   Settings are environment variables with documented defaults, such as ``KSPDIR``, ``FQBN`` or
+   ``DEVELOPER_DIR`` in an Xcode repo. A target that would otherwise have to choose between several candidates
+   asks in a terminal and stops without one, so scripts must set the variable. Secrets and host addresses never
+   go into the repo: use SSH aliases and the ignored configs under ``build/``.
+
+Standard targets. Every repo provides the ones that apply to it, under these names:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 58 20
+
+   * - Target
+     - Meaning
+     - Headless-safe
+   * - ``help``
+     - Print the usage text.
+     - yes
+   * - ``build`` / ``build_<part>`` / ``build_all``
+     - Compile into ``build/``, without installing anything.
+     - yes
+   * - ``test`` / ``test_<part>``
+     - Build, then run the unit tests with no hardware, game or remote host involved.
+     - yes
+   * - ``verify``
+     - Run every consistency check in one stdlib-only script, each check a ``check_*`` function. A
+       ``--docs-only`` (or similar) mode needs no hardware or install.
+     - ``--docs-only`` only
+   * - ``docs`` / ``sphinx``
+     - Build the documentation into ``build/``, treating warnings as errors.
+     - yes
+   * - ``run`` / ``sim`` / ``hmi``
+     - Run the app or simulator locally (``--demo`` when it needs no game).
+     - no (interactive)
+   * - ``deploy`` / ``deploy_<target>`` / ``install``
+     - Write outside the repo: a shared game install, another host, a device or a store.
+     - **no, user OK**
+   * - ``upload_*`` / flash
+     - Write firmware to a device.
+     - **no, user OK**
+   * - ``clean``
+     - Remove ``build/`` and the other build outputs.
+     - yes
+
+Agents and headless runs
+   An interactive agent session may run any build, test or verify target. Targets that write outside the
+   repo, such as ``deploy*``, ``install``, ``upload_sketch``, ``deploy_hmi`` or anything that pushes or flashes,
+   need the user's OK typed in that agent's chat (``docs/agents.rst``). They also need the matching lock, taken
+   and checked before the action: ``ksp-gamedata`` for a game install, ``board-flash`` for a device and
+   ``pi-deploy`` for the Pi. A Pi-only ``deploy_hmi`` is the one standing exception (see ``CLAUDE.md``). The
+   wake daemon's headless profile (``tools/agent_daemon.py``) denies ``./ci`` entirely in every repo, because
+   a single prefix rule cannot tell safe targets from writing ones. Headless runs call the underlying safe
+   commands directly instead: ``python tools/verify.py --docs-only``, Python unit tests, and ``git
+   fetch/log/diff``. Anything else gets a ``needs user`` reply. A repo that wants headless builds adds explicit
+   allow rules for those commands to its daemon profile file, never for ``ci`` itself.
+
 For ``arduino:renesas_uno`` builds, core 1.6.0's bundled WDT library incorrectly declares
 only ``architectures=renesas``. The normal and debug build commands copy that installed
 library into ``build/wdt-compat/<core-version>/WDT``, add ``renesas_uno`` to its metadata
