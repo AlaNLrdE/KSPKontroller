@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- KSP HMI for iPhone (hmi-ios/CMakeLists.txt fills the ${MACOSX_BUNDLE_*} values). -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+  <key>CFBundleIdentifier</key>
+  <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+  <key>CFBundleName</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+  <key>CFBundleDisplayName</key>
+  <string>KSP HMI</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+  <key>CFBundleVersion</key>
+  <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+  <key>LSRequiresIPhoneOS</key>
+  <true/>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+  </array>
+  <!-- A plain launch screen (no storyboard); SDL then owns the whole screen. -->
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>UIRequiresFullScreen</key>
+  <true/>
+  <key>UIStatusBarHidden</key>
+  <true/>
+  <key>UIViewControllerBasedStatusBarAppearance</key>
+  <false/>
+  <!-- Both orientations (user, 2026-11-18); SDL_IOS_ORIENTATIONS in platform.mm must list the same ones. -->
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <!-- iOS 14+ asks the user before the first LAN connection; without this text kRPC connections fail silently. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>KSP HMI connects to Kerbal Space Program (kRPC and the KSPSerialIO context on UDP 50002) on your PC.</string>
+  <!-- Documents/ (the generated config.local.toml) is visible in the Files app for diagnosis. -->
+  <key>UIFileSharingEnabled</key>
+  <true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key>
+  <true/>
+</dict>
+</plist>
