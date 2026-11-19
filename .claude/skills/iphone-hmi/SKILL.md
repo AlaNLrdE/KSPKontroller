@@ -34,7 +34,10 @@ build + ctest before merge.
   `<main checkout>/build/venv/bin/python -m kspsim --no-board --address 127.0.0.1 --scenario orbit --headless --seconds 1800`
   (`--address` binds both kRPC 50000/50001 and the UDP 50002 context). The simulator shares the Mac's
   loopback, so the app's PC address is `127.0.0.1`.
-- Use your own simulator device; other agents may have one booted (ask before shutting theirs down).
+- **One booted simulator at a time on the Mac** (8 GB RAM, 2026-11-19): two iOS 27.2 simulators booting together
+  filled 6.7 GB of swap (load ~35); iOS's launch watchdog killed apps (0x8BADF00D, `mach_vm_allocate_kernel
+  failed`) and simctl install/launch hung. Serialize with the mailbox lock `ios-simulator` and ask the other
+  agent to shut its device down first; never shut down another agent's device yourself.
 - macOS has no `timeout`: wrap every simctl call, e.g. `T(){ perl -e 'alarm shift; exec @ARGV' "$@"; }; T 60 xcrun simctl ...`.
   simctl calls can hang forever.
 - A device can stay half booted (only CoreSimulatorBridge under its launchd_sim, no SpringBoard):
