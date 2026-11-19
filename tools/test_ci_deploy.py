@@ -357,7 +357,8 @@ hmi_kiosk() { record kiosk; }
         with tempfile.TemporaryDirectory() as directory:
             result = run_bash(script, dict(os.environ, HOME=directory, TRACE=(Path(directory) / 't').as_posix()))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.stdout.split()[0], str(Path(directory).resolve()))
+            # resolve both: on macOS the temp dir is /var/... while its real path is /private/var/...
+            self.assertEqual(str(Path(result.stdout.split()[0]).resolve()), str(Path(directory).resolve()))
 
     def ship(self, failing_test=''):
         """Run the real hmi_ship_cross against a fake Pi home (hmi_ssh = a local shell there)."""
