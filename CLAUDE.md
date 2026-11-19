@@ -74,6 +74,12 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - **Backup coordinator = `pc-claude`**: when `pi-claude` sends no STATUS/RESULT/INFO for 30 min while REQUESTs
   are pending, or its daemon log (`build/agent-mailbox/pi-claude.daemon/`) shows failed runs, `pc-claude` takes
   over coordination, announces it with INFO to all and hands it back with INFO when `pi-claude` answers again.
+- **Wake service** (user 2026-11-18, `docs/agents.rst`): every identity runs `tools/agent_daemon.py` as a native
+  user service (systemd --user, launchd, Task Scheduler) that starts a headless run only for REQUEST/NOTICE to it,
+  its host group or `all` (INFO/ACK wait; long-poll is token-free). An open session runs `agent_daemon.py pause`
+  at start and `resume` at the end. Headless runs never deploy, push, flash or touch GameData: they answer
+  `needs user` and notify locally. Two failed runs in a row: the daemon sends INFO 'unhealthy' to all. Installing
+  a service needs the user's OK typed in that agent's own chat.
 - **Delegate and stay available** (user, 2026-11-17): every agent on the mailbox bus that receives new work (from
   the user or another agent) delegates it right away to other agents (`kspcontroller-dev` subagents in their own
   worktrees, or an addressed mailbox REQUEST to another agent) and stays free to schedule further work in parallel.
