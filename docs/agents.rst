@@ -24,7 +24,7 @@ Identities
      - Backup
    * - pi-claude (coordinator)
      - Raspberry Pi 4 (kspKontrollerPi)
-     - KSPKontroller (``~/wk/KSPKontroller``)
+     - KSPKontroller (``~/dev/ksp1/KSPKontroller``, ``repo`` workspace ``~/dev``)
      - claude, headless daemon (``tools/agent_daemon.py``)
      - pc-claude (acting coordinator); mac-claude for the mailbox server
    * - pc-claude
