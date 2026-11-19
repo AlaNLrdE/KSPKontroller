@@ -198,5 +198,7 @@ HMI and simulator development
 Use ``./ci build_hmi``, ``./ci test_hmi`` and ``./ci hmi --demo`` for a supported native toolchain (Linux,
 macOS, or MSYS2 UCRT64 on Windows; WSL when MSYS2 is missing, see :doc:`hmi`).
 ``./ci test_hmi_container`` builds and tests in Docker; ``./ci hmi_desktop`` runs the real HMI and
-kspsim GUI together. ``./ci test_hmi_desktop`` validates their GUI/protocol/browser path. See
+kspsim GUI together. ``./ci test_hmi_desktop`` validates their GUI/protocol/browser path. On macOS with
+Xcode, ``./ci ios_build`` builds the iPhone HMI for the iOS Simulator and ``./ci ios_sim`` runs it there
+against kspsim on loopback (:doc:`development/ios`). See
 :doc:`testing` for prerequisites, architecture selection, artifact paths and coverage limits.
