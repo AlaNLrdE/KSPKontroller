@@ -127,7 +127,12 @@ Testing plan
 Building
 --------
 
-Needs Xcode (not only the Command Line Tools) and the user's OK for the SDL download::
+Needs Xcode (not only the Command Line Tools) and the user's OK for the SDL download. On the Mac the
+active developer directory was still the Command Line Tools after installing Xcode 27.2 (2026-11-18):
+``xcrun --sdk iphoneos`` then fails and CMake reports "iphoneos is not an iOS SDK". Without sudo, export
+``DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`` for each command (or the user runs
+``sudo xcode-select -s /Applications/Xcode.app``). The iOS Simulator also needs its runtime, a separate
+download (``xcodebuild -downloadPlatform iOS``) that needs the user's OK as well::
 
   cmake -S hmi-ios -B build/hmi-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DKSPHMI_IOS_FETCH=ON \
         -DKSPHMI_IOS_TEAM=<personal team id> -DKSPHMI_IOS_BUNDLE_ID=<unique bundle id>
