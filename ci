@@ -713,6 +713,10 @@ ios_sim() {
   [ -n "$line" ] || die "no available simulator device named '$device' (xcrun simctl list devices available)"
   udid="$(printf '%s\n' "$line" | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)).*/\1/p')"
   [ -n "$udid" ] || die "could not read the UDID of '$device' from: $line"
+  # One booted simulator at a time: the 8 GB Mac swaps and simctl hangs with two (iphone-hmi skill).
+  local others
+  others="$(ios_timeout 60 xcrun simctl list devices booted | grep "(Booted)" | grep -v "$udid" || true)"
+  [ -z "$others" ] || die "another simulator is booted; ask its owner to shut it down (mailbox lock ios-simulator): $others"
   case "$line" in
     *"(Booted)"*) log "$device ($udid) is already booted" ;;
     *) log "Booting $device ($udid)"
