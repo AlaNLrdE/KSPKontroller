@@ -83,11 +83,16 @@ Planned shared changes
 
 Each item is a small change behind an iOS guard (``TARGET_OS_IOS``) or a neutral default elsewhere,
 sent for review to pc-claude / mac-claude, with ``./ci test_hmi`` and the aarch64 cross build plus ctest
-green. None is implemented yet.
+green. Item 1 is implemented; the others are not yet.
 
-1. **Background and foreground**: on ``SDL_APP_WILLENTERBACKGROUND`` stop presenting frames (iOS ends an
-   app that renders in the background) and resume on ``SDL_APP_DIDENTERFOREGROUND``; sockets dropped while
-   suspended go through the existing reconnect path.
+1. **Background and foreground** (implemented, ``hmi-cpp/src/main.cpp`` event loop, no ``#ifdef``: desktop
+   platforms never send these events): on ``SDL_APP_WILLENTERBACKGROUND`` or ``SDL_APP_DIDENTERBACKGROUND``
+   the loop releases held keys and cockpit buttons, then stops drawing and presenting (iOS ends an app that
+   renders in the background); it keeps pumping events every 100 ms. ``SDL_APP_DIDENTERFOREGROUND`` resumes
+   with a size check and a full redraw. Each transition logs one info line (``app entering background:
+   drawing paused`` / ``app back in foreground: drawing resumed``). The telemetry source keeps its own
+   thread: sockets dropped while suspended go through the existing reconnect path. Not yet run on the
+   simulator or a device.
 2. **Safe area**: the notch / Dynamic Island and the home indicator must not cover instruments or buttons.
    SDL2 has no safe-area API: ``platform.mm`` reads ``UIWindow.safeAreaInsets`` and the display lays out
    inside the inset rectangle (zero insets on every other platform).

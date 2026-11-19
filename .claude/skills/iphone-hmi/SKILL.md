@@ -45,6 +45,15 @@ build + ctest before merge.
 - Sign the unsigned simulator build ad hoc before installing: `codesign --force --sign - --timestamp=none KSPHMI.app`.
 - Launch with logs to files: `simctl launch --terminate-running-process --stdout=F --stderr=G <udid> local.ksphmi.iphone`.
 
+## App lifecycle
+
+- Backgrounding is handled in `hmi-cpp/src/main.cpp`'s event loop (no `#ifdef`): SDL_APP_WILLENTERBACKGROUND /
+  DIDENTERBACKGROUND stop drawing and presenting, DIDENTERFOREGROUND resumes with a size check and full redraw.
+  Log lines: `app entering background: drawing paused`, `app back in foreground: drawing resumed`.
+- SDL2 on iOS delivers these from UIKit callbacks only while SDL_PumpEvents runs, so polling sees WILLENTER
+  before the loop can present again. If iOS still kills the app on backgrounding, move the pause flag into an
+  `SDL_AddEventWatch` callback (synchronous) as SDL's docs recommend. Unverified on simulator/device so far.
+
 ## Handing the branch to the PC
 
 The mailbox cannot carry files (no upload; evidence is served only from the server host, MAX_BODY 16 KB per

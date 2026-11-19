@@ -548,6 +548,10 @@ int run(int argc, char** argv) {
                 last = nullptr;  // redraw now in the chosen skin
             }
         };
+        // iOS ends an app that renders in the background: between SDL_APP_WILLENTERBACKGROUND and
+        // SDL_APP_DIDENTERFOREGROUND nothing is drawn or presented. The event pump keeps running and the
+        // telemetry source keeps its own thread and reconnect logic. Other platforms never send these events.
+        bool background = false;
         for (int i = 0; !quit_signal; ++i) {
             double tick = monotonic();
             if (out.video()) {
@@ -611,9 +615,26 @@ int run(int argc, char** argv) {
                         resized = true;
                     else if (ev.type == SDL_RENDER_TARGETS_RESET || ev.type == SDL_RENDER_DEVICE_RESET)
                         reset = true;  // cached textures are gone: rebuild them even at the same size
+                    else if (ev.type == SDL_APP_WILLENTERBACKGROUND || ev.type == SDL_APP_DIDENTERBACKGROUND) {
+                        if (!background) {
+                            log::info(LOG, "app entering background: drawing paused");
+                            apply_keys(keyboard.release_all());  // no key-up or touch-up events follow
+                            send(cockpit_input.release(tick));
+                        }
+                        background = true;
+                    } else if (ev.type == SDL_APP_DIDENTERFOREGROUND && background) {
+                        log::info(LOG, "app back in foreground: drawing resumed");
+                        background = false;
+                        resized = true;  // a rotation while away left no size event behind
+                        last = nullptr;  // full redraw: the screen was not ours while away
+                    }
                 }
                 apply_keys(keyboard.tick(tick));
                 if (source) source->hold(keyboard.held(tick));
+                if (background) {  // keep pumping events, but slowly, and never touch the renderer
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
                 out.cursor_tick(tick);
                 const bool changed = (resized || reset) && out.refresh_size();
                 if (changed || reset) {
