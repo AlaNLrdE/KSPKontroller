@@ -52,6 +52,17 @@ Identities
      - KSP2_decompilation (``C:/Users/alanl/wk/KSP2_decompilation``, no remote)
      - claude, open session
      - any relief session in that repo; pc-claude covers urgent items meanwhile (same machine)
+   * - mac-agentsapp
+     - Mac (Alans-MacBook-Air)
+     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
+     - claude, open session (headless daemon once ``agent_daemon.py`` supports launchd)
+     - mac-workbench
+   * - mac-iphonehmi
+     - Mac (Alans-MacBook-Air)
+     - KSPKontroller worktree (``/Users/alan/wk/KSPKontroller/.claude/worktrees/hmi-ios``, branch
+       ``agent/hmi-ios``)
+     - claude, open session
+     - mac-claude (proposed)
 
 pi-claude (reviewed 2026-11-18)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -125,6 +136,53 @@ pc-redux (reviewed 2026-11-18)
 - Cannot: KSP 1 GameData, Pi deploy, board flash, KSPKontroller main push, hmi-cpp parser (upstream).
   Redux UDP field changes are agreed with the KSPKontroller owner (pc-claude / mac-claude) first.
 
+mac-agentsapp (reviewed 2026-11-18)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Joined 2026-11-18 with the user's approval (mailbox #335, #337).
+
+- Owns code: the whole iKSPModAgentsApp repo (SwiftUI app for iPhone/iOS 26 and Mac/macOS 26: mailbox
+  dashboard of agents, locks, overdue and messages with sending, plus views of ksp-workbench,
+  KSPKontroller and KSP2 Redux data; the AgentsKit Swift mailbox client).
+- Owns resources: Xcode and simulator installs on the Mac (user OK each time), push of iKSPModAgentsApp.
+  The app's sender identities (see below). None of the locks.
+- App sender identities (user decision 2026-11-18, mailbox #345): ``mac-user`` (Mac app) and
+  ``mac-userphone`` (iPhone app), one per device, using the shared LAN token. They are not agents and have
+  no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
+  their own consent rules: push, deploy, install, flash and publish need the user's OK in their own chat.
+- Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
+- Cannot: push, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
+  pc-claude; KSP data stays with its owners.
+- Routed to it: app features and bugs, Swift client updates on mailbox protocol changes, KSP/mod data views.
+
+mac-iphonehmi (reviewed 2026-11-18)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Created 2026-11-18 by a direct user order relayed by mac-agentsapp (mailbox #350); scope is confirmed with
+the user in its own chat.
+
+- Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
+  sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
+  works only in its own worktree ``.claude/worktrees/hmi-ios`` on ``agent/hmi-ios``, never in the main
+  checkout mac-claude uses. It owns the iOS target: iPhone build, touch controls and iOS packaging.
+- Identity: its session shares ``/Users/alan/wk/KSPKontroller`` with mac-claude's checkout, so it declares
+  ``identity = mac-iphonehmi`` explicitly in its own CLAUDE.md/worktree and uses only
+  ``build/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
+  daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
+- Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
+  from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
+  ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
+- Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
+- Can: build/test in its worktree, run simulators, local commits, mailbox replies.
+- Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
+  No paid Apple Developer account: iOS multicast/broadcast discovery may be unavailable, so a configured PC
+  address is the fallback.
+- Constraints (pc-claude, 2026-11-18): iOS code must not change the Pi, Mac or Windows HMI behaviour; shared
+  changes keep ``./ci test_hmi`` and the aarch64 cross build with its tests green before merging. Touch flight
+  controls follow the same path as the keyboard: held axes and throttle go through the plugin's KSPHMIFlight
+  procedures and editor or facility keys through KSPHMI.Press, never kRPC ``Control`` axes or throttle, and
+  kRPC calls stay off the frame loop (CLAUDE.md, ``docs/hmi.rst``).
+
 Overlaps and splits
 -------------------
 
@@ -134,6 +192,7 @@ Overlaps and splits
   site). When both change the same mod at once, the coordinator assigns one owner per mod.
 - **hmi-cpp** (pc-claude vs mac-claude): pc-claude owns cross builds and Pi deploys; mac-claude owns the
   macOS runtime and is the cross-build fallback. Shared code changes get one owner per request.
+  mac-iphonehmi owns iOS-only files; its shared-code changes are minimal and reviewed by mac-claude/pc-claude.
 - **KSPSerialIO MechJeb work**: bridge/procedures/version = pc-claude; formatter/tests = mac-claude.
 - **Mailbox server**: operated by pi-claude on the Pi (user 2026-11-18); mac-claude is the backup operator.
 
@@ -196,6 +255,33 @@ ACK does not count) for more than 30 minutes while it has pending REQUESTs, or i
 (``build/agent-mailbox/pi-claude.daemon/``) shows failed runs, pc-claude takes the coordinator role
 temporarily, announces it with INFO to all, and hands it back with INFO when pi-claude answers again.
 
+Rule: wake service (user 2026-11-18)
+------------------------------------
+
+Every agent has a service that wakes it when the mailbox has activity for it, like pi-claude's
+``tools/agent_daemon.py``, so it answers without an open session (request #320, approved in the
+mac-workbench chat).
+
+1. Wake only for REQUEST and NOTICE addressed to the identity, its host group or ``all``; INFO and ACK never
+   wake (they are read on the next run). The long-poll itself uses no model tokens.
+2. No competition with an open session: an interactive session runs ``agent_daemon.py pause`` when it starts
+   and ``resume`` when it ends; never two clients on one identity.
+3. Closed headless allowlist: read, diagnose, tests, worktree edits, mailbox replies. Never deploy, push,
+   flash or touch GameData; anything that needs the user is answered ``needs user`` and left pending.
+4. Notify the user locally on ``needs user``: macOS notification, Windows toast, Pi: INFO to the coordinator.
+5. Self health check: after two consecutive failed runs (e.g. an expired OAuth token) the daemon itself
+   (Python, no model) sends INFO to all ``daemon of <identity> unhealthy: <error>`` and notifies the user.
+6. One daemon per identity, in its own repo with that repo's allowlist (Mac: mac-workbench in
+   ``~/wk/ksp-workbench``, mac-claude in ``~/wk/KSPKontroller``).
+7. Native service per OS: systemd ``--user`` (Pi, exists), launchd LaunchAgent (Mac), Task Scheduler
+   (Windows, the KSPKontroller ``build/venv`` python).
+8. Machine sleep stops the service; it catches up on wake, and the backup rules cover the gap.
+9. Rollout: pc-claude (owner of ``tools/``) makes ``agent_daemon.py`` cross-platform with per-OS installers
+   and tests, as local commits for the user's push OK. Each agent then installs its own service on its
+   machine **only** with the user's OK typed in its own chat (installing a service changes the machine).
+   Each ``CLAUDE.md`` editor stores this rule as a LOCAL commit (KSPKontroller pc-claude, ksp-workbench
+   mac-workbench, KSP2_decompilation pc-redux).
+
 Retired identities
 ------------------
 
@@ -236,6 +322,6 @@ Storing the roster in each repo
 -------------------------------
 
 Each repo's single ``CLAUDE.md`` editor stores only a pointer to this page, the sections of the identities
-working in that repo and the two rules above, as a LOCAL commit: KSPKontroller = pc-claude (for pc-claude,
+working in that repo and the three rules above, as a LOCAL commit: KSPKontroller = pc-claude (for pc-claude,
 mac-claude and pi-claude), ksp-workbench = mac-workbench (for both workbench identities),
 KSP2_decompilation = pc-redux. The user authorizes the pushes together at the end.
