@@ -313,6 +313,58 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual(reasons(t), ['REQUEST', 'delivered', 'past'])
         self.assertEqual(request(self.config, '/health')['protocol'], 4)
 
+    def test_retire_drops_a_dead_identity_from_routing_and_keeps_history(self):
+        j, now = self.journal, 1000.0
+        j.register('pi-claude', S1, 'claude', '/p', now=now)
+        j.register('pc-codex', S2, 'codex', '/c', now=now)
+        j.register('mac-claude', 'session-mac-000000000003', 'claude', '/m', now=now)
+        send = lambda text, mid, to='all', owner=None, t=now: j.send(  # noqa: E731
+            dict(v=4, sender='pi-claude', session=S1, to=to, owner=owner, text=text, id=mid), now=t)
+        send('REQUEST: owned by codex', 'r1', to='pc-codex')
+        send('INFO: to everybody', 'i1')
+        later = now + LEASE + 10
+        with self.assertRaises(Conflict):  # a live lease is refused
+            j.retire('pi-claude', S1, 'pc-codex', now=now + 1)
+        with self.assertRaises(Conflict) as caught:  # an owned unfinished REQUEST must be reassigned first
+            j.retire('pi-claude', S1, 'pc-codex', now=later)
+        self.assertIn('r1', str(caught.exception))
+        with self.assertRaises(ValueError):
+            j.retire('pi-claude', S1, 'pi-claude', now=later)
+        j.reassign('pi-claude', S1, 'r1', 'mac-claude', now=later)
+        retired = j.retire('pi-claude', S1, 'pc-codex', now=later)
+        self.assertEqual((retired['retired'], retired['retired_by'], retired['state']), (later, 'pi-claude', 'gone'))
+        self.assertEqual(j.retire('pi-claude', S1, 'pc-codex', now=later + 1)['retired'], later)  # idempotent
+        self.assertEqual([a['identity'] for a in j.agents_list(now=later)], ['mac-claude', 'pi-claude'])
+        self.assertIn('pc-codex', [a['identity'] for a in j.agents_list(now=later, retired=True)])
+        self.assertTrue(j.messages['i1']['state']['pc-codex']['retired'])  # no longer waits for codex
+        self.assertNotIn('pc-codex', [o['recipient'] for o in j.overdue(now=later + 10 * OVERDUE_ARCHIVE)])
+        self.assertNotIn('pc-codex', send('INFO: after', 'i2', t=later)['to'])
+        with self.assertRaises(ValueError):
+            send('INFO: direct', 'i3', to='pc-codex', t=later)
+        with self.assertRaises(Conflict):  # its old session and a takeover are both refused
+            j.inbox('pc-codex', S2, now=later)
+        with self.assertRaises(Conflict):
+            j.register('pc-codex', 'session-new-000000000004', 'codex', '/c', takeover=True, now=later)
+        restarted = Journal(j.path)
+        try:
+            self.assertEqual(restarted.agents['pc-codex']['retired'], later)  # durable
+        finally:
+            restarted.close()  # before tearDown: Windows cannot delete an open journal
+        self.assertIn('i1', j.messages)  # history kept for the other recipients
+        j.retire('pi-claude', S1, 'pc-codex', undo=True, now=later + 2)
+        self.assertEqual(j.register('pc-codex', 'session-new-000000000004', 'codex', '/c', takeover=True,
+                                    now=later + 3)['state'], 'active')
+
+    def test_retire_command_over_http(self):
+        pi, pi_path = self.agent('pi-claude')
+        self.journal.register('pc-codex', S2, 'codex', '/c', now=0.0)  # lease long expired
+        with patch('sys.argv', ['agent_mailbox.py']):
+            agent_mailbox.main(['--config', str(pi_path), 'retire', 'pc-codex'])
+            agent_mailbox.main(['--config', str(pi_path), 'agents', '--retired'])
+        self.assertEqual([a['identity'] for a in request(self.config, '/agents')['agents']], ['pi-claude'])
+        self.assertEqual(len(request(self.config, '/agents?retired=1')['agents']), 2)
+        self.assertRefused(404, agent_mailbox.agent_request, pi, pi_path, '/retire', dict(target='pc-nobody'))
+
     def test_reassignment_moves_the_owner_and_notifies_both(self):
         mac, mac_path = self.agent('mac-claude')
         claude, claude_path = self.agent('pc-claude')
