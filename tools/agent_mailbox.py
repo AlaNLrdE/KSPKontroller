@@ -395,6 +395,9 @@ class Journal:
             raise ValueError('tool 1..40 and cwd up to 400 characters required')
         with self.condition:
             old = self.agents.get(identity)
+            if old is not None and old.get('retired'):
+                raise Conflict('identity %s was retired by %s on %s; only retire --undo brings it back'
+                               % (identity, old.get('retired_by', '?'), iso(old['retired'])))
             same = old is not None and hmac.compare_digest(old['session'], session)
             if release:
                 if not same:
@@ -426,6 +429,8 @@ class Journal:
                 agent['session'], session):
             raise Conflict('identity %s belongs to another session (%s in %s); never share an identity'
                            % (identity, agent['tool'], agent['cwd']))
+        if agent.get('retired'):
+            raise Conflict('identity %s is retired; it no longer takes part in the mailbox' % identity)
         if agent.get('released'):
             raise Conflict('identity %s released its registration; run register again' % identity)
         agent = dict(agent, last_seen=now, lease_expires=now + LEASE)
@@ -436,10 +441,62 @@ class Journal:
             self.agents[identity] = agent
         return agent
 
-    def agents_list(self, now=None):
+    def agents_list(self, now=None, retired=False):
+        """Registered identities; retired ones only when asked for (their history stays in the journal)."""
         now = time.time() if now is None else now
         with self.condition:
-            return [self._agent_view(self.agents[key], now) for key in sorted(self.agents)]
+            return [self._agent_view(self.agents[key], now) for key in sorted(self.agents)
+                    if retired or not self.agents[key].get('retired')]
+
+    def retire(self, identity, session, target, undo=False, now=None):
+        """Remove a dead identity from routing, agents and overdue, keeping its records and message history.
+
+        Refused for a live lease and for an identity that still owns an unfinished REQUEST (reassign it first).
+        Its copies of other unfinished messages are closed for it, so they no longer wait for it. ``undo``
+        lifts the retirement; the identity then needs register --takeover from a new session."""
+        now = time.time() if now is None else now
+        with self.condition:
+            self._touch(identity, session, now)
+            agent = self.agents.get(target) if isinstance(target, str) else None
+            if agent is None:
+                raise NotFound('unknown identity %r: only registered identities can be retired' % target)
+            if target == identity:
+                raise ValueError('an identity cannot retire itself; use register --release')
+            if undo:
+                if agent.get('retired'):
+                    agent = {key: value for key, value in agent.items() if key not in ('retired', 'retired_by')}
+                    self._commit(dict(k='agent', a=agent))
+                    self._after_change(now)
+                return self._agent_view(agent, now)
+            if agent.get('retired'):
+                return self._agent_view(agent, now)
+            if self._live_lease(target, now):
+                raise Conflict('identity %s holds a live lease; it must release or expire before retiring' % target)
+            owned = sorted('#%d %s' % (m['seq'], m['id']) for m in self.messages.values()
+                           if m['kind'] == 'REQUEST' and m['owner'] == target
+                           and not self._complete(m, target, m['state'][target]))
+            if owned:
+                raise Conflict('identity %s still owns unfinished REQUEST(s) %s: reassign them first'
+                               % (target, ', '.join(owned)))
+            agent = dict(agent, retired=now, retired_by=identity, released=agent.get('released') or now,
+                         lease_expires=min(agent['lease_expires'], now))
+            self._commit(dict(k='agent', a=agent))
+            for m in list(self.messages.values()):
+                entry = m['state'].get(target)
+                if entry is None or self._complete(m, target, entry):
+                    continue
+                m = copy.deepcopy(m)
+                m['state'][target]['retired'] = now
+                m['rev'] = self.rev + 1
+                self._commit(dict(k='msg', m=m))
+                if all(self._complete(m, r, e) for r, e in m['state'].items()):
+                    receipt = dict(seq=m['seq'], sender=m['sender'], kind=m['kind'], owner=m['owner'],
+                                   digest=m['send_digest'], core=core_digest(m), rev=self.rev + 1, closed=now,
+                                   recipients={r: entry_state(e) for r, e in m['state'].items()})
+                    self._commit(dict(k='drop', id=m['id'], receipt=receipt))
+            self.condition.notify_all()
+            self._after_change(now)
+            return self._agent_view(agent, now)
 
     def _live_lease(self, identity, now):
         agent = self.agents.get(identity)
@@ -556,7 +613,7 @@ class Journal:
 
     @staticmethod
     def _complete(m, recipient, entry):
-        if entry.get('reassigned'):
+        if entry.get('reassigned') or entry.get('retired'):
             return True
         needed = 'done' if m['kind'] == 'REQUEST' and recipient == m['owner'] else 'archived'
         return ORDER[entry['state']] >= ORDER[needed]
@@ -878,7 +935,7 @@ def make_server(host, port, journal, token, artifact_dir=None):
             if url.path == '/locks':
                 return self.guarded(lambda: {'locks': journal.lock('list', None, None)})
             if url.path == '/agents':
-                return self.reply(200, {'agents': journal.agents_list()})
+                return self.reply(200, {'agents': journal.agents_list(retired=args.get('retired') == '1')})
             if url.path == '/overdue':
                 return self.reply(200, {'overdue': journal.overdue()})
             if url.path == '/track':
@@ -920,6 +977,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
                                                     d.get('recipient')),
                 '/reassign': lambda d: journal.reassign(d.get('identity'), d.get('session'), d.get('id'),
                                                         d.get('to')),
+                '/retire': lambda d: journal.retire(d.get('identity'), d.get('session'), d.get('target'),
+                                                    bool(d.get('undo'))),
             }
             if self.path not in routes:
                 return self.reply(404, {'error': 'not found'})
@@ -1271,7 +1330,11 @@ def main(argv=None):
     reg.add_argument('--tool', help='claude, codex ... (default: the AGENT part of the identity)')
     reg.add_argument('--takeover', action='store_true', help='Only after the old session is confirmed dead')
     reg.add_argument('--release', action='store_true', help='Give the identity up so another session may take it')
-    sub.add_parser('agents', help='List registered identities, tool, last heartbeat and state')
+    lister = sub.add_parser('agents', help='List registered identities, tool, last heartbeat and state')
+    lister.add_argument('--retired', action='store_true', help='Also list retired identities')
+    retiring = sub.add_parser('retire', help='Operator: drop a dead identity from agents/routing, keep history')
+    retiring.add_argument('identity')
+    retiring.add_argument('--undo', action='store_true', help='Lift the retirement (then register --takeover)')
     send = sub.add_parser('send')
     send.add_argument('--to', required=True, help='pc-claude, a comma list, a host group (mac, pc, pi) or all')
     send.add_argument('--owner', help='The one recipient that owns a REQUEST (required with several recipients)')
@@ -1337,9 +1400,14 @@ def main(argv=None):
     elif args.command == 'register':
         print(json.dumps(register(config, config_path, args.tool, args.takeover, args.release)))
     elif args.command == 'agents':
-        for agent in request(config, '/agents')['agents']:
-            print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}'.format(
-                last=iso(agent['last_seen']), **agent))
+        for agent in request(config, '/agents' + ('?retired=1' if args.retired else ''))['agents']:
+            print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}{retired}'.format(
+                last=iso(agent['last_seen']), **dict(agent, retired=' RETIRED %s by %s' % (
+                    iso(agent['retired']), agent.get('retired_by', '?')) if agent.get('retired') else '')))
+    elif args.command == 'retire':
+        agent = agent_request(config, config_path, '/retire', dict(target=args.identity, undo=args.undo))
+        print('%s %s (state %s)' % (agent['identity'], 'retired' if agent.get('retired') else 'not retired',
+                                    agent['state']))
     elif args.command == 'lock':
         result = legacy_request(config, '/locks', dict(action=args.action, name=args.name, holder=config['peer'],
                                                        ttl=args.ttl, reason=args.reason))

@@ -345,6 +345,14 @@ separately. ``/health`` reports ``"protocol": 4``.
   owner after 15 min, past its deadline, or addressed to an agent whose lease expired. The coordinator reports them
   and may ``reassign --id ID --to NEW``: the new owner (a registered agent, not the
   sender) receives the REQUEST, the old owner's copy is marked ``reassigned`` and both get a NOTICE.
+* **Retired identities.** The mailbox server operator runs ``retire IDENTITY`` for an identity the roster
+  (``docs/agents.rst``) lists as retired. The server refuses this while the identity holds a live lease, while it
+  owns an unfinished REQUEST (reassign that first), and when an identity tries to retire itself. A retired
+  identity is left out of ``agents`` (``agents --retired`` still shows it), ``all``, host groups, direct sends and
+  ``overdue``. Its copies of unfinished messages are closed for it, and its session and ``register --takeover``
+  get 409. The journal keeps its records and the other recipients' history. ``retire IDENTITY --undo`` reverses
+  it; a new session then needs ``register --takeover``. The command takes effect only after the server has been
+  restarted with a script that includes it.
 * **Durable log.** Append-only JSONL: a header snapshot (version 4, last sequence, receipts, locks, agents), then
   one record per change (message upsert, message drop into a receipt, lock, agent), each with a checksum and
   fsync'd before it takes effect. After 1000 records the log is rewritten as one snapshot by atomic replacement
@@ -372,7 +380,7 @@ Migration from protocol 2/3, in order:
 
 Tests (``tools/test_agent_mailbox.py``) cover: two clients on one identity refused; a broadcast to three agents
 read by each; host group and ``all`` expansion; unknown recipients rejected; the owner rule; a crash between
-archive and done recovered from the server; lease expiry reported overdue; reassignment; compaction only after
+archive and done recovered from the server; lease expiry reported overdue; reassignment; retirement; compaction only after
 every recipient; a protocol 3 client against a protocol 4 server; ten concurrent writer threads; checksum and
 torn-record handling; migration of protocol 3 and older journals.
 
