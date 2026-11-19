@@ -294,7 +294,7 @@ class ProfileTest(unittest.TestCase):
         self.assertEqual(p['py'], py)
         for command in (py + ' -m unittest tools/test_agent_daemon.py', py + ' tools/verify.py --docs-only',
                         py + ' tools/agent_mailbox.py --config build/agent-mailbox/pc-claude.json pending',
-                        'git status', 'git log -3', 'git -C /repo/.claude/worktrees/x diff', 'git pull --ff-only'):
+                        'git status', 'git log -3', 'git -C /repo diff main', 'git pull --ff-only'):
             self.assertTrue(allows(rules, denied, command), command)
         for command in ('python3 -m unittest x', py + ' tools/verify.py', 'systemctl --user restart x',
                         'schtasks /Create /TN x', 'launchctl bootstrap gui/501 x', 'git commit -m x',
@@ -304,6 +304,30 @@ class ProfileTest(unittest.TestCase):
         self.assertIn('PowerShell', denied)
         mac_rules, _, mac = profile('workstation', 'macos', 'mac-claude')
         self.assertEqual(mac['py'], 'python3')
+
+    def test_git_c_only_read_only_forms_on_the_main_checkout(self):
+        for name in daemon.PROFILES:
+            allowed, denied, _ = profile(name)
+            self.assertNotIn('Bash(git -C:*)', allowed)
+            no_deny = []  # the allowlist alone must refuse these, whether or not mid-rule * denies work
+            for command in ('git -C /repo push', 'git -C /repo push origin main', 'git -C /repo merge x',
+                            'git -C /repo reset --hard', 'git -C /repo commit -m x', 'git -C /repo checkout main',
+                            'git -C /repo/.claude/worktrees/x status', 'git -C /repo/.claude/worktrees/x push',
+                            'git -C /elsewhere status'):
+                self.assertFalse(allows(allowed, no_deny, command), (name, command))
+            for command in ('git -C /repo status', 'git -C /repo log -3', 'git -C /repo diff main',
+                            'git -C /repo show HEAD', 'git -C /repo branch -a', 'git -C /repo fetch',
+                            'git -C /repo worktree list', 'git -C /repo worktree add .claude/worktrees/x -b agent/x'):
+                self.assertTrue(allows(allowed, denied, command), (name, command))
+            pull = allows(allowed, denied, 'git -C /repo pull --ff-only')
+            self.assertEqual(pull, name == 'pi', name)
+        self.assertEqual(daemon.git_c_rules(r'C:\Users\a\wk\K')[0], 'git -C C:/Users/a/wk/K status:*')
+
+    def test_run_prompt_names_the_git_c_forms(self):
+        text = daemon.RUN_PROMPT.format(identity=ME, ids='#1', repo='/repo', mailbox='mb', limits='x',
+                                        gitc='/repo', pull='')
+        self.assertIn('git -C /repo <status|log|diff|show|branch|fetch|worktree list|worktree add>', text)
+        self.assertIn('`git -C` into a worktree is refused', text)
 
     def test_rule_paths_for_windows_and_posix(self):
         self.assertEqual(daemon.rule_path(r'C:\Users\a\wk\K'), '//c/Users/a/wk/K')

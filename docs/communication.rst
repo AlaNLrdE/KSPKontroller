@@ -392,9 +392,12 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   wake; the next run reads them as context. Incoming ACKs are marked done without a model.
 * **Closed tool profile per identity.** The run uses ``--permission-mode dontAsk`` with an allowlist and a
   denylist (a deny beats an allow). Every profile denies sudo, ``git push``/``merge``/``reset``/``stash``/
-  ``rebase`` (also through ``git -C``), every ``./ci``/``ci.cmd`` target (deploy, install, upload_sketch),
+  ``rebase`` (also through ``git -C``; the denies stay as defence in depth), every ``./ci``/``ci.cmd`` target (deploy, install, upload_sketch),
   ``arduino-cli``, signals, ``rm``, reading the mailbox token files, subagents, web and the PowerShell tool.
-  ``agent_daemon.py --config ... profile`` prints the rules a run gets.
+  ``agent_daemon.py --config ... profile`` prints the rules a run gets. There is no generic ``git -C:*`` allow:
+  only ``git -C <main checkout> status|log|diff|show|branch|fetch|worktree list|worktree add`` (plus
+  ``pull --ff-only`` on the Pi), because a prefix rule cannot constrain the subcommand after a wildcarded
+  worktree folder; ``git -C`` into a worktree is refused and runs inspect worktree files with Read/Grep.
 
   - ``pi`` (default for ``pi-*``): today's Pi rules. Read-only diagnostics (``journalctl`` of ksphmi and the
     mailbox server, ``systemctl --user status/show/cat``), network checks, ``git pull --ff-only``, Python tests and
