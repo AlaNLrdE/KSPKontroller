@@ -55,7 +55,7 @@ Identities
    * - mac-agentsapp
      - Mac (Alans-MacBook-Air)
      - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
-     - claude, open session (headless daemon once ``agent_daemon.py`` supports launchd)
+     - claude, open session; headless wake daemon (launchd LaunchAgent, installed 2026-11-18, mailbox #420)
      - mac-workbench
    * - mac-iphonehmi
      - Mac (Alans-MacBook-Air)
