@@ -197,8 +197,9 @@ Agent coordination mailbox
 ``tools/agent_mailbox.py`` is a development-only, standard-library LAN service, separate from
 all game protocols. Since 2026-11-18 the Raspberry Pi hosts it (user decision: the Pi is always on, the Mac and the
 PC come and go): user unit ``agent-mailbox.service`` (``tools/systemd/agent-mailbox.service``, lingering, no sudo),
-own folder ``~/agent-mailbox`` (a deliberate copy of the script, private ``server.json`` with the token, the log
-``shared.jsonl``, ``backup/`` and ``evidence/``), URL ``http://kspKontrollerPi.local:50380`` (``localhost`` on the Pi).
+program ``~/.local/lib/agent-mailbox/agent_mailbox.py`` (a deliberate copy of the script) and data folder
+``~/dev/run/mailbox`` (private ``server.json`` with the token, the log ``shared.jsonl``, ``backup/`` and
+``evidence/``; ``~/agent-mailbox`` before 2026-11-19), URL ``http://kspKontrollerPi.local:50380`` (``localhost`` on the Pi).
 To move it: stop the old server, copy ``shared.jsonl`` (plus ``backup/`` and ``evidence/``) unchanged and check its
 hash, start the new one, then change only the ``url`` field of every agent's config; watchers reload it on retry. An
 agent whose config still names the old host cannot receive the move notice: its operator updates that ``url``.
@@ -270,8 +271,9 @@ Arbitration between agents
 (Claude Code on the Pi, next to the mailbox server, which stays up when the PC or the Mac is away). It plans and
 splits the work, assigns one owner and the locks per job, watches ``overdue`` and reassigns, and keeps the user
 informed. It never deploys, pushes or flashes: merges, Windows builds, deploys and pushes are assigned to
-``pc-claude`` (or ``mac-claude``), each still under the user's OK. ``pi-claude`` also operates the mailbox server
-on its own host (user unit ``agent-mailbox.service``, port 50380, journal ``~/agent-mailbox``): it may restart only
+``pc-claude`` (or ``mac-claude``), each still under the user's OK. The one exception is ``./ci install_hmi`` on
+the Pi itself, under the ``pi-deploy`` lock with INFO to all (user, 2026-11-18/19), never from a headless run. ``pi-claude`` also operates the mailbox server
+on its own host (user unit ``agent-mailbox.service``, port 50380, journal ``~/dev/run/mailbox``): it may restart only
 that unit, only when the server is unhealthy, and reports it with INFO to all; moves and migrations still need the
 user's OK. ``mac-claude`` is the backup operator (over SSH). The full roster is :doc:`agents`. Every other agent (``pc-claude``, ``mac-claude``,
 ``pc-codex``, ``mac-workbench`` for the ksp-workbench repo on the Mac) takes work from the coordinator. Any agent
@@ -392,7 +394,9 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   commands in the prompt and the allowlist always use absolute tools-home paths (``<python> <tools
   home>/tools/agent_mailbox.py --config <absolute config>``), so replies work from any work repo. ``--config`` is
   resolved as given, then under the tools home, then under the work repo. On the Pi both are
-  ``~/wk/KSPKontroller`` and the unit is unchanged.
+  ``~/dev/ksp1/KSPKontroller`` and the unit is unchanged; the daemon runs from the installed copy
+  ``~/.local/lib/agent-daemon/agent_daemon.py``, and its config and state stay in ``build/agent-mailbox/``,
+  which on the Pi is a symlink to ``~/dev/run/agent-mailbox``.
 
 * **Listening is token-free.** A loop of ``watch --once`` slices (120 s) long-polls the inbox and renews the lease,
   so other agents see the identity ``active``. After each slice it runs ``collect`` and reads ``pending``. After the
@@ -413,8 +417,9 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
     mailbox server, ``systemctl --user status/show/cat``), network checks, ``git pull --ff-only``, Python tests and
     edits in a new worktree, a measurement a coordinator explicitly scheduled, and the one exact restart
     ``systemctl --user restart agent-mailbox.service`` (mailbox-server duty, only when it is unhealthy, reported
-    with INFO to all). No ksphmi restarts, ``systemctl --user start/stop`` or edits to ``~/ksphmi``; it never
-    builds hmi-cpp on the Pi.
+    with INFO to all). No ksphmi restarts, ``systemctl --user start/stop``, ``./ci install_hmi`` or edits to the
+    installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``) or ``~/dev/run``; it never builds hmi-cpp
+    on the Pi.
   - ``workstation`` (default for ``pc-*`` and ``mac-*``): read-only repo and git, the mailbox,
     ``tools/verify.py --docs-only``, Python unit tests and edits only inside a new worktree (the interactive
     session reviews and commits them); additionally denies ``systemctl``, ``launchctl``, ``schtasks``,
@@ -471,8 +476,9 @@ runs the real install on each machine:
    # WorkingDirectory and the claude -p cwd are the work repo (foreign profile)
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-workbench \
        --repo C:/Users/alanl/wk/decompilation/ksp-workbench install --dry-run
-   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/ksp-workbench \
-       --tools-dir /Users/alan/wk/KSPKontroller install --dry-run
+   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/devKSP/ksp1/ksp-workbench \
+       --tools-dir /Users/alan/wk/devKSP/ksp1/KSPKontroller \
+       --config /Users/alan/wk/devKSP/run/agent-mailbox/mac-workbench.json install --dry-run
    # remove it again on any OS
    python3 tools/agent_daemon_install.py --identity pi-claude uninstall --dry-run
 

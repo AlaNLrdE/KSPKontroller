@@ -63,6 +63,28 @@ class NewlineAgnosticTest(unittest.TestCase):
                 self.assertEqual(contract[0][0], "PASS", contract[0][2])
 
 
+class KspProcessPatternTest(unittest.TestCase):
+    """pgrep -f matches the whole command line, so the pattern must not hit agent paths (2026-11-19 false positive)."""
+
+    GAME = ("/Users/a/Library/Application Support/Steam/steamapps/common/Kerbal Space Program/KSP.app/Contents/MacOS/KSP",
+            "/home/a/.steam/steam/steamapps/common/Kerbal Space Program/KSP.x86_64 -single-instance")
+    NOT_GAME = ("python3 tools/agent_daemon.py --config /Users/a/wk/devKSP/run/agent-mailbox/mac-agentsapp.json "
+                "--repo /Users/a/wk/devKSP/apps/iKSPModAgentsApp run",
+                "python3 /Users/a/wk/devKSP/ksp1/KSPKontroller/tools/agent_mailbox.py watch --once",
+                "open /Users/a/Downloads/KSPxapp.zip")
+
+    def test_matches_the_game_and_not_agent_command_lines(self):
+        import re
+        for line in self.GAME:
+            self.assertTrue(re.search(verify.KSP_PROCESS, line), line)
+        for line in self.NOT_GAME:
+            self.assertFalse(re.search(verify.KSP_PROCESS, line), line)
+
+    def test_ci_uses_the_same_pattern(self):
+        with open(os.path.join(verify.ROOT, "ci"), encoding="utf-8") as f:
+            self.assertIn("pgrep -f '%s'" % verify.KSP_PROCESS, f.read())
+
+
 class BoardResultTest(unittest.TestCase):
     def test_hardware_failure_cannot_be_hidden_by_other_passing_checks(self):
         passing = "".join("  [PASS] %s: good\n" % name for name in

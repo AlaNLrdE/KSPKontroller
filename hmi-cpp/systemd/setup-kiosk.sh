@@ -1,8 +1,9 @@
 #!/bin/sh
 # Kiosk boot for the KSP HMI: from power-on the screen shows only the intro video (its last frame held), then the HMI.
-# Run once as root after ./ci deploy_hmi:   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh
-# Undo everything (restores the boot file backups):   sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh --undo
-# Idempotent: run it again after any change to this script. SSH, Wi-Fi/LAN and the serial console stay as they are.
+# Run once as root after ./ci install_hmi (or deploy_hmi):   sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh
+# Undo everything (restores the boot file backups):   sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh --undo
+# Idempotent: run it again after any change to this script. SSH, the network profiles and the serial console stay
+# as they are.
 #
 # What it changes (each step is reverted by --undo):
 #  - cmdline.txt: kernel/systemd text silenced (quiet, loglevel=3, no status), no logo, no console cursor, no
@@ -19,11 +20,17 @@
 #    rule /etc/udev/rules.d/99-ksphmi-fb.rules still tags the DRM framebuffer (vc4drmfb) fb0 for that fallback;
 #  - /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf: the journal survives reboots (Raspberry Pi OS keeps it
 #    in RAM), so a failed boot can be read with journalctl -b -1;
+#  - /etc/NetworkManager/dispatcher.d/90-wifi-fallback: Ethernet first, the Wi-Fi profile named wifi-fallback only
+#    without the cable (eth0 up takes the Wi-Fi down, so kspKontrollerPi.local never has two addresses). The profile
+#    holds the network name and password, so it is never in the repo: create it once on the Pi with
+#      sudo nmcli --ask device wifi connect <SSID> name wifi-fallback
+#      sudo nmcli connection modify wifi-fallback ipv4.route-metric 600 ipv6.route-metric 600
+#    --undo removes the dispatcher and keeps the profile;
 #  - lingering for the HMI user, so the user unit ksphmi.service starts at boot without a login;
 #  - /etc/ksphmi-kiosk.applied: sha256 of this script, so ./ci deploy_hmi knows when to run it again.
 set -eu
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Run with sudo: sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh [--undo]" >&2
+    echo "Run with sudo: sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh [--undo]" >&2
     exit 1
 fi
 
@@ -39,7 +46,7 @@ while [ $# -gt 0 ]; do
 done
 here="$(cd "$(dirname "$0")" && pwd)"
 if [ -z "$user" ] || [ "$user" = root ]; then
-    user="$(stat -c %U "$here")"  # the owner of ~/ksphmi/cpp/systemd
+    user="$(stat -c %U "$here")"  # the owner of ~/.local/share/ksphmi/systemd
 fi
 home="$(getent passwd "$user" | cut -d: -f6)"
 [ -n "$home" ] || { echo "Unknown user '$user' (use --user NAME)" >&2; exit 1; }
@@ -54,6 +61,7 @@ rule=/etc/udev/rules.d/99-ksphmi-fb.rules
 cursor=/etc/tmpfiles.d/ksphmi-cursor.conf
 journal=/etc/systemd/journald.conf.d/50-ksphmi-persistent.conf
 stamp=/etc/ksphmi-kiosk.applied
+wifi=/etc/NetworkManager/dispatcher.d/90-wifi-fallback
 
 if [ "$undo" = yes ]; then
     for f in "$cmdline" "$config"; do
@@ -63,7 +71,7 @@ if [ "$undo" = yes ]; then
         fi
     done
     systemctl disable --now ksphmi-splash.service 2>/dev/null || true
-    rm -f "$unit" "$rule" "$cursor" "$journal" "$stamp"
+    rm -f "$unit" "$rule" "$cursor" "$journal" "$stamp" "$wifi"
     if [ -f "$mpvmark" ]; then
         DEBIAN_FRONTEND=noninteractive apt-get remove -y mpv || echo "WARNING: could not remove mpv" >&2
         rm -f "$mpvmark"
@@ -129,8 +137,8 @@ if ! command -v mpv >/dev/null 2>&1; then
         echo "WARNING: could not install mpv (no network?): the boot shows the loading screen instead of the intro"              "video; run this script again later" >&2
     fi
 fi
-[ -r "$home/ksphmi/cpp/assets/intro/KSPKontroller_pi_Intro.mp4" ] ||
-    echo "WARNING: no intro video in $home/ksphmi/cpp/assets/intro: run ./ci deploy_hmi" >&2
+[ -r "$home/.local/share/ksphmi/assets/intro/KSPKontroller_pi_Intro.mp4" ] ||
+    echo "WARNING: no intro video in $home/.local/share/ksphmi/assets/intro: run ./ci install_hmi" >&2
 
 # The unit runs as the HMI user: group video opens /dev/dri/card1 and /dev/fb0, render the GPU, audio the HDMI
 # sound card (the unit adds them as supplementary groups too); systemd only sees fb0 when udev tags it.
@@ -152,12 +160,21 @@ mkdir -p "$(dirname "$journal")"
 printf '%s\n' '[Journal]' 'Storage=persistent' > "$journal"
 systemctl restart systemd-journald || true
 
+# Wi-Fi only as a fallback for the Ethernet cable (NetworkManager runs the dispatcher on every link change).
+if [ -d "$(dirname "$wifi")" ]; then
+    install -m 755 -o root -g root "$here/90-wifi-fallback" "$wifi"
+    if ! nmcli -t -f NAME connection show 2>/dev/null | grep -qx wifi-fallback; then
+        echo "NOTE: no Wi-Fi fallback profile; to use one: sudo nmcli --ask device wifi connect <SSID> name" \
+            "wifi-fallback && sudo nmcli connection modify wifi-fallback ipv4.route-metric 600 ipv6.route-metric 600" >&2
+    fi
+fi
+
 loginctl enable-linger "$user"
 sha256sum "$here/$(basename "$0")" | cut -d' ' -f1 > "$stamp"
 if [ ! -e "$home/.config/systemd/user/default.target.wants/ksphmi.service" ]; then
-    echo "WARNING: ksphmi.service is not enabled for $user: run ./ci deploy_hmi from the PC" >&2
+    echo "WARNING: ksphmi.service is not enabled for $user: run ./ci install_hmi" >&2
 fi
-if [ ! -x "$home/ksphmi/cpp/build/ksphmi" ]; then
-    echo "WARNING: $home/ksphmi/cpp/build/ksphmi missing: run ./ci deploy_hmi (the HMI and its fallback loading screen)" >&2
+if [ ! -x "$home/.local/bin/ksphmi" ]; then
+    echo "WARNING: $home/.local/bin/ksphmi missing: run ./ci install_hmi (the HMI and its fallback loading screen)" >&2
 fi
 echo "Kiosk configured for $user. Takes effect at the next reboot (sudo reboot); SSH stays enabled."
