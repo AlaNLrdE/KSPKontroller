@@ -172,6 +172,11 @@ the user in its own chat.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
   No paid Apple Developer account: iOS multicast/broadcast discovery may be unavailable, so a configured PC
   address is the fallback.
+- Constraints (pc-claude, 2026-11-18): iOS code must not change the Pi, Mac or Windows HMI behaviour; shared
+  changes keep ``./ci test_hmi`` and the aarch64 cross build with its tests green before merging. Touch flight
+  controls follow the same path as the keyboard: held axes and throttle go through the plugin's KSPHMIFlight
+  procedures and editor or facility keys through KSPHMI.Press, never kRPC ``Control`` axes or throttle, and
+  kRPC calls stay off the frame loop (CLAUDE.md, ``docs/hmi.rst``).
 
 Overlaps and splits
 -------------------
