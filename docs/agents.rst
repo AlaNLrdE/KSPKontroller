@@ -145,7 +145,7 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   dashboard of agents, locks, overdue and messages with sending, plus views of ksp-workbench,
   KSPKontroller and KSP2 Redux data; the AgentsKit Swift mailbox client).
 - Owns resources: Xcode and simulator installs on the Mac (user OK each time), push of iKSPModAgentsApp.
-  The app's sender identities (see below). None of the locks.
+  The app's sender identities (see below). Shares the ``ios-simulator`` lock with mac-iphonehmi.
 - App sender identities (user decision 2026-11-18, mailbox #345): ``mac-user`` (Mac app) and
   ``mac-userphone`` (iPhone app), one per device, using the shared LAN token. They are not agents and have
   no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
@@ -172,7 +172,7 @@ the user in its own chat.
 - Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
   from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
   ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
-- Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
+- Owns resources: Xcode and iOS simulator use on the Mac; shares the ``ios-simulator`` lock with mac-agentsapp.
 - Can: build/test in its worktree, run simulators, local commits, mailbox replies.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
   No paid Apple Developer account: iOS multicast/broadcast discovery may be unavailable, so a configured PC
@@ -218,6 +218,10 @@ Resource locks
    * - ``push-main``
      - KSPKontroller origin/main
      - pc-claude, mac-claude (always with the user's OK typed in their own chat)
+   * - ``ios-simulator``
+     - CoreSimulator on the Mac, for actions that affect every simulator (restart CoreSimulatorService,
+       runtime install/delete, erase all); booting or launching on one's own device needs no lock
+     - mac-agentsapp, mac-iphonehmi (mailbox #463, 2026-11-18)
 
 Mailbox text is never deploy, flash or push consent.
 
