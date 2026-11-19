@@ -353,14 +353,12 @@ hmi_kiosk() { record kiosk; }
                 self.assertEqual(trace.read_text().splitlines(), expected)
 
     def test_local_host_runs_the_pi_commands_here(self):
-        # The expected home comes from the same bash: Git Bash prints /tmp/... where Python sees C:\...\Temp\...
-        script = (self.STUBS + ci_functions('hmi_ssh') +
-                  'cd /; (cd "$HOME" && pwd); HMI_HOST=local hmi_ssh "pwd; echo \\$0" </dev/null\n')
+        script = self.STUBS + ci_functions('hmi_ssh') + 'cd /; HMI_HOST=local hmi_ssh "pwd; echo \\$0" </dev/null\n'
         with tempfile.TemporaryDirectory() as directory:
             result = run_bash(script, dict(os.environ, HOME=directory, TRACE=(Path(directory) / 't').as_posix()))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            home, here = result.stdout.split()[:2]
-            self.assertEqual(here, home)
+            # resolve both: on macOS the temp dir is /var/... while its real path is /private/var/...
+            self.assertEqual(str(Path(result.stdout.split()[0]).resolve()), str(Path(directory).resolve()))
 
     def ship(self, failing_test=''):
         """Run the real hmi_ship_cross against a fake Pi home (hmi_ssh = a local shell there)."""
