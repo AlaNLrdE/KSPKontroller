@@ -52,6 +52,11 @@ Identities
      - KSP2_decompilation (``C:/Users/alanl/wk/KSP2_decompilation``, no remote)
      - claude, open session
      - any relief session in that repo; pc-claude covers urgent items meanwhile (same machine)
+   * - mac-agentsapp
+     - Mac (Alans-MacBook-Air)
+     - iKSPModAgentsApp (``/Users/alan/wk/iKSPModAgentsApp``, no remote yet)
+     - claude, open session (headless daemon once ``agent_daemon.py`` supports launchd)
+     - mac-workbench
 
 pi-claude (reviewed 2026-11-18)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -124,6 +129,21 @@ pc-redux (reviewed 2026-11-18)
   push of KSP2_decompilation with the user's OK.
 - Cannot: KSP 1 GameData, Pi deploy, board flash, KSPKontroller main push, hmi-cpp parser (upstream).
   Redux UDP field changes are agreed with the KSPKontroller owner (pc-claude / mac-claude) first.
+
+mac-agentsapp (reviewed 2026-11-18)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Joined 2026-11-18 with the user's approval (mailbox #335, #337).
+
+- Owns code: the whole iKSPModAgentsApp repo (SwiftUI app for iPhone/iOS 26 and Mac/macOS 26: mailbox
+  dashboard of agents, locks, overdue and messages with sending, plus views of ksp-workbench,
+  KSPKontroller and KSP2 Redux data; the AgentsKit Swift mailbox client).
+- Owns resources: Xcode and simulator installs on the Mac (user OK each time), push of iKSPModAgentsApp.
+  The app's sender identity for the user's own messages is pending a user decision. None of the locks.
+- Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
+- Cannot: push, install, sign or publish, spend, edit other repos. The Python mailbox client stays with
+  pc-claude; KSP data stays with its owners.
+- Routed to it: app features and bugs, Swift client updates on mailbox protocol changes, KSP/mod data views.
 
 Overlaps and splits
 -------------------
