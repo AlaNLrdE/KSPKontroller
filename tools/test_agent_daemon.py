@@ -471,6 +471,8 @@ class ForeignRepoTest(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, '', '')
 
             old = (daemon.TOOLS, daemon.WORK, daemon.MAILBOX)
+            cwd = os.getcwd()
+            os.chdir(d)  # a real config in the checkout's build/agent-mailbox must not win
             try:
                 with mock.patch.object(daemon, 'run', side_effect=lambda args: None):
                     daemon.main(['--tools-dir', str(tools), '--repo', str(work), '--config',
@@ -489,6 +491,7 @@ class ForeignRepoTest(unittest.TestCase):
                 self.assertEqual(calls[1][1], tools)  # the mailbox client runs from the tools home
                 self.assertEqual(calls[1][0][1], str(tools / 'tools' / 'agent_mailbox.py'))
             finally:
+                os.chdir(cwd)
                 daemon.TOOLS, daemon.WORK, daemon.MAILBOX = old
 
     def test_a_config_in_the_work_repo_is_found_after_the_tools_home(self):
@@ -499,10 +502,13 @@ class ForeignRepoTest(unittest.TestCase):
             config = work / 'build' / 'agent-mailbox' / 'mac-workbench.json'
             config.write_text('{}', encoding='utf-8')
             old = (daemon.TOOLS, daemon.WORK)
+            cwd = os.getcwd()
+            os.chdir(d)  # a real config in the checkout's build/agent-mailbox must not win
             try:
                 daemon.TOOLS, daemon.WORK = tools, work
                 self.assertEqual(daemon.resolve_config('build/agent-mailbox/mac-workbench.json'), config.resolve())
             finally:
+                os.chdir(cwd)
                 daemon.TOOLS, daemon.WORK = old
 
 

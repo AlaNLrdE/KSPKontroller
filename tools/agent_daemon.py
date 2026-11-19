@@ -36,7 +36,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import subprocess
@@ -258,8 +258,10 @@ def load_profile(repo, config, identity, name=None, profile_file=None, system=No
         raise ValueError('unknown profile %r (known: %s)' % (name, ', '.join(sorted(PROFILES))))
     profile = PROFILES[name](repo, cmds, tools)
     text = str(config)
-    if Path(text).is_absolute() or PureWindowsPath(text).is_absolute():  # a config kept outside the checkouts
-        rule = 'Read(%s/*.json)' % rule_path(PureWindowsPath(text).parent if '\\' in text else Path(text).parent)
+    # A config kept outside the checkouts. A rooted POSIX path is absolute on every host (Windows Path() says no).
+    if text.startswith('/') or Path(text).is_absolute() or PureWindowsPath(text).is_absolute():
+        parent = PurePosixPath(text).parent if text.startswith('/') else PureWindowsPath(text).parent
+        rule = 'Read(%s/*.json)' % rule_path(parent)
         if rule not in profile['deny']:
             profile['deny'] = profile['deny'] + [rule]
     profile['allow'] = profile['allow'] + list(extra.get('allow', []))
