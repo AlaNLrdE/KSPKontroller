@@ -160,9 +160,14 @@ the user in its own chat.
 - Owns code: the iOS variant of the hmi-cpp HMI for iPhone (display plus touch controls: a clickable cockpit
   sending actions to the game through kRPC, KSP2 Redux where it applies). iOS-only files belong to it; it
   works only in its own worktree ``.claude/worktrees/hmi-ios`` on ``agent/hmi-ios``, never in the main
-  checkout mac-claude uses.
-- Shared hmi-cpp code: changes stay minimal and are reviewed by the hmi-cpp owners (mac-claude, pc-claude)
-  before merging; pc-claude merges.
+  checkout mac-claude uses. It owns the iOS target: iPhone build, touch controls and iOS packaging.
+- Identity: its session shares ``/Users/alan/wk/KSPKontroller`` with mac-claude's checkout, so it declares
+  ``identity = mac-iphonehmi`` explicitly in its own CLAUDE.md/worktree and uses only
+  ``build/agent-mailbox/mac-iphonehmi.json``; it never takes over mac-claude (mailbox #353). One wake
+  daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
+- Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
+  from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
+  ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
 - Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
 - Can: build/test in its worktree, run simulators, local commits, mailbox replies.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
