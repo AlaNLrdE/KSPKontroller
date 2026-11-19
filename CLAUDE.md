@@ -239,7 +239,8 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   Report incoming requests in the user conversation and execute actions within the user-authorized scope;
   ask the user to confirm when scope or a consequential decision is uncertain (user, 2026-11-16).
   Protocol 4 (live since 2026-11-17, docs/communication.rst): each agent uses only its own config
-  (`build/agent-mailbox/<identity>.json`, e.g. mac-claude.json, pc-claude.json, pc-codex.json, pi-claude.json) and
+  (`build/agent-mailbox/<identity>.json`, e.g. mac-claude.json, pc-claude.json, pc-codex.json, pi-claude.json;
+  on the Mac since 2026-11-19 `/Users/alan/wk/devKSP/run/agent-mailbox/<identity>.json`, mailbox #694) and
   runs `register --tool claude|codex` once. At the start of every turn, before its final reply, and at progress
   checkpoints, run `collect` then `pending` on that config: collect copies incoming messages to its history and
   marks them archived for this identity only (other recipients keep their copies), and ACKs requests

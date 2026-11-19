@@ -471,8 +471,9 @@ runs the real install on each machine:
    # WorkingDirectory and the claude -p cwd are the work repo (foreign profile)
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-workbench \
        --repo C:/Users/alanl/wk/decompilation/ksp-workbench install --dry-run
-   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/ksp-workbench \
-       --tools-dir /Users/alan/wk/KSPKontroller install --dry-run
+   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/devKSP/ksp1/ksp-workbench \
+       --tools-dir /Users/alan/wk/devKSP/ksp1/KSPKontroller \
+       --config /Users/alan/wk/devKSP/run/agent-mailbox/mac-workbench.json install --dry-run
    # remove it again on any OS
    python3 tools/agent_daemon_install.py --identity pi-claude uninstall --dry-run
 

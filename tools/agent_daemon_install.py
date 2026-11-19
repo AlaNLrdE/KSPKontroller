@@ -26,8 +26,9 @@ Always look first::
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-claude install --dry-run
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-workbench \\
        --repo C:/Users/alanl/wk/decompilation/ksp-workbench install --dry-run
-   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/ksp-workbench \\
-       --tools-dir /Users/alan/wk/KSPKontroller install --dry-run
+   python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/devKSP/ksp1/ksp-workbench \\
+       --tools-dir /Users/alan/wk/devKSP/ksp1/KSPKontroller \\
+       --config /Users/alan/wk/devKSP/run/agent-mailbox/mac-workbench.json install --dry-run
    python3 tools/agent_daemon_install.py --identity mac-claude uninstall --dry-run
 
 ``--os`` renders another platform's service (for review); a real install only runs for the current platform.
