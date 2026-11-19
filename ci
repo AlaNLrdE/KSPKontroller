@@ -39,6 +39,12 @@
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
 #   ./ci test_sim            Simulator tests, including the krpc client against the simulated kRPC server
+#   ./ci ios_build           macOS + Xcode: build the iPhone HMI (hmi-ios/) for the arm64 iOS Simulator into
+#                            build/hmi-ios (configures it once, downloading the pinned SDL2) and sign it ad hoc
+#   ./ci ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS]  macOS: ios_build, kspsim on 127.0.0.1 for N s
+#                            (default 1800), boot NAME (default "iPhone 18 Pro"), install, set the app to kRPC at
+#                            127.0.0.1 with the cockpit scene, launch; logs and screen.png in build/hmi-ios-sim.
+#                            Neither target needs the mailbox lock ios-simulator: they never act on all simulators
 #   ./ci clean               Remove build outputs
 #   ./ci help
 #
@@ -591,6 +597,163 @@ sim() {
 test_sim() {
   log "Simulator tests"
   (cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$(ensure_venv "$ROOT/tools/requirements.txt")/python" -m unittest tools/kspsim/test_kspsim.py)
+}
+
+# ------------------------------------------------------------------ iPhone HMI (hmi-ios/, macOS + Xcode only)
+# docs/development/ios.rst and .claude/skills/iphone-hmi/SKILL.md. Neither target touches other agents' simulator
+# devices or shuts CoreSimulator down, so the mailbox lock ios-simulator (for actions affecting all simulators) is
+# not needed for them.
+IOS_BUILD="$BUILD/hmi-ios"
+IOS_SIM_OUT="$BUILD/hmi-ios-sim"
+IOS_APP="$IOS_BUILD/Debug-iphonesimulator/KSPHMI.app"
+IOS_SIM_PID=""
+IOS_SKILL=".claude/skills/iphone-hmi/SKILL.md"
+
+# Dies off macOS; selects Xcode when xcode-select still names the Command Line Tools (no sudo needed)
+ios_require_mac() {
+  [ "$(uname -s)" = Darwin ] || die "$1 needs macOS with Xcode (the iOS SDK and the iOS Simulator exist only there)"
+  if [ -z "${DEVELOPER_DIR:-}" ]; then
+    case "$(xcode-select -p 2>/dev/null || true)" in
+      ""|*CommandLineTools*) DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer; export DEVELOPER_DIR ;;
+    esac
+  fi
+  if [ -n "${DEVELOPER_DIR:-}" ]; then
+    [ -d "$DEVELOPER_DIR" ] || die "DEVELOPER_DIR=$DEVELOPER_DIR does not exist: install Xcode (not only the Command Line Tools)"
+  fi
+  xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1 \
+    || die "no iOS Simulator SDK in ${DEVELOPER_DIR:-$(xcode-select -p)}: install Xcode and its iOS platform"
+  command -v cmake >/dev/null 2>&1 || die "cmake not found (brew install cmake)"
+}
+
+# ios_timeout SECONDS CMD...: macOS has no timeout(1); simctl calls can hang forever. SIGALRM exits with 142.
+ios_timeout() {
+  local secs="$1" rc=0
+  shift
+  perl -e 'alarm shift; exec @ARGV' "$secs" "$@" || rc=$?
+  if [ "$rc" -eq 142 ]; then
+    die "timed out after ${secs}s: $* (the Mac may be overloaded, check the load average with uptime; a device can also stay half booted, see $IOS_SKILL)"
+  fi
+  return "$rc"
+}
+
+# Build KSPHMI.app for the arm64 iOS Simulator into build/hmi-ios and sign it ad hoc
+ios_build() {
+  ios_require_mac ios_build
+  if ! ls -d "$IOS_BUILD"/*.xcodeproj >/dev/null 2>&1; then
+    # KSPHMI_IOS_FETCH downloads the hash-pinned SDL2/SDL2_ttf archives (user-approved, hmi-ios/CMakeLists.txt)
+    log "Configuring hmi-ios into $IOS_BUILD (Xcode generator, downloads the pinned SDL2 / SDL2_ttf)"
+    cmake -S "$ROOT/hmi-ios" -B "$IOS_BUILD" -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DKSPHMI_IOS_FETCH=ON \
+      || die "hmi-ios configure failed"
+  fi
+  local build_log="$IOS_BUILD/build.log" rc=0
+  log "Building ksphmi_ios for the iOS Simulator (arm64); full log: $build_log"
+  cmake --build "$IOS_BUILD" --config Debug --target ksphmi_ios -- \
+    -sdk iphonesimulator -arch arm64 CODE_SIGNING_ALLOWED=NO >"$build_log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    grep -E 'error:|BUILD FAILED' "$build_log" | tail -20 >&2 || true
+    die "ksphmi_ios build failed (exit $rc), see $build_log"
+  fi
+  grep -F "BUILD SUCCEEDED" "$build_log" | tail -1 || true
+  [ -d "$IOS_APP" ] || die "build succeeded but $IOS_APP is missing"
+  codesign --force --sign - --timestamp=none "$IOS_APP" || die "ad-hoc signing of $IOS_APP failed"
+  codesign --verify "$IOS_APP" || die "codesign --verify failed for $IOS_APP"
+  log "Signed ad hoc: $IOS_APP"
+}
+
+ios_stop_sim() {
+  if [ -n "$IOS_SIM_PID" ]; then
+    kill "$IOS_SIM_PID" 2>/dev/null || true
+    wait "$IOS_SIM_PID" 2>/dev/null || true
+    IOS_SIM_PID=""
+  fi
+}
+
+# ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS...]: the app in the iOS Simulator against kspsim on loopback
+ios_sim() {
+  local device="iPhone 18 Pro" seconds=1800
+  local extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --device)  [ $# -ge 2 ] || die "--device needs a device name"; device="$2"; shift 2 ;;
+      --seconds) [ $# -ge 2 ] || die "--seconds needs a number"
+                 case "$2" in ""|*[!0-9]*) die "--seconds needs a whole number of seconds, got '$2'" ;; esac
+                 seconds="$2"; shift 2 ;;
+      --) shift; extra=("$@"); break ;;
+      *) die "ios_sim: unknown option '$1' (kspsim options go after --)" ;;
+    esac
+  done
+  ios_build
+
+  mkdir -p "$IOS_SIM_OUT"
+  local bin
+  bin="$(ensure_venv "$ROOT/tools/requirements.txt")"
+  # Loopback only: the real Pi never discovers this kspsim; the simulator shares the Mac's loopback.
+  log "Starting kspsim on 127.0.0.1 for ${seconds}s; log: $IOS_SIM_OUT/kspsim.log"
+  (cd "$ROOT/tools" && exec "$bin/python" -m kspsim --no-board --address 127.0.0.1 --headless \
+     --seconds "$seconds" ${extra[@]+"${extra[@]}"}) >"$IOS_SIM_OUT/kspsim.log" 2>&1 &
+  IOS_SIM_PID=$!
+  trap ios_stop_sim EXIT
+  trap 'ios_stop_sim; exit 130' INT TERM
+  sleep 2
+  if ! kill -0 "$IOS_SIM_PID" 2>/dev/null; then
+    tail -20 "$IOS_SIM_OUT/kspsim.log" >&2 || true
+    die "kspsim exited at start, see $IOS_SIM_OUT/kspsim.log"
+  fi
+
+  local load
+  load="$(sysctl -n vm.loadavg | awk '{ print $2 }')"
+  if awk -v l="$load" 'BEGIN { exit !(l > 15) }'; then
+    log "WARNING: 1-minute load average is $load (above 15): simctl may be very slow or time out"
+  fi
+
+  local line udid
+  line="$(ios_timeout 60 xcrun simctl list devices available | awk -v n="$device" '
+    { s = $0; sub(/^ +/, "", s); if (index(s, n " (") == 1) { print s; exit } }')" \
+    || die "simctl list devices failed"
+  [ -n "$line" ] || die "no available simulator device named '$device' (xcrun simctl list devices available)"
+  udid="$(printf '%s\n' "$line" | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)).*/\1/p')"
+  [ -n "$udid" ] || die "could not read the UDID of '$device' from: $line"
+  case "$line" in
+    *"(Booted)"*) log "$device ($udid) is already booted" ;;
+    *) log "Booting $device ($udid)"
+       ios_timeout 120 xcrun simctl boot "$udid" || die "simctl boot $udid failed" ;;
+  esac
+  log "Waiting for the boot to finish (about 4 min on a first boot)"
+  ios_timeout 600 xcrun simctl bootstatus "$udid" >/dev/null || die "simctl bootstatus $udid failed"
+
+  local bundle
+  bundle="$(plutil -extract CFBundleIdentifier raw -o - "$IOS_APP/Info.plist")" || die "no CFBundleIdentifier in $IOS_APP"
+  log "Installing $bundle"
+  ios_timeout 300 xcrun simctl install "$udid" "$IOS_APP" || die "simctl install failed"
+  ios_timeout 60 xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
+
+  # Never 'simctl spawn ... defaults write': it hangs. Write the Settings.bundle keys into the data container.
+  local container prefs
+  container="$(ios_timeout 60 xcrun simctl get_app_container "$udid" "$bundle" data)" \
+    || die "simctl get_app_container failed"
+  prefs="$container/Library/Preferences/$bundle.plist"
+  mkdir -p "$(dirname "$prefs")"
+  [ -f "$prefs" ] || plutil -create xml1 "$prefs"
+  plutil -replace pc_host -string 127.0.0.1 "$prefs"
+  plutil -replace source -string krpc "$prefs"
+  plutil -replace flight_scene -string cockpit "$prefs"
+
+  log "Launching $bundle"
+  rm -f "$IOS_SIM_OUT/app.out" "$IOS_SIM_OUT/app.err" "$IOS_SIM_OUT/screen.png"
+  ios_timeout 120 xcrun simctl launch --terminate-running-process \
+    --stdout="$IOS_SIM_OUT/app.out" --stderr="$IOS_SIM_OUT/app.err" "$udid" "$bundle" \
+    || die "simctl launch failed"
+  sleep 15
+  ios_timeout 60 xcrun simctl io "$udid" screenshot "$IOS_SIM_OUT/screen.png" >/dev/null \
+    || die "simctl screenshot failed"
+
+  log "App stdout:  $IOS_SIM_OUT/app.out"
+  log "App stderr:  $IOS_SIM_OUT/app.err"
+  log "kspsim log:  $IOS_SIM_OUT/kspsim.log"
+  log "Screenshot:  $IOS_SIM_OUT/screen.png"
+  log "kspsim keeps running for ${seconds}s (Ctrl+C stops it; the simulator device stays booted)"
+  wait "$IOS_SIM_PID" 2>/dev/null || true
+  IOS_SIM_PID=""
 }
 
 # ------------------------------------------------------------------ Raspberry Pi HMI (hmi-cpp/, C++)
@@ -1276,6 +1439,8 @@ case "${1:-help}" in
   hmi_logs)          shift; hmi_logs "$@" ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
+  ios_build)         ios_build ;;
+  ios_sim)           shift; ios_sim "$@" ;;
   clean)             clean ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;

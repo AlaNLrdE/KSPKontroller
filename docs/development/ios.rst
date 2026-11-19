@@ -128,6 +128,15 @@ Testing plan
 
 1. iOS Simulator against ``./ci sim`` on the Mac (simulator address ``localhost``): connection, all
    flight scenes, cockpit touches arriving at kspsim, rotation, background/foreground.
+   ``./ci ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS]`` does the whole round: ``ios_build``,
+   kspsim on ``127.0.0.1`` only (``--no-board --headless``, 1800 s by default), boots the device (default
+   "iPhone 18 Pro") and waits for ``bootstatus``, installs the app, writes ``pc_host 127.0.0.1``,
+   ``source krpc`` and ``flight_scene cockpit`` into the app's preferences plist in its data container
+   (``simctl spawn ... defaults write`` hangs), launches it and after 15 s saves
+   ``build/hmi-ios-sim/screen.png``; the app's stdout/stderr and the kspsim log are in the same folder.
+   Every ``simctl`` call has a timeout and a timeout stops with a message; it warns when the 1-minute
+   load average is above 15. kspsim stops when the target exits. It only uses its own device, so the
+   mailbox lock ``ios-simulator`` (for actions affecting all simulators) is not needed.
 2. Renderer captures at iPhone sizes in both orientations for the layout review: off-screen frames from
    the Mac build (``--screenshot`` with ``--size``) before any shared layout change.
 3. The iPhone with free signing, against ``./ci sim`` and then the game, only for what the simulator
@@ -148,3 +157,9 @@ download (``xcodebuild -downloadPlatform iOS``) that needs the user's OK as well
   cmake --build build/hmi-ios --config Debug -- -sdk iphonesimulator
 
 Without ``-DKSPHMI_IOS_FETCH=ON`` the configure step stops and names the download it needs.
+
+``./ci ios_build`` runs the simulator build on the Mac: it exports ``DEVELOPER_DIR`` for Xcode when
+``xcode-select`` still names the Command Line Tools, configures ``build/hmi-ios`` once (with
+``-DKSPHMI_IOS_FETCH=ON``), builds ``ksphmi_ios`` for ``-sdk iphonesimulator -arch arm64`` without
+signing (full log in ``build/hmi-ios/build.log``), signs ``KSPHMI.app`` ad hoc and prints its path.
+Off macOS both iOS targets stop with a message.

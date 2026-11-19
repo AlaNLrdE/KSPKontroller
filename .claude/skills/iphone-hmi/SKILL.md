@@ -13,6 +13,8 @@ build + ctest before merge.
 
 ## Build (Mac)
 
+- `./ci ios_build` does all of this section (Xcode DEVELOPER_DIR, configure once, arm64 simulator build,
+  ad-hoc signing, log in `build/hmi-ios/build.log`); the steps below are what it runs.
 - Xcode must be the developer directory. After installing Xcode, `xcode-select -p` may still name the Command
   Line Tools: `xcrun --sdk iphoneos` then fails and CMake says "iphoneos is not an iOS SDK". Without sudo,
   prefix every command with `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`.
@@ -30,6 +32,9 @@ build + ctest before merge.
 
 ## Run in the iOS Simulator against kspsim
 
+- `./ci ios_sim [--device NAME] [--seconds N] [-- KSPSIM_ARGS]` does all of this section with timeouts on
+  every simctl call (exit 142 = timeout: check the load average); outputs in `build/hmi-ios-sim/`
+  (app.out, app.err, kspsim.log, screen.png). It never needs the mailbox lock `ios-simulator`.
 - kspsim on loopback only, so the real Pi never discovers it: from `tools/`,
   `<main checkout>/build/venv/bin/python -m kspsim --no-board --address 127.0.0.1 --scenario orbit --headless --seconds 1800`
   (`--address` binds both kRPC 50000/50001 and the UDP 50002 context). The simulator shares the Mac's
