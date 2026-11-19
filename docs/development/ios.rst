@@ -1,9 +1,8 @@
 iPhone HMI development
 ======================
 
-Status: **design note and build skeleton** (mac-iphonehmi, 2026-11-18). Nothing in this page has run on
-iOS yet: Xcode was still installing when it was written, so every item under "Unverified assumptions"
-must be checked on the first Xcode build before it is described as working.
+Status: **builds for the iOS Simulator, not run yet** (mac-iphonehmi, 2026-11-18). The design below was written
+before Xcode was installed; "Build assumptions checked" records what the first build confirmed.
 
 Scope (confirmed with the user, 2026-11-18)
 -------------------------------------------
@@ -100,19 +99,24 @@ green. None is implemented yet.
 5. **In-app scene and skin switching**: the keyboard shortcuts (Ctrl+1..5, Ctrl+"+"/"-") have no
    equivalent without a keyboard; a touch gesture or on-screen control is needed.
 
-Unverified assumptions
-----------------------
+Build assumptions checked
+-------------------------
 
-To check on the first Xcode build (each one recorded here as confirmed or corrected):
+First iOS Simulator build (Xcode 27.2, CMake 4.3.2, arm64, unsigned, 2026-11-18): ``BUILD SUCCEEDED``.
 
-- The SDL2_ttf 2.24.0 release archive carries FreeType and HarfBuzz for ``SDL2TTF_VENDORED``.
-- The target names ``SDL2::SDL2-static``, ``SDL2::SDL2main`` and ``SDL2_ttf::SDL2_ttf-static`` and the
-  system frameworks the static SDL2 target brings with it.
-- Where ``MACOSX_PACKAGE_LOCATION "Resources/..."`` lands in a flat iOS bundle (``platform.mm`` accepts
-  ``hmi/`` at the bundle root or under ``Resources/``) and that ``Settings.bundle`` ends at the root.
-- That every shared source compiles for iOS: the Linux-only paths (framebuffer, boot intro) are expected
-  to fall back as on macOS, and ``config.cpp`` already uses ``_NSGetExecutablePath`` on Apple platforms.
-- The SHA256 of both archives, pinned in ``hmi-ios/CMakeLists.txt`` after the approved download.
+- Confirmed: the SDL2_ttf 2.24.0 release archive carries FreeType and HarfBuzz under ``external/``; the vendored
+  FreeType still declares an old ``cmake_minimum_required``, which CMake 4 refuses, so ``hmi-ios`` sets
+  ``CMAKE_POLICY_VERSION_MINIMUM`` 3.5 around ``FetchContent_MakeAvailable`` only.
+- Confirmed: the targets ``SDL2::SDL2-static``, ``SDL2::SDL2main`` and ``SDL2_ttf::SDL2_ttf-static`` link with
+  the frameworks the static SDL2 target brings; no extra framework list was needed.
+- Confirmed: every shared source compiles for iOS unchanged; the only warnings from our code are the two the
+  macOS build already shows (``canvas.hpp`` unused ``renderer_``, ``intro.cpp`` unused ``LOG``).
+- Confirmed: ``MACOSX_PACKAGE_LOCATION "Resources/..."`` lands at the root of the flat iOS bundle
+  (``KSPHMI.app/hmi/`` and ``KSPHMI.app/Settings.bundle``).
+- Pinned: SHA256 of both archives in ``hmi-ios/CMakeLists.txt``. SDL2_ttf's matches Homebrew's formula; SDL2's
+  was taken over HTTPS from the official release (its GPG signature was not checked: no gpg on the Mac).
+- Note: the Debug bundle is 126 MB, mostly body art and skin bitmaps; trimming them is a later item.
+- Not yet run: the app itself (the simulator runtime was still downloading) and the device build (signing).
 
 Testing plan
 ------------

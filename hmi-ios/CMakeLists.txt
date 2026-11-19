@@ -1,6 +1,6 @@
 # KSP HMI for iPhone: the hmi-cpp flight display and touch cockpit as an iOS app (design: docs/development/ios.rst).
-# Skeleton, not built yet (2026-11-18: no Xcode on the Mac). Everything marked "verify on the first Xcode build"
-# is an assumption about SDL's and CMake's iOS support that has not been checked.
+# Builds for the iOS Simulator with Xcode 27.2 (2026-11-18). Xcode must be the developer directory:
+# export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer when xcode-select still names the CLT.
 #
 #   cmake -S hmi-ios -B build/hmi-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DKSPHMI_IOS_FETCH=ON \
 #         -DKSPHMI_IOS_TEAM=<personal team id> -DKSPHMI_IOS_BUNDLE_ID=<unique id>
@@ -34,9 +34,10 @@ set(KSPHMI_IOS_BUNDLE_ID "local.ksphmi.iphone" CACHE STRING
 option(KSPHMI_IOS_FETCH "Download the pinned SDL2 / SDL2_ttf sources (only with the user's OK)" OFF)
 set(KSPHMI_SDL2_VERSION 2.32.10)
 set(KSPHMI_SDL2_TTF_VERSION 2.24.0)
-# Filled in from the first approved download (shasum -a 256) and committed; empty = not pinned yet.
-set(KSPHMI_SDL2_SHA256 "")
-set(KSPHMI_SDL2_TTF_SHA256 "")
+# Pinned from the approved download of 2026-11-18 (shasum -a 256). SDL2_ttf matches Homebrew's formula checksum;
+# SDL2's was taken over HTTPS from the official release (its GPG .sig not checked: no gpg on the Mac).
+set(KSPHMI_SDL2_SHA256 "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165")
+set(KSPHMI_SDL2_TTF_SHA256 "0b2bf1e7b6568adbdbc9bb924643f79d9dedafe061fa1ed687d1d9ac4e453bfd")
 
 if(NOT KSPHMI_IOS_FETCH)
   message(FATAL_ERROR "SDL2 ${KSPHMI_SDL2_VERSION} and SDL2_ttf ${KSPHMI_SDL2_TTF_VERSION} must be downloaded: "
@@ -63,11 +64,15 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
-# Verify on the first Xcode build: the release archive carries FreeType and HarfBuzz under external/.
+# The release archive carries FreeType and HarfBuzz under external/ (checked 2026-11-18).
 set(SDL2TTF_VENDORED ON CACHE BOOL "" FORCE)
 set(SDL2TTF_SAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL2TTF_INSTALL OFF CACHE BOOL "" FORCE)
+# CMake 4 dropped compatibility with cmake_minimum_required() below 3.5, which the vendored FreeType still
+# declares; scoped to the fetched projects only.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(sdl2 sdl2_ttf)
+unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 # --- The shared HMI libraries, same sources as every other platform -------------------------------------------
 include("${HMI_CPP}/cmake/sources.cmake")
@@ -91,7 +96,7 @@ target_link_libraries(ksphmi_ios PRIVATE ksphmi_ui SDL2::SDL2main "-framework Fo
 
 # config.toml and assets/ keep their hmi-cpp layout under the bundle's hmi/ folder (find_app_dir through
 # KSPHMI_APP_DIR, set by platform.mm); Settings.bundle must sit at the bundle root for the Settings app.
-# Verify on the first Xcode build where "Resources" lands in an iOS (flat) bundle: platform.mm accepts both.
+# "Resources/..." lands at the root of the flat iOS bundle (checked 2026-11-18); platform.mm accepts both.
 set(bundle_files "${HMI_CPP}/config.toml")
 set_source_files_properties("${HMI_CPP}/config.toml" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/hmi")
 file(GLOB_RECURSE asset_files RELATIVE "${HMI_CPP}" CONFIGURE_DEPENDS "${HMI_CPP}/assets/*")
