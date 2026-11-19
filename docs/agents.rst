@@ -196,6 +196,33 @@ ACK does not count) for more than 30 minutes while it has pending REQUESTs, or i
 (``build/agent-mailbox/pi-claude.daemon/``) shows failed runs, pc-claude takes the coordinator role
 temporarily, announces it with INFO to all, and hands it back with INFO when pi-claude answers again.
 
+Rule: wake service (user 2026-11-18)
+------------------------------------
+
+Every agent has a service that wakes it when the mailbox has activity for it, like pi-claude's
+``tools/agent_daemon.py``, so it answers without an open session (request #320, approved in the
+mac-workbench chat).
+
+1. Wake only for REQUEST and NOTICE addressed to the identity, its host group or ``all``; INFO and ACK never
+   wake (they are read on the next run). The long-poll itself uses no model tokens.
+2. No competition with an open session: an interactive session runs ``agent_daemon.py pause`` when it starts
+   and ``resume`` when it ends; never two clients on one identity.
+3. Closed headless allowlist: read, diagnose, tests, worktree edits, mailbox replies. Never deploy, push,
+   flash or touch GameData; anything that needs the user is answered ``needs user`` and left pending.
+4. Notify the user locally on ``needs user``: macOS notification, Windows toast, Pi: INFO to the coordinator.
+5. Self health check: after two consecutive failed runs (e.g. an expired OAuth token) the daemon itself
+   (Python, no model) sends INFO to all ``daemon of <identity> unhealthy: <error>`` and notifies the user.
+6. One daemon per identity, in its own repo with that repo's allowlist (Mac: mac-workbench in
+   ``~/wk/ksp-workbench``, mac-claude in ``~/wk/KSPKontroller``).
+7. Native service per OS: systemd ``--user`` (Pi, exists), launchd LaunchAgent (Mac), Task Scheduler
+   (Windows, the KSPKontroller ``build/venv`` python).
+8. Machine sleep stops the service; it catches up on wake, and the backup rules cover the gap.
+9. Rollout: pc-claude (owner of ``tools/``) makes ``agent_daemon.py`` cross-platform with per-OS installers
+   and tests, as local commits for the user's push OK. Each agent then installs its own service on its
+   machine **only** with the user's OK typed in its own chat (installing a service changes the machine).
+   Each ``CLAUDE.md`` editor stores this rule as a LOCAL commit (KSPKontroller pc-claude, ksp-workbench
+   mac-workbench, KSP2_decompilation pc-redux).
+
 Retired identities
 ------------------
 
@@ -236,6 +263,6 @@ Storing the roster in each repo
 -------------------------------
 
 Each repo's single ``CLAUDE.md`` editor stores only a pointer to this page, the sections of the identities
-working in that repo and the two rules above, as a LOCAL commit: KSPKontroller = pc-claude (for pc-claude,
+working in that repo and the three rules above, as a LOCAL commit: KSPKontroller = pc-claude (for pc-claude,
 mac-claude and pi-claude), ksp-workbench = mac-workbench (for both workbench identities),
 KSP2_decompilation = pc-redux. The user authorizes the pushes together at the end.
