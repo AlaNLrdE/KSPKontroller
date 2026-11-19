@@ -73,9 +73,10 @@ pi-claude (reviewed 2026-11-18)
   port 50380, journal ``~/agent-mailbox``): health checks, journal integrity and, only when the server is
   unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. None of the locks.
   Host of the deployed HMI (``~/ksphmi``, read-only for pi-claude).
-- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; read-only Pi/ksphmi
-  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user.
-- Cannot: deploy, flash, push, merge, restart ksphmi or any unit other than ``agent-mailbox.service``, use
+- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; merge agent branches into
+  KSPKontroller main with ``tools/merge_agent.py`` (user 2026-11-18); read-only Pi/ksphmi diagnostics; Python
+  tests and edits in its own worktrees; measurements scheduled by the user.
+- Cannot: deploy, flash, push, restart ksphmi or any unit other than ``agent-mailbox.service``, use
   sudo, touch ``~/ksphmi``, GameData or boot config, build hmi-cpp on the Pi, edit other repos. The headless
   allowlist in ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
 - Skills: raspberry-pi-hmi (read-only diagnosis side), kspsim-testing.
@@ -86,8 +87,8 @@ pc-claude (reviewed 2026-11-18)
 - Owns code: KSPKontroller ``KSPSerialIO/`` (plugin and the KSPHMI kRPC service),
   ``arduino-sketch/KSPIODemo9/``, ``tools/`` (verify, kspsim, merge_agent, mailbox client, daemon, windows
   scripts), ``ci``, the docs covering them, ``AGENTS.md`` and the ``.agents/skills`` mirror (absorbed from
-  pc-codex). hmi-cpp shared with mac-claude: pc-claude does the WSL cross builds and Pi deploys. Merges agent
-  branches into KSPKontroller main. Single editor of the KSPKontroller ``CLAUDE.md``.
+  pc-codex). hmi-cpp shared with mac-claude: pc-claude does the WSL cross builds and Pi deploys. Pushes the
+  main that pi-claude merged (with mac-claude, under ``push-main``; user 2026-11-18). Single editor of the KSPKontroller ``CLAUDE.md``.
 - Owns resources: wk-rea ``GameData/KSPSerialIO`` (lock ``ksp-gamedata`` + "OK deploy" with pc-workbench),
   UNO R4 on COM5 (``board-flash``), Pi HMI deploy (``pi-deploy``), push of KSPKontroller main (``push-main``).
 - Can / cannot: builds plugin, firmware and aarch64 hmi-cpp; ``./ci sim/verify/deploy/deploy_hmi/upload_sketch``.
@@ -171,7 +172,7 @@ the user in its own chat.
   daemon per identity: mac-claude's and mac-iphonehmi's stay separate.
 - Shared hmi-cpp code (render, snapshot, parsers, tests): changes stay minimal, get one owner per request
   from the coordinator, are reviewed by the hmi-cpp owners (mac-claude, pc-claude) and must keep
-  ``./ci test_hmi`` green on macOS and the Pi cross build; pc-claude merges.
+  ``./ci test_hmi`` green on macOS and the Pi cross build; the coordinator pi-claude merges.
 - Owns resources: Xcode and iOS simulator use on the Mac. None of the locks.
 - Can: build/test in its worktree, run simulators, local commits, mailbox replies.
 - Cannot: push, merge, deploy, flash, sign or publish apps, spend, edit the main checkout or other repos.
