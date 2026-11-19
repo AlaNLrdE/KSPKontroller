@@ -41,6 +41,25 @@
     <string>UIInterfaceOrientationLandscapeLeft</string>
     <string>UIInterfaceOrientationLandscapeRight</string>
   </array>
+  <!-- iOS 27 requires the UIScene lifecycle (it traps at launch otherwise); KSPHMISceneDelegate in
+       src/platform.mm attaches SDL's window to this one scene. -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key>
+          <string>Default</string>
+          <key>UISceneDelegateClassName</key>
+          <string>KSPHMISceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
   <!-- iOS 14+ asks the user before the first LAN connection; without this text kRPC connections fail silently. -->
   <key>NSLocalNetworkUsageDescription</key>
   <string>KSP HMI connects to Kerbal Space Program (kRPC and the KSPSerialIO context on UDP 50002) on your PC.</string>

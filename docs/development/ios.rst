@@ -1,7 +1,7 @@
 iPhone HMI development
 ======================
 
-Status: **builds for the iOS Simulator, not run yet** (mac-iphonehmi, 2026-11-18). The design below was written
+Status: **runs in the iOS 27.2 Simulator against kspsim** (mac-iphonehmi, 2026-11-18). The design below was written
 before Xcode was installed; "Build assumptions checked" records what the first build confirmed.
 
 Scope (confirmed with the user, 2026-11-18)
@@ -41,7 +41,7 @@ Layout and ownership
        from ``hmi-cpp/cmake/sources.cmake``, the ``KSPHMI.app`` bundle and its Xcode signing attributes.
      - mac-iphonehmi
    * - ``hmi-ios/Info.plist.in``
-     - Bundle keys: orientations, hidden status bar, local-network usage text, Files app access to
+     - Bundle keys: the one-scene manifest iOS 27 requires, orientations, hidden status bar, local-network usage text, Files app access to
        ``Documents/``.
      - mac-iphonehmi
    * - ``hmi-ios/Settings.bundle/``
@@ -49,7 +49,8 @@ Layout and ownership
      - mac-iphonehmi
    * - ``hmi-ios/src/platform.mm``
      - Start-up glue (static constructor before SDL's ``UIApplicationMain``): sets ``KSPHMI_APP_DIR``,
-       writes ``Documents/config.local.toml`` from the settings (discovery off) and sets SDL's iOS hints.
+       writes ``Documents/config.local.toml`` from the settings (discovery off) and sets SDL's iOS hints;
+       ``KSPHMISceneDelegate`` gives SDL's window its ``UIWindowScene``.
      - mac-iphonehmi
    * - ``hmi-cpp/cmake/sources.cmake``
      - The ``ksphmi_core`` / ``ksphmi_ui`` source lists, moved out of ``hmi-cpp/CMakeLists.txt`` so both
@@ -77,6 +78,40 @@ shared code through the environment variables every platform already reads:
 
 Touch already works through the mouse path: SDL synthesizes left-button events from touches, and
 ``Output::to_canvas`` maps window points to drawable pixels, the same mapping macOS Retina uses.
+
+UIScene lifecycle (iOS 27)
+--------------------------
+
+iOS 27 requires the UIScene lifecycle: the first simulator run (iOS 27.2, 2026-11-18) died about one second
+after launch with ``EXC_BREAKPOINT`` in ``_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption``,
+reached from ``-[UIApplication workspace:didCreateScene:...]``. SDL 2.32 only implements the app-delegate
+lifecycle, so the fix lives in ``hmi-ios/`` without patching SDL:
+
+- ``Info.plist.in`` declares ``UIApplicationSceneManifest``: one scene (``UIApplicationSupportsMultipleScenes``
+  false), configuration ``Default`` for ``UIWindowSceneSessionRoleApplication`` with
+  ``UISceneDelegateClassName`` ``KSPHMISceneDelegate``.
+- ``platform.mm`` defines ``KSPHMISceneDelegate`` (a global Objective-C class, outside the C++ anonymous
+  namespace). Under scenes a ``UIWindow`` without a ``windowScene`` is never shown, and SDL creates its window
+  with ``-[SDL_uikitwindow initWithFrame:]`` from ``SDL_main`` (started by ``postFinishLaunch`` after
+  ``didFinishLaunching``), so both orders are handled: ``scene:willConnectToSession:`` remembers the scene and
+  attaches a window SDL already created (SDL's app delegate answers ``-window``), and for later windows an
+  ``-initWithFrame:`` override is added to ``SDL_uikitwindow`` only (``class_addMethod``: SDL's class does not
+  override it, so UIKit's own windows are untouched). It calls the inherited initializer, then sets the scene.
+  No notification fires between SDL's window creation and its ``makeKeyAndVisible``, so an observer cannot do this.
+- Background/foreground: SDL listens to the ``UIApplication`` notifications (``DidBecomeActive``,
+  ``WillResignActive``, ``DidEnterBackground``, ``WillEnterForeground``), not the app-delegate methods, and
+  UIKit still posts those for a single-scene app, so the scene delegate forwards nothing (forwarding would
+  send every ``SDL_APP_*`` event twice). Rotation still arrives as ``SDL_WINDOWEVENT_SIZE_CHANGED`` from SDL's
+  view controller.
+
+Checked on the iOS 27.2 simulator (iPhone 18 Pro, 2026-11-18): the app stays alive, draws the cockpit panel at
+1206x2622 and connects to kspsim on ``127.0.0.1`` (live orbit data, CONNECTED lamp). The scene connected
+*after* SDL had created its window (log ``KSP HMI: attached the existing SDL window to the scene``).
+Backgrounding (launching Settings) and returning logged ``app entering background: drawing paused`` /
+``app back in foreground: drawing resumed``, so the UIApplication notifications still reach SDL. Rotation was
+not tested (simctl has no rotate command). Harmless console notes: "You need
+UIApplicationSupportsIndirectInputEvents in your Info.plist for mouse support" and "Unbalanced calls to
+begin/end appearance transitions for SDL_uikitviewcontroller" right after the scene attach.
 
 Planned shared changes
 ----------------------

@@ -92,7 +92,7 @@ target_link_libraries(ksphmi_ui PUBLIC ksphmi_core SDL2::SDL2-static SDL2_ttf::S
 # hmi-cpp's main.cpp unchanged: SDL.h renames main() to SDL_main() on iOS and SDL2main's UIApplicationMain calls
 # it. src/platform.mm runs before both (static constructor) and prepares settings, paths and SDL hints.
 add_executable(ksphmi_ios MACOSX_BUNDLE "${HMI_CPP}/src/main.cpp" src/platform.mm)
-target_link_libraries(ksphmi_ios PRIVATE ksphmi_ui SDL2::SDL2main "-framework Foundation")
+target_link_libraries(ksphmi_ios PRIVATE ksphmi_ui SDL2::SDL2main "-framework Foundation" "-framework UIKit")
 
 # config.toml and assets/ keep their hmi-cpp layout under the bundle's hmi/ folder (find_app_dir through
 # KSPHMI_APP_DIR, set by platform.mm); Settings.bundle must sit at the bundle root for the Settings app.

@@ -50,6 +50,19 @@ build + ctest before merge.
 
 ## App lifecycle
 
+- **iOS 27 requires UIScene adoption**: without `UIApplicationSceneManifest` the app traps ~1 s after launch
+  (EXC_BREAKPOINT/SIGTRAP, `_UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption` under
+  `workspace:didCreateScene:`), even though platform.mm's constructor already ran. Fix (hmi-ios only, SDL
+  unpatched): one-scene manifest in Info.plist.in + `KSPHMISceneDelegate` in platform.mm, which attaches SDL's
+  window to the scene (existing window at connect, later ones through an `-initWithFrame:` added to
+  `SDL_uikitwindow` only). A window without `windowScene` is never shown. The plist class name and the
+  Objective-C class name must match exactly; keep the class out of the C++ anonymous namespace.
+- SDL's SDL_APP_* events come from UIApplication *notifications*, which UIKit still posts under a single scene:
+  do not also forward the scene delegate callbacks (double events).
+- Verified 2026-11-18 (iPhone 18 Pro sim): alive, connected to kspsim, background/foreground log lines appear.
+  The scene connected after SDL had made its window (existing-window path). simctl cannot rotate a device; a
+  launch of `com.apple.Preferences` backgrounds the app, `simctl launch` of the app brings it back.
+
 - Backgrounding is handled in `hmi-cpp/src/main.cpp`'s event loop (no `#ifdef`): SDL_APP_WILLENTERBACKGROUND /
   DIDENTERBACKGROUND stop drawing and presenting, DIDENTERFOREGROUND resumes with a size check and full redraw.
   Log lines: `app entering background: drawing paused`, `app back in foreground: drawing resumed`.

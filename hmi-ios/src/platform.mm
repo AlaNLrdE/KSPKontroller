@@ -7,7 +7,10 @@
 //    (Settings.bundle): PC address, game, skin, first flight scene. Broadcast discovery is always off: iOS
 //    refuses UDP broadcast without the multicast entitlement, which a free Apple ID cannot get.
 //  - SDL hints (environment form): both orientations, screen kept awake, home indicator dimmed.
+//  - KSPHMISceneDelegate: the UIScene lifecycle iOS 27 requires (see the comment above the class).
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 #include <cstdlib>
 
@@ -88,3 +91,87 @@ __attribute__((constructor)) void ksphmi_ios_prepare() {
 }
 
 }  // namespace
+
+// --- UIScene lifecycle (iOS 27) --------------------------------------------------------------------------------
+// iOS 27 traps (EXC_BREAKPOINT in _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption) about a second
+// after launch when an app does not adopt UIScene. SDL 2.32 still uses the app-delegate lifecycle only, so
+// Info.plist.in declares UIApplicationSceneManifest with this delegate (name must match UISceneDelegateClassName).
+//
+// Under scenes a UIWindow without a windowScene is never shown, and SDL creates its window with
+// -[SDL_uikitwindow initWithFrame:] from SDL_main (postFinishLaunch, after didFinishLaunching), so the order
+// against scene:willConnectToSession: is not fixed. Both orders are handled:
+//  - a window SDL already made before the scene connects is attached in scene:willConnectToSession:;
+//  - for later ones, SDL_uikitwindow (only SDL's class, not UIWindow, so UIKit's own windows are untouched)
+//    gets an -initWithFrame: that calls the inherited one and then sets the known scene. A notification cannot
+//    do this: the window is created, made key and visible inside one SDL call with no notification in between
+//    that fires for a sceneless window. SDL's sources stay unpatched.
+// Sizes, rotation (SDL_WINDOWEVENT_SIZE_CHANGED from SDL's view controller) and touches work per window, as
+// before. Background/foreground needs no forwarding: SDL listens to the UIApplication notifications
+// (DidBecomeActive, WillResignActive, DidEnterBackground, WillEnterForeground), which UIKit still posts for a
+// single-scene app; forwarding the scene callbacks too would deliver every SDL_APP_* event twice.
+
+static __weak UIWindowScene* ksphmi_scene = nil;
+
+namespace {
+
+using InitWithFrame = void* (*)(void*, SEL, CGRect);
+InitWithFrame inherited_init_with_frame = nullptr;
+
+// Plain pointers on purpose: ARC must not retain or release around an initializer (the inherited init consumes
+// self and returns a +1 object, which this passes through unchanged).
+void* sdl_window_init_with_frame(void* self, SEL cmd, CGRect frame) {
+    void* window = inherited_init_with_frame(self, cmd, frame);
+    UIWindowScene* scene = ksphmi_scene;
+    if (window && scene) ((__bridge UIWindow*)window).windowScene = scene;
+    return window;
+}
+
+void hook_sdl_window_init() {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = NSClassFromString(@"SDL_uikitwindow");
+        SEL sel = @selector(initWithFrame:);
+        Method inherited = cls ? class_getInstanceMethod(cls, sel) : nullptr;
+        if (!inherited) {
+            NSLog(@"KSP HMI: SDL_uikitwindow not found, SDL windows will not get a scene");
+            return;
+        }
+        inherited_init_with_frame = reinterpret_cast<InitWithFrame>(method_getImplementation(inherited));
+        // SDL_uikitwindow does not override -initWithFrame: (SDL 2.32.10), so this adds an override to SDL's
+        // class only; if a later SDL does override it, replace that implementation instead.
+        IMP imp = reinterpret_cast<IMP>(sdl_window_init_with_frame);
+        if (!class_addMethod(cls, sel, imp, method_getTypeEncoding(inherited)))
+            inherited_init_with_frame = reinterpret_cast<InitWithFrame>(method_setImplementation(inherited, imp));
+    });
+}
+
+}  // namespace
+
+@interface KSPHMISceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property(strong, nonatomic) UIWindow* window;  // UIWindowSceneDelegate; SDL owns the real one
+@end
+
+@implementation KSPHMISceneDelegate
+
+- (void)scene:(UIScene*)scene
+    willConnectToSession:(UISceneSession*)session
+                 options:(UISceneConnectionOptions*)connectionOptions {
+    UIWindowScene* windowScene = [scene isKindOfClass:UIWindowScene.class] ? (UIWindowScene*)scene : nil;
+    if (!windowScene) return;
+    ksphmi_scene = windowScene;
+    hook_sdl_window_init();
+    // SDL's app delegate answers -window with its first SDL window (nil before SDL_CreateWindow).
+    id<UIApplicationDelegate> app = UIApplication.sharedApplication.delegate;
+    UIWindow* existing = [app respondsToSelector:@selector(window)] ? app.window : nil;
+    if (existing && existing.windowScene != windowScene) {
+        existing.windowScene = windowScene;
+        if (!existing.hidden) [existing makeKeyAndVisible];
+        NSLog(@"KSP HMI: attached the existing SDL window to the scene");
+    }
+}
+
+- (void)sceneDidDisconnect:(UIScene*)scene {
+    if (scene == ksphmi_scene) ksphmi_scene = nil;
+}
+
+@end
