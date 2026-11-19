@@ -1,7 +1,9 @@
 # systemd *user* unit of the HMI (hmi-cpp/), installed by ./ci deploy_hmi into ~/.config/systemd/user/.
-# ./ci deploy_hmi copies hmi-cpp/ to ~/ksphmi/cpp and builds it there (~/ksphmi/cpp/build/ksphmi).
-# Settings: ~/ksphmi/cpp/config.toml (defaults, replaced on every deploy), then ~/ksphmi/config.local.toml (yours,
-# never touched), then ~/ksphmi/env (KSPHMI_KRPC_ADDRESS, written by ./ci deploy_hmi).
+# Pi layout (user, 2026-11-19): the program in ~/.local/bin/ksphmi, hmi-cpp's files (config.toml, assets, systemd
+# scripts) in ~/.local/share/ksphmi, both replaced on every install (./ci install_hmi on the Pi from its ~/dev
+# checkout, or ./ci deploy_hmi from the PC/Mac). Private state in ~/dev/run/ksphmi.
+# Settings: ~/.local/share/ksphmi/config.toml (defaults), then ~/dev/run/ksphmi/config.local.toml (yours, never
+# touched), then ~/dev/run/ksphmi/env (KSPHMI_KRPC_ADDRESS, written by the installer).
 # Runs without a desktop: frames go to the GPU through SDL kmsdrm (user in groups video and render), or to the
 # Linux framebuffer /dev/fb0 if the GPU path cannot open (output auto). Needs lingering
 # (sudo loginctl enable-linger $USER) so it starts at boot without anybody logged in.
@@ -16,11 +18,11 @@ StartLimitIntervalSec=0
 # auto = GPU (SDL kmsdrm, V3D OpenGL) with a fallback to the framebuffer if the GPU path cannot open.
 Environment=KSPHMI_OUTPUT=auto
 Environment=SDL_VIDEODRIVER=kmsdrm
-Environment=KSPHMI_APP_DIR=%h/ksphmi/cpp
-Environment=KSPHMI_LOCAL_CONFIG=%h/ksphmi/config.local.toml
-EnvironmentFile=-%h/ksphmi/env
-WorkingDirectory=%h/ksphmi/cpp
-ExecStart=%h/ksphmi/cpp/build/ksphmi
+Environment=KSPHMI_APP_DIR=%h/.local/share/ksphmi
+Environment=KSPHMI_LOCAL_CONFIG=%h/dev/run/ksphmi/config.local.toml
+EnvironmentFile=-%h/dev/run/ksphmi/env
+WorkingDirectory=%h/.local/share/ksphmi
+ExecStart=%h/.local/bin/ksphmi
 Restart=always
 RestartSec=3
 

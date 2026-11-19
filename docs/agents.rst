@@ -69,14 +69,18 @@ pi-claude (reviewed 2026-11-18)
 - Owns code: none exclusively. Coordination docs (this roster, :doc:`communication` roles) with the
   owner of the push; probe scripts it was assigned (``tools/latency/``, request #130).
 - Owns resources: **operation of the mailbox server** on the Pi (user unit ``agent-mailbox.service``,
-  port 50380, journal ``~/agent-mailbox``): health checks, journal integrity and, only when the server is
-  unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. None of the locks.
-  Host of the deployed HMI (``~/ksphmi``, read-only for pi-claude).
+  port 50380, journal ``~/dev/run/mailbox``): health checks, journal integrity and, only when the server is
+  unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. ``pi-deploy`` only
+  for ``./ci install_hmi``. Host of the installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``,
+  state in ``~/dev/run/ksphmi``).
 - Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; read-only Pi/ksphmi
-  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user.
-- Cannot: deploy, flash, push, merge, restart ksphmi or any unit other than ``agent-mailbox.service``, use
-  sudo, touch ``~/ksphmi``, GameData or boot config, build hmi-cpp on the Pi, edit other repos. The headless
-  allowlist in ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
+  diagnostics; Python tests and edits in its own worktrees; measurements scheduled by the user. In an
+  interactive session, ``./ci install_hmi`` on the Pi (native build from ``~/dev``, install, restart ksphmi)
+  under the ``pi-deploy`` lock with INFO to all (user, 2026-11-18/19).
+- Cannot: deploy from other machines, flash, push, merge, restart ksphmi outside ``install_hmi`` or any unit
+  other than ``agent-mailbox.service``, use sudo, touch the installed HMI or ``~/dev/run`` by hand, GameData or
+  boot config, edit other repos. Headless daemon runs never install or deploy: the allowlist in
+  ``tools/agent_daemon.py`` permits exactly that one restart and the unit's journal.
 - Skills: raspberry-pi-hmi (read-only diagnosis side), kspsim-testing.
 
 pc-claude (reviewed 2026-11-18)
@@ -215,8 +219,8 @@ Resource locks
      - UNO R4 on COM5
      - pc-claude
    * - ``pi-deploy``
-     - ``~/ksphmi`` on the Pi
-     - pc-claude; mac-claude when assigned
+     - the installed HMI on the Pi (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``)
+     - pc-claude; mac-claude when assigned; pi-claude for ``./ci install_hmi``
    * - ``push-main``
      - KSPKontroller origin/main
      - pc-claude, mac-claude (always with the user's OK typed in their own chat)

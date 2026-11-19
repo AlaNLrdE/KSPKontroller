@@ -12,7 +12,7 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 | Wire protocol, packet sizes | `docs/protocol.rst`, `docs/vesseldata.rst` |
 | Plugin behaviour, settings, perf/port logs | `docs/plugin.rst` |
 | Firmware, pins, LED matrix, recovery | `docs/firmware.rst`, `docs/overview.rst` |
-| Raspberry Pi HMI (`hmi-cpp/`, C++, kRPC, `./ci deploy_hmi`) | `docs/hmi.rst` |
+| Raspberry Pi HMI (`hmi-cpp/`, C++, kRPC, `./ci deploy_hmi`, `./ci install_hmi`) | `docs/hmi.rst` |
 | Testing board/HMI without KSP (`./ci sim`) | `docs/simulator.rst` |
 | Build, deploy, flash | `docs/building.rst`, `./ci help` |
 | Architecture, channels, per-project internals | `docs/architecture.rst`, `docs/communication.rst`, `docs/development/*.rst` |
@@ -52,15 +52,17 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - **Coordinator: `pi-claude`** (Claude Code on the Pi, user 2026-11-18; `pc-claude` until then): it plans,
   assigns one owner and the locks per job, watches `overdue` and reassigns. It never deploys, pushes or flashes:
   merges, PC builds, `deploy_hmi`, plugin deploys and pushes go to `pc-claude` (or `mac-claude`) as assigned work,
-  each still under the user's OK. `pi-claude` also operates the mailbox server, which runs on the Pi
-  (user unit `agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, journal `~/agent-mailbox`, since
+  each still under the user's OK. Exception (user, 2026-11-18/19): on the Pi it may run `./ci install_hmi` under
+  the `pi-deploy` lock with INFO to all, never from a headless run. `pi-claude` also operates the mailbox server, which runs on the Pi
+  (user unit `agent-mailbox.service`, URL http://kspKontrollerPi.local:50380, journal `~/dev/run/mailbox`, since
   2026-11-18); `mac-claude` is its backup operator. `pc-claude`, `mac-claude`
   and `mac-workbench` (ksp-workbench repo on the Mac) take assigned work; requests from the user to
   another agent are reported to the coordinator.
 - **Roster** (user-approved 2026-11-18): `docs/agents.rst` is the canonical list of identities, owners, backups,
   locks and routing rules; read it before assigning or taking work. This repo's identities, in short:
   `pi-claude` coordinates and operates the mailbox server (may restart only `agent-mailbox.service`, when it is
-  unhealthy, with INFO to all); never deploys, flashes, pushes or restarts ksphmi.
+  unhealthy, with INFO to all); never deploys, flashes, pushes or restarts ksphmi, except `./ci install_hmi` on
+  the Pi under `pi-deploy` with INFO to all (user, 2026-11-18/19; never headless).
   `pc-claude` owns `KSPSerialIO/`, the firmware, `tools/`, `ci`, AGENTS.md/skills mirror, hmi-cpp cross builds and
   Pi deploys, merges, the KSPSerialIO GameData/board-flash/pi-deploy/push-main locks; backup coordinator; edits
   this file. `mac-claude` owns the macOS hmi-cpp runtime, kspsim/`ci` portability on the Mac, the Redux parser
@@ -166,12 +168,19 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   with `poll: No error`. Keep stdin available for piped tar transfers; do not blindly retry deployments.
 - Raspberry Pi HMI: reach it only as `ssh ksphmi` (alias in `~/.ssh/config`; never put its address or user in
   the repo). Anything needing `sudo` there is run by the user. `hmi-cpp/` is LF (`.gitattributes`), not CRLF.
-- The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). **Cross-compile it,
-  never build on the Pi** (user, 2026-11-17: the Pi compiles far slower than the PC): the PC (WSL aarch64 cross
+- The HMI is C++ only (`hmi-cpp/`, SDL2; the Python/pygame runtime was dropped 2026-11-14). **Deploys from the
+  PC/Mac cross-compile it** (user, 2026-11-17: the Pi compiles far slower than the PC): the PC (WSL aarch64 cross
   toolchain against a sysroot synced from the Pi's own SDL2/SDL2_ttf packages) or, failing that, the Mac builds
-  `ksphmi` and its test binaries; `./ci deploy_hmi` copies them with scp under the `pi-deploy` lock, runs the test
-  binaries on the Pi and restarts `ksphmi.service` only if they pass. Building on the Pi stays a fallback only
-  when no cross build is available, and only under `pi-deploy`. Tests and tools stay Python.
+  `ksphmi` and its test binaries; `./ci deploy_hmi` copies them under the `pi-deploy` lock, runs the test
+  binaries on the Pi and restarts `ksphmi.service` only if they pass. **On the Pi itself `./ci install_hmi`
+  builds natively from `~/dev`** (user, 2026-11-19), under the `pi-deploy` lock with INFO to all; the on-Pi
+  fallback of `deploy_hmi` stays only for when no cross build is available. Tests and tools stay Python.
+- Pi layout (user, 2026-11-19): sources and the Pi's own builds in the `~/dev` `repo` workspace (manifest
+  AlaNLrdE/ksp-manifest; this repo is `~/dev/ksp1/KSPKontroller`, replacing `~/wk/KSPKontroller` there).
+  Installed HMI: `~/.local/bin/ksphmi` (+ `ksphmi.prev`), files in `~/.local/share/ksphmi` (staging `ksphmi.next`),
+  fallback build `~/.cache/ksphmi-build`. Private state `~/dev/run/ksphmi` (env, config.local.toml, intro.env,
+  deploy lock). Mailbox server `~/.local/lib/agent-mailbox/`, data `~/dev/run/mailbox`; pi-claude's daemon runs in
+  `~/dev/ksp1/KSPKontroller` with `build/agent-mailbox` linked to `~/dev/run/agent-mailbox`.
 - The HMI is always full screen at the display's native pixel size on every platform (user, 2026-11-15): no size settings, `ALLOW_HIGHDPI` on macOS, and a window/display size change rebuilds Canvas and Display. `--size` is for off-screen frames only; `--windowed` only for the virtual-desktop test harnesses. Boot ready file: Linux only.
 - HMI keyboard = remote KSP keyboard with KSP's default bindings (user, 2026-11-15; docs/hmi.rst). T/R in the VAB go through KSPHMI.Press into EditorNavigation; Ctrl+1/2 pick the skin (1-0 are action groups), Esc quits (Q is roll). Held axes and throttle go through KSPHMIFlight into the plugin, never kRPC Control axes/throttle: those cannot yield to the board's joystick and kRPC's throttle stays latched. The frame loop only queues commands: kRPC calls stay on the telemetry thread.
 - HMI `Canvas::polygon` fills convex shapes only: split concave icons and ring sectors into triangles/quads.

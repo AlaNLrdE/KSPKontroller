@@ -6,22 +6,24 @@
 # hmi-cpp/include/intro.hpp), sends quit, and opens the display once mpv has released DRM master.
 # Without mpv or the video it runs the old animated loading screen instead (ksphmi --splash on /dev/fb0).
 #
-# Settings (environment, e.g. in ~/ksphmi/intro.env, read by the unit):
-#   KSPHMI_INTRO_VIDEO  the video file (default ~/ksphmi/cpp/assets/intro/KSPKontroller_pi_Intro.mp4)
+# Settings (environment, e.g. in ~/dev/run/ksphmi/intro.env, read by the unit):
+#   KSPHMI_BIN          the HMI program for the fallback loading screen (default ~/.local/bin/ksphmi)
+#   KSPHMI_INTRO_VIDEO  the video file (default ~/.local/share/ksphmi/assets/intro/KSPKontroller_pi_Intro.mp4)
 #   KSPHMI_INTRO_AUDIO  mpv --audio-device (default alsa/hdmi:CARD=vc4hdmi0,DEV=0, the HDMI port next to USB-C)
 #   KSPHMI_INTRO_DRM    the KMS device (default /dev/dri/by-path/platform-gpu-card, else /dev/dri/card1)
 #   KSPHMI_INTRO_VO     mpv --vo (default gpu: V3D scales; drm scales on the CPU, too slow for a 4K mode)
 #   KSPHMI_INTRO_HWDEC  mpv --hwdec (default v4l2m2m-copy, the Pi 4 H.264 decoder). With the gpu VO's default
 #                       high-quality scaling to 4K the video ran ~3 s behind its audio; --profile=fast keeps it in sync
-#   KSPHMI_INTRO_LOG    mpv's log file of the last boot (default ~/ksphmi/intro-mpv.log; --no-terminal is silent)
+#   KSPHMI_INTRO_LOG    mpv's log file of the last boot (default ~/dev/run/ksphmi/intro-mpv.log; --no-terminal is silent)
 set -u
 
-app="${KSPHMI_APP_DIR:-$HOME/ksphmi/cpp}"
+app="${KSPHMI_APP_DIR:-$HOME/.local/share/ksphmi}"
+bin="${KSPHMI_BIN:-$HOME/.local/bin/ksphmi}"
 video="${KSPHMI_INTRO_VIDEO:-$app/assets/intro/KSPKontroller_pi_Intro.mp4}"
 audio="${KSPHMI_INTRO_AUDIO:-alsa/hdmi:CARD=vc4hdmi0,DEV=0}"
 vo="${KSPHMI_INTRO_VO:-gpu}"
 hwdec="${KSPHMI_INTRO_HWDEC:-v4l2m2m-copy}"
-mpvlog="${KSPHMI_INTRO_LOG:-$HOME/ksphmi/intro-mpv.log}"
+mpvlog="${KSPHMI_INTRO_LOG:-$HOME/dev/run/ksphmi/intro-mpv.log}"
 drm="${KSPHMI_INTRO_DRM:-}"
 if [ -z "$drm" ]; then
     drm=/dev/dri/by-path/platform-gpu-card
@@ -44,12 +46,12 @@ splash() {
         sleep 0.2
         i=$((i + 1))
     done
-    exec "$app/build/ksphmi" --splash
+    exec "$bin" --splash
 }
 
 [ -e "$ready" ] && exit 0  # the HMI already shows its frames (unit restarted by hand)
 if ! command -v mpv >/dev/null 2>&1; then
-    say "mpv not installed (sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh): loading screen instead"
+    say "mpv not installed (sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh): loading screen instead"
     splash
 fi
 if [ ! -r "$video" ]; then

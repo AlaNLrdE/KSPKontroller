@@ -20,7 +20,7 @@ struct Config {
         double rate_hz = 10, retry_seconds = 3;
         bool discovery = true;
         /// The PC's Ethernet MAC (normalised): its address wins when the PC is on Ethernet and Wi-Fi. Private,
-        /// per installation (~/ksphmi/config.local.toml or KSPHMI_PREFER_MAC); "" = first resolver answer.
+        /// per installation (~/dev/run/ksphmi/config.local.toml or KSPHMI_PREFER_MAC); "" = first resolver answer.
         std::string prefer_mac;
     } krpc;
     struct {
