@@ -341,7 +341,7 @@ ksp_list() {
 
 ksp_running() {
   if command -v tasklist >/dev/null 2>&1; then tasklist 2>/dev/null | grep -qi "KSP_x64.exe"
-  else pgrep -f "KSP.x86_64|KSP.app" >/dev/null 2>&1; fi
+  else pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1; fi  # same as tools/verify.py KSP_PROCESS
 }
 
 # Copy the built plugin into a KSP install (the one from find_kspdir)

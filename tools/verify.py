@@ -57,12 +57,17 @@ def sha(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
+# pgrep -f pattern (extended regex) for a running game: Linux runs KSP.x86_64, macOS KSP.app/Contents/MacOS/KSP.
+# Dots are escaped: an unescaped "KSP.app" also matched paths such as .../devKSP/apps/... (a Mac agent daemon's
+# command line, 2026-11-19). ./ci ksp_running uses the same pattern.
+KSP_PROCESS = r"KSP\.x86_64|KSP\.app/Contents/MacOS/"
+
+
 def ksp_running():
     if os.name == "nt":
         out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
         return "KSP_x64.exe" in out
-    # Linux runs KSP.x86_64, macOS KSP.app/Contents/MacOS/KSP (same patterns as ./ci ksp_running)
-    return subprocess.run(["pgrep", "-f", "KSP.x86_64|KSP.app"], capture_output=True).returncode == 0
+    return subprocess.run(["pgrep", "-f", KSP_PROCESS], capture_output=True).returncode == 0
 
 
 def sketch_text():
