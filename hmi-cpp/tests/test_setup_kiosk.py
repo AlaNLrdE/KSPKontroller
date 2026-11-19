@@ -78,7 +78,7 @@ class KioskTest(unittest.TestCase):
             self.assertEqual(args.count('quiet'), 1)
 
     def test_script_names_its_deployed_path(self):
-        self.assertIn('~/ksphmi/cpp/systemd/setup-kiosk.sh', SCRIPT.read_text())
+        self.assertIn('~/.local/share/ksphmi/systemd/setup-kiosk.sh', SCRIPT.read_text())
 
     def test_script_installs_the_splash_and_can_undo(self):
         text = SCRIPT.read_text()
@@ -93,7 +93,8 @@ class KioskTest(unittest.TestCase):
         lines = [l.strip() for l in unit.splitlines() if l.strip() and not l.startswith('#')]
         for line in ('DefaultDependencies=no', 'After=local-fs.target', 'Type=simple', 'User=@USER@',
                      'Group=video', 'SupplementaryGroups=video render audio', 'TimeoutStopSec=3',
-                     'RuntimeDirectory=ksphmi-intro', 'ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro.sh',
+                     'RuntimeDirectory=ksphmi-intro', 'ExecStart=/bin/sh @HOME@/.local/share/ksphmi/systemd/ksphmi-intro.sh',
+                     'Environment=KSPHMI_BIN=@HOME@/.local/bin/ksphmi',
                      'WantedBy=sysinit.target'):
             self.assertIn(line, lines)
         # dev-fb0.device timed out on late monitors and the unit never ran: the script waits for the screen itself.
@@ -160,7 +161,8 @@ class KioskTest(unittest.TestCase):
     def test_intro_script_falls_back_to_the_loading_screen(self):
         text = INTRO.read_text()
         self.assertIn('command -v mpv', text)
-        self.assertIn('exec "$app/build/ksphmi" --splash', text)
+        self.assertIn('bin="${KSPHMI_BIN:-$HOME/.local/bin/ksphmi}"', text)
+        self.assertIn('exec "$bin" --splash', text)
         self.assertIn('$dir/mpv.sock', text)
 
 

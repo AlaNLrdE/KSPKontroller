@@ -745,8 +745,8 @@ def check_hmi_render(ctx):
     """Draw time of the installed HMI on the Pi: ksphmi --bench draws demo frames in memory only (--offscreen never
     replaces the live framebuffer). The layout and clipping checks themselves are ctest's (./ci test_hmi)."""
     host = os.environ.get('HMI_HOST', 'ksphmi')
-    bench = ('KSPHMI_APP_DIR=~/ksphmi/cpp KSPHMI_LOCAL_CONFIG=/dev/null '
-             '~/ksphmi/cpp/build/ksphmi --bench 5 --offscreen --size 2520x1680')
+    bench = ('KSPHMI_APP_DIR=~/.local/share/ksphmi KSPHMI_LOCAL_CONFIG=/dev/null '
+             '~/.local/bin/ksphmi --bench 5 --offscreen --size 2520x1680')
     try:
         remote = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', host, bench],
                                 capture_output=True, text=True, timeout=30)
@@ -865,7 +865,7 @@ def check_hmi_intro(ctx):
         problems.append("setup-kiosk.sh does not mention ksphmi-intro.sh")
     if not script:
         problems.append("systemd/ksphmi-intro.sh missing")
-    if not re.search(r"^ExecStart=/bin/sh @HOME@/ksphmi/cpp/systemd/ksphmi-intro\.sh$", unit, re.M):
+    if not re.search(r"^ExecStart=/bin/sh @HOME@/\.local/share/ksphmi/systemd/ksphmi-intro\.sh$", unit, re.M):
         problems.append("ksphmi-splash.service does not run ksphmi-intro.sh")
     run_dir = re.search(r"^RuntimeDirectory=(\S+)$", unit, re.M)
     hdr_dir = re.search(r'INTRO_DIR = "/run/([^"]+)"', header)
@@ -979,7 +979,7 @@ def check_hmi(ctx):
 
     host = os.environ.get("HMI_HOST", "ksphmi")
     probe = ("systemctl --user is-active ksphmi.service; systemctl --user show ksphmi.service -p NRestarts --value; "
-             "cat ~/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
+             "cat ~/dev/run/ksphmi/env 2>/dev/null; echo \"client=${SSH_CLIENT%% *}\"; "
              "echo \"fbblank=$(cat /sys/class/graphics/fb0/blank 2>/dev/null)\"; "
              # The output the running HMI chose (its 'screen WxH (<kind>)' line) and every HDMI connector's state
              "echo \"screenline=$(journalctl --user -u ksphmi.service -b --no-pager -o cat 2>/dev/null "
@@ -1001,7 +1001,7 @@ def check_hmi(ctx):
              "echo \"fbrule=$(test -f /etc/udev/rules.d/99-ksphmi-fb.rules && echo yes || echo no)\"; "
              "echo \"mpv=$(command -v mpv >/dev/null && echo yes || echo no)\"; "
              "echo \"journal=$(test -f /etc/systemd/journald.conf.d/50-ksphmi-persistent.conf && echo yes || echo no)\"; "
-             "echo \"kioskwant=$(sha256sum ~/ksphmi/cpp/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
+             "echo \"kioskwant=$(sha256sum ~/.local/share/ksphmi/systemd/setup-kiosk.sh 2>/dev/null | cut -d' ' -f1)\"; "
              "echo \"kioskhave=$(cat /etc/ksphmi-kiosk.applied 2>/dev/null)\"")
     try:
         r = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", host, probe],
@@ -1042,12 +1042,12 @@ def check_hmi(ctx):
            "service enabled with lingering" if autostart else "enable service and loginctl lingering")
     missing = kiosk_problems(env)
     report("WARN" if missing else "PASS", "hmi: kiosk boot",
-           "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/ksphmi/cpp/systemd/setup-kiosk.sh on the Pi), "
+           "missing: %s; ./ci deploy_hmi applies it (or sudo sh ~/.local/share/ksphmi/systemd/setup-kiosk.sh on the Pi), "
            "then reboot" % ", ".join(missing)
            if missing else "intro unit and mpv, quiet console, no firmware splash, login prompt masked")
-    cpp = "/ksphmi/cpp/build/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
+    cpp = "/.local/bin/ksphmi" in env.get("execstart", "") and env.get("oldunit") == "no"
     report("PASS" if cpp else "WARN", "hmi: C++ unit",
-           "ksphmi.service runs ~/ksphmi/cpp/build/ksphmi" if cpp else
+           "ksphmi.service runs ~/.local/bin/ksphmi" if cpp else
            "ksphmi.service is not the C++ unit or ksphmi-cpp.service is left over: ./ci deploy_hmi")
 
 

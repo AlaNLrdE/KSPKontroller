@@ -162,7 +162,8 @@ PI_LIMITS = """read-only diagnostics of the Pi and of ksphmi
    `git pull --ff-only` in the main checkout, Python tests and edits only inside a new worktree under
    .claude/worktrees/ (never build hmi-cpp on the Pi), and measurements the request explicitly scheduled (e.g.
    tools/latency only after the coordinator's GO).
-3. Never deploy, flash, push, merge, restart/signal ksphmi, touch ~/ksphmi, GameData or boot config, or use sudo.
+3. Never deploy, flash, push, merge, restart/signal ksphmi, touch the installed HMI (~/.local/bin/ksphmi,
+   ~/.local/share/ksphmi) or ~/dev/run, GameData or boot config, or use sudo.
    The only restart allowed is `systemctl --user restart agent-mailbox.service` (you operate the mailbox server),
    only when the server is unhealthy (check status and journalctl _SYSTEMD_USER_UNIT=agent-mailbox.service first);
    report every such restart with INFO to all."""

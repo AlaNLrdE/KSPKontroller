@@ -63,7 +63,7 @@ target_link_libraries(ksphmi PRIVATE ksphmi_ui)
 
 enable_testing()
 # Where the test programs read config.toml and tests/data: this source tree, or "." for binaries that run from a
-# copy of hmi-cpp in their working directory (./ci build_hmi_pi: the Pi runs them in ~/ksphmi/cpp.next).
+# copy of hmi-cpp in their working directory (./ci build_hmi_pi: the Pi runs them in ~/.local/share/ksphmi.next).
 set(KSPHMI_TEST_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}" CACHE STRING "config.toml and tests/data for the tests")
 add_executable(ksphmi_tests tests/test_core.cpp)
 target_link_libraries(ksphmi_tests PRIVATE ksphmi_core)
