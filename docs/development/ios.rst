@@ -118,7 +118,7 @@ Planned shared changes
 
 Each item is a small change behind an iOS guard (``TARGET_OS_IOS``) or a neutral default elsewhere,
 sent for review to pc-claude / mac-claude, with ``./ci test_hmi`` and the aarch64 cross build plus ctest
-green. Item 1 is implemented; the others are not yet.
+green. Items 1 and 2 are implemented; the others are not yet.
 
 1. **Background and foreground** (implemented, ``hmi-cpp/src/main.cpp`` event loop, no ``#ifdef``: desktop
    platforms never send these events): on ``SDL_APP_WILLENTERBACKGROUND`` or ``SDL_APP_DIDENTERBACKGROUND``
@@ -128,9 +128,18 @@ green. Item 1 is implemented; the others are not yet.
    drawing paused`` / ``app back in foreground: drawing resumed``). The telemetry source keeps its own
    thread: sockets dropped while suspended go through the existing reconnect path. Not yet run on the
    simulator or a device.
-2. **Safe area**: the notch / Dynamic Island and the home indicator must not cover instruments or buttons.
-   SDL2 has no safe-area API: ``platform.mm`` reads ``UIWindow.safeAreaInsets`` and the display lays out
-   inside the inset rectangle (zero insets on every other platform).
+2. **Safe area** (implemented, ``hmi-cpp/include/safearea.hpp`` + ``Output`` in ``hmi-cpp/src/main.cpp``):
+   the notch / Dynamic Island and the home indicator must not cover instruments or buttons. SDL2 has no
+   safe-area API: ``platform.mm`` defines ``ksphmi_platform_safe_insets()``, which reads the SDL window's
+   ``safeAreaInsets`` at call time and returns drawable pixels (points times the screen's ``nativeScale``,
+   rounded up). Every other platform gets an inline default returning zeros, with no new source or link
+   change. ``Output`` gives Canvas and Display the drawable minus the insets, sets the renderer viewport at
+   the insets' offset, fills the margins black before each present and subtracts the offset from touch
+   positions. The insets are read again at start, after every size change, on foreground resume and once
+   per frame (a turn between the two landscape orientations moves the island without a size change). Zero
+   insets never touch the viewport, so other platforms behave as before. Log line on every change:
+   ``safe area insets left L top T right R bottom B (drawable WxH)``. Layout code is unchanged: the
+   portrait arrangement is item 3.
 3. **Portrait layout**: ``flight_layout()`` was designed for landscape screens; a portrait iPhone
    (about 9:19.5) needs its own arrangement of the same panels, approved by the user from renderer
    captures, before it is implemented.

@@ -8,10 +8,12 @@
 //    refuses UDP broadcast without the multicast entitlement, which a free Apple ID cannot get.
 //  - SDL hints (environment form): both orientations, screen kept awake, home indicator dimmed.
 //  - KSPHMISceneDelegate: the UIScene lifecycle iOS 27 requires (see the comment above the class).
+//  - ksphmi_platform_safe_insets(): the window safe area for hmi-cpp (include/safearea.hpp), at the end.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
+#include <cmath>
 #include <cstdlib>
 
 namespace {
@@ -175,3 +177,29 @@ void hook_sdl_window_init() {
 }
 
 @end
+
+// --- Safe area (hmi-cpp/include/safearea.hpp) ------------------------------------------------------------------
+// main.cpp's Output asks for the insets at start, after every SIZE_CHANGED (rotation), on foreground resume and
+// once per frame (a turn between the two landscape orientations moves the island without a size change), so
+// they are read from UIKit at call time, never cached. SDL's window is created with SDL_WINDOW_ALLOW_HIGHDPI,
+// for which SDL's Metal/GL views use the screen's nativeScale as contentScaleFactor: points * nativeScale =
+// drawable pixels. Rounded up, so nothing is drawn under the covered edge.
+extern "C" void ksphmi_platform_safe_insets(int* left, int* top, int* right, int* bottom) {
+    *left = *top = *right = *bottom = 0;
+    if (!NSThread.isMainThread) return;  // UIKit: SDL_main runs on the main thread on iOS
+    @autoreleasepool {
+        id<UIApplicationDelegate> app = UIApplication.sharedApplication.delegate;
+        UIWindow* window = [app respondsToSelector:@selector(window)] ? app.window : nil;  // SDL's first window
+        if (!window) {
+            UIWindowScene* scene = ksphmi_scene;
+            window = scene ? scene.keyWindow : nil;
+        }
+        if (!window) return;
+        const UIEdgeInsets insets = window.safeAreaInsets;
+        const CGFloat scale = window.screen ? window.screen.nativeScale : 1.0;
+        *left = static_cast<int>(std::ceil(insets.left * scale));
+        *top = static_cast<int>(std::ceil(insets.top * scale));
+        *right = static_cast<int>(std::ceil(insets.right * scale));
+        *bottom = static_cast<int>(std::ceil(insets.bottom * scale));
+    }
+}

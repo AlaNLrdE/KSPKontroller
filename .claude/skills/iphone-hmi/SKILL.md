@@ -75,6 +75,16 @@ build + ctest before merge.
   before the loop can present again. If iOS still kills the app on backgrounding, move the pause flag into an
   `SDL_AddEventWatch` callback (synchronous) as SDL's docs recommend. Unverified on simulator/device so far.
 
+## Safe area
+
+- SDL2 has no safe-area API: `ksphmi_platform_safe_insets()` in platform.mm reads `window.safeAreaInsets` at
+  call time (never cache: rotation moves them) and `Output` (main.cpp) draws through `SDL_RenderSetViewport`
+  at the insets' offset. SDL resets the viewport to the whole drawable on every SIZE_CHANGED, and keeps it across
+  `SDL_SetRenderTarget` (backup/restore), so it is applied again in every `refresh_size()`.
+  `SDL_RenderClear` ignores the viewport: the margins are refilled black just before each present.
+- A turn LandscapeLeft <-> LandscapeRight keeps the window size: no SIZE_CHANGED, so the loop also polls
+  `out.safe_area_moved()` every frame. Zero insets (all other platforms) never call SetViewport.
+
 ## Handing the branch to the PC
 
 The mailbox cannot carry files (no upload; evidence is served only from the server host, MAX_BODY 16 KB per
