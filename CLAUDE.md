@@ -145,6 +145,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
 - On the Mac the shell is zsh: a command kept in a variable (`M="python3 tools/agent_mailbox.py ..."; $M lock ...`)
   is not word-split and fails with exit 127, and the sequence went on to push without the lock (2026-11-17).
   Write each lock/push command in full and check the lock result before the guarded action.
+- In Claude Code's Bash tool on Windows, `set -e` did not stop a push sequence: after a rejected push it
+  still printed the success line (2026-11-19). Guard every publish step with `if ! cmd; then ...; exit 1; fi`,
+  release the lock on each exit, and compare `git rev-parse main` with `origin/main` after a fresh fetch.
 
 - Repo text files are CRLF. Edit multi-line text with a small Python script that keeps CRLF (see the `edit()` helper
   pattern in `tools/` docs/skill) and `assert s.count(old) == 1`; anchors with `\n` silently fail otherwise.
