@@ -92,22 +92,60 @@ class MailboxError(ValueError):
         self.code = code
 
 
+def private_temp(path):
+    """A temp file next to path, unique per process and call: two clients of one identity (an open session's
+    watch and the wake daemon's) must never truncate each other's half-written temp file, which once left a
+    0-byte cursor behind (mailbox #643)."""
+    return path.with_name('%s.%d.%s.tmp' % (path.name, os.getpid(), uuid.uuid4().hex[:8]))
+
+
+def replace_file(temp, path, attempts=20):
+    """os.replace with retries: on Windows it fails with WinError 5/32 while another process has path open."""
+    for attempt in range(attempts):
+        try:
+            temp.replace(path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                try:
+                    temp.unlink()
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def write_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.tmp')
+    temp = private_temp(path)
     with temp.open('w', encoding='utf-8') as f:
         os.chmod(temp, 0o600)
         json.dump(value, f, indent=2)
         f.write('\n')
         f.flush()
         os.fsync(f.fileno())
-    temp.replace(path)
+    replace_file(temp, path)
 
 
 def read_json(path, default):
+    """Client state (cursor, track, done, session): an empty or invalid file is moved aside as
+    *.corrupt-<time> with a warning and reads as the default, so one bad file cannot stop every watch."""
     path = Path(path)
-    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else default
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (ValueError, UnicodeDecodeError) as error:
+        aside = path.with_name('%s.corrupt-%s' % (path.name, datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')))
+        try:
+            path.replace(aside)
+            where = 'moved to %s' % aside.name
+        except OSError:
+            where = 'left in place'
+        print('MAILBOX warning: unreadable state file %s (%s), %s; using the default' % (path, error, where),
+              file=sys.stderr)
+        return default
 
 
 def digest(data):
@@ -144,13 +182,13 @@ def fsync_dir(path):
 def replace_bytes(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + '.tmp')
+    temp = private_temp(path)
     with temp.open('wb') as f:
         os.chmod(temp, 0o600)
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
-    temp.replace(path)
+    replace_file(temp, path)
     fsync_dir(path.parent)
 
 

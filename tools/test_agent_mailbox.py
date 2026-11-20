@@ -595,6 +595,41 @@ class MailboxTest(unittest.TestCase):
         with urllib.request.urlopen(self.config['url'] + '/client.py') as response:
             self.assertIn(b'class Journal:', response.read())
 
+    def test_empty_or_invalid_state_file_reads_as_default_and_is_moved_aside(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (('cursor.json', b''), ('track.json', b'{"half": ')):
+                path = Path(d) / name
+                path.write_bytes(body)
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(agent_mailbox.read_json(path, {'through': 0}), {'through': 0})
+                self.assertIn('unreadable state file', err.getvalue())
+                self.assertFalse(path.exists())
+                self.assertEqual(len(list(Path(d).glob(name + '.corrupt-*'))), 1)
+                agent_mailbox.write_json(path, {'through': 7})
+                self.assertEqual(agent_mailbox.read_json(path, {}), {'through': 7})
+            self.assertEqual(list(Path(d).glob('*.tmp')), [])
+
+    def test_state_writes_use_private_temps_and_retry_a_busy_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'cursor.json'
+            self.assertNotEqual(agent_mailbox.private_temp(path), agent_mailbox.private_temp(path))
+            real, calls = Path.replace, []
+
+            def flaky(self_, target):
+                calls.append(target)
+                if len(calls) < 3:
+                    raise PermissionError(32, 'in use')
+                return real(self_, target)
+            with patch.object(Path, 'replace', flaky), patch.object(agent_mailbox.time, 'sleep'):
+                agent_mailbox.write_json(path, {'through': 3})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(agent_mailbox.read_json(path, {}), {'through': 3})
+            with patch.object(Path, 'replace', side_effect=PermissionError(32, 'in use')), \
+                    patch.object(agent_mailbox.time, 'sleep'):
+                with self.assertRaises(PermissionError):
+                    agent_mailbox.write_json(path, {'through': 4})
+            self.assertEqual(list(Path(d).glob('*.tmp')), [])
+
     def test_long_poll_wakes_and_cursor_survives_restart(self):
         mac, mac_path = self.agent('mac-claude')
         pc, pc_path = self.agent('pc-claude')
