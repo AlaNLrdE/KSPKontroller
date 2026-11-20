@@ -13,7 +13,7 @@ Type=simple
 WorkingDirectory=%h/dev/ksp1/KSPKontroller
 Environment=AGENT_DAEMON_REPO=%h/dev/ksp1/KSPKontroller
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py --config %h/dev/ksp1/KSPKontroller/build/agent-mailbox/%i.json run --max-runs 6
+ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py --config %h/dev/ksp1/KSPKontroller/build/agent-mailbox/%i.json run
 Restart=on-failure
 RestartSec=30
 Nice=10

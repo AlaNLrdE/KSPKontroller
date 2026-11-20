@@ -16,7 +16,7 @@ Wake rule: only a REQUEST or NOTICE addressed to the identity, its host group or
 seen starts ``claude -p`` with the identity's closed tool profile (``--permission-mode dontAsk``: anything not
 allowed is refused). INFO and RESULT never wake; the next run reads them. Incoming ACKs are marked done without a
 model. A message left pending (e.g. a REQUEST waiting for GO) does not start another run until a new waking message
-arrives. At most ``--max-runs`` runs per hour; a message whose runs failed three times is left for the interactive
+arrives. There is no hourly run limit; a message whose runs failed three times is left for the interactive
 session. Two consecutive failed runs send ``INFO daemon of <identity> unhealthy`` to all once per failure streak.
 A run that answers ``needs user`` notifies the user locally (macOS notification, Windows toast, INFO to the
 coordinator on Linux). After the machine sleeps the loop simply resumes and catches up (collect + pending).
@@ -453,17 +453,13 @@ def wakes(item, identity):
     return kind(item) in WAKE_KINDS and addressed_to(item, identity)
 
 
-def select(items, state, max_runs, now, identity):
+def select(items, state, identity):
     """True when a run is due: a REQUEST/NOTICE for this identity that no successful run has seen and that has not
-    failed MAX_FAILURES times. 'rate-limited' when one is due but max_runs ran in the last hour."""
+    failed MAX_FAILURES times."""
     seen, failures = state.get('seen', {}), state.get('failures', {})
     fresh = [i for i in items if wakes(i, identity) and i['id'] not in seen
              and failures.get(i['id'], 0) < MAX_FAILURES]
-    if not fresh:
-        return False
-    if len([t for t in state.get('runs', []) if t > now - 3600]) >= max_runs:
-        return 'rate-limited'
-    return True
+    return bool(fresh)
 
 
 # -- notifications and health -----------------------------------------------------------------------------------
@@ -611,7 +607,7 @@ def finish(config, identity, items, f, state, rc, output, name, ids, started, sy
     write_json(f['state'], state)
 
 
-def cycle(config, identity, f, max_runs, profile):
+def cycle(config, identity, f, profile):
     """One collect + pending + maybe a run. False only when collect failed (the caller backs off)."""
     if paused_until(f):
         return True  # never collect while an interactive session owns the identity
@@ -625,10 +621,7 @@ def cycle(config, identity, f, max_runs, profile):
         mb.mark_done(cfg, config, message_id=item['id'])
         log('ACK #%d %s from %s marked done' % (item['seq'], item['id'], item['sender']))
     items = [i for i in items if not is_ack(i)]
-    decision = select(items, state, max_runs, time.time(), identity)
-    if decision == 'rate-limited':
-        log('rate limit: %d runs in the last hour; new messages wait' % max_runs)
-    elif decision:
+    if select(items, state, identity):
         launch(config, identity, items, f, state, profile)
     return True
 
@@ -657,8 +650,8 @@ def run(args):
     lock = acquire_lock(f['lock'])
     if lock is None:
         sys.exit('another agent_daemon already runs for %s' % identity)
-    log('listening as %s in %s (tools %s, config %s, profile %s, max %d runs/hour)' % (
-        identity, WORK, TOOLS, config, profile['name'], args.max_runs))
+    log('listening as %s in %s (tools %s, config %s, profile %s)' % (
+        identity, WORK, TOOLS, config, profile['name']))
     was_paused = False
     last = time.time()
     streak = 0  # consecutive failed collects: watch returns at once then, so back off instead of spinning
@@ -683,7 +676,7 @@ def run(args):
             log('watch failed: %r' % e)
             time.sleep(30)
         try:
-            ok = cycle(config, identity, f, args.max_runs, profile)
+            ok = cycle(config, identity, f, profile)
         except Exception as e:  # keep listening through server outages
             log('cycle failed: %r' % e)
             ok = False
@@ -708,7 +701,9 @@ def main(argv=None):
                     'Windows, else python3)')
     sub = ap.add_subparsers(dest='command', required=True)
     r = sub.add_parser('run', help='listen and start headless runs (the service)')
-    r.add_argument('--max-runs', type=int, default=6, help='headless runs per hour (default 6)')
+    # Kept only for installed services (Task Scheduler, launchd, systemd) that still pass `run --max-runs 6`:
+    # accepted and ignored, there is no hourly run limit any more.
+    r.add_argument('--max-runs', type=int, help=argparse.SUPPRESS)
     r.add_argument('--log', help='append the log to this file (pythonw/Task Scheduler has no console)')
     for parser in (r, sub.add_parser('profile', help='print the tool rules a headless run gets')):
         parser.add_argument('--profile', choices=sorted(PROFILES),
