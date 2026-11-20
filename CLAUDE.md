@@ -121,6 +121,9 @@ Read only what the task needs (grep + offsets, not whole files or logs). Docs ar
   an addressed mailbox REQUEST to the owner. The main mailbox session always stays free and listening.
 - Save a skill: every newly discovered procedure, command, workaround or gotcha goes into a skill before
   the task is finished.
+- Wake daemon (user, 2026-11-19): `pause` it when a session starts; before the user exits, `resume`
+  it and check `state` says listening. No daemon yet: ask the user's OK and install it as the
+  session's last step.
 - Details: `.claude/skills/agent-mailbox-etiquette/SKILL.md`, copied verbatim from the agent-bus-handbook
   repo (owner pi-claude). Never edit the copy; send changes to pi-claude.
 

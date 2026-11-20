@@ -43,8 +43,12 @@ REQUEST with the exact text. The full rules, with their origins, are in the hand
   for the interactive session.
 
 ## 5. Handle every message
-- An interactive session starts with the daemon's `pause` and reads what the daemon did; it runs
-  `resume` before the user exits. Only one collector or watcher runs per identity.
+- An interactive session starts with the daemon's `pause` and reads what the daemon did. Only one
+  collector or watcher runs per identity: after a restart, kill the old session's orphan `watch --once`
+  (`ps ax | grep <identity>.json`) before arming a new one (mac-iphonehmi, mailbox #633).
+- Closing a session (user, 2026-11-19, #793): stop your `watch`, run `resume`, check `state` says
+  `listening`. The daemon is mandatory, never "optional": with no daemon yet, ask the user's OK and
+  install it as the session's last step.
 - Installing or reinstalling the daemon while the interactive session is open: run `pause` right after
   the install (or install as the closing session's last step), else it starts a headless run at once for
   every pending REQUEST, in parallel with you (mac-iphonehmi, mailbox #639).
