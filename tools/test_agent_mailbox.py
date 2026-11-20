@@ -116,6 +116,89 @@ class MailboxTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 j.register(bad, S1, 'x', '/')
 
+    # -- register gate (mailbox #807) ------------------------------------------------------------------------------
+    def gate(self, content):
+        path = self.root / 'allowlist.json'
+        if content is None:
+            if path.exists():
+                path.unlink()
+        else:
+            path.write_bytes(content if isinstance(content, bytes) else json.dumps(content).encode())
+
+    def test_register_gate_is_off_without_an_allowlist(self):
+        self.agent('pc-newcomer')  # current behaviour: any HOST-AGENT identity registers
+        self.assertEqual(request(self.config, '/health')['register_gate'], 'off')
+        self.assertEqual(request(self.config, '/agents')['register_gate'], 'off')
+
+    def test_register_gate_refuses_unknown_and_admits_listed_identities(self):
+        self.gate(['pc-claude', 'pi-claude'])
+        stranger, stranger_path = dict(self.config, peer='pc-stranger'), self.root / 'pc-stranger.json'
+        stranger_path.write_text(json.dumps(stranger))
+        with contextlib.redirect_stderr(io.StringIO()) as log:
+            error = self.assertRefused(403, register, stranger, stranger_path)
+        self.assertIn(agent_mailbox.GATE_REFUSAL, str(error))
+        self.assertIn('refused new identity pc-stranger', log.getvalue())  # the server log line
+        self.assertNotIn('pc-stranger', self.journal.agents)
+        self.assertFalse(stranger_path.with_suffix('.session.json').exists())
+        self.agent('pc-claude')
+        self.assertEqual(request(self.config, '/health')['register_gate'], 'on (2 identities)')
+        self.gate(['pc-claude', 'pi-claude', 'pc-stranger'])  # re-read on each register: no restart
+        register(stranger, stranger_path)
+        self.assertEqual(request(self.config, '/agents')['register_gate'], 'on (3 identities)')
+
+    def test_register_gate_never_locks_out_a_journal_identity(self):
+        j = self.journal
+        j.register('pc-claude', S1, 'claude', '/a', now=1000.0)
+        j.register('mac-claude', S1, 'claude', '/m', now=1000.0)
+        self.gate(['pc-claude'])  # mac-claude is live but was left off the list during the rollout
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(j.register('pc-claude', S1, 'claude', '/a', now=1010.0)['state'], 'active')  # renew
+            self.assertEqual(j.register('pc-claude', S2, 'claude', '/b', takeover=True,
+                                        now=1200.0)['cwd'], '/b')  # takeover
+            self.assertEqual(j.register('mac-claude', S1, 'claude', '/m', now=1020.0)['state'], 'active')
+            j.inbox('mac-claude', S1, now=1021.0)  # its lease renewal (heartbeat) keeps working
+            self.assertEqual(j.register('mac-claude', S2, 'claude', '/n', takeover=True,
+                                        now=1021.0 + LEASE + 1)['cwd'], '/n')
+            with self.assertRaises(Conflict):  # the other gates (live lease) still apply
+                j.register('pc-claude', S1, 'claude', '/a', takeover=True, now=1210.0)
+            with self.assertRaises(agent_mailbox.Forbidden):
+                j.register('mac-codex', S1, 'codex', '/x', now=1030.0)
+
+    def test_invalid_allowlist_fails_closed_for_new_identities_only(self):
+        self.journal.register('pc-claude', S1, 'claude', '/a', now=time.time())
+        newcomer, newcomer_path = dict(self.config, peer='pc-newcomer'), self.root / 'pc-newcomer.json'
+        newcomer_path.write_text(json.dumps(newcomer))
+        for bad in (b'["pc-claude",', b'{"pc-claude": true}', ['pc-claude', 'pc'], ['pc-claude', 7], b'\xff\xfe'):
+            self.gate(bad)
+            with contextlib.redirect_stderr(io.StringIO()) as log:
+                error = self.assertRefused(403, register, newcomer, newcomer_path)
+                self.assertEqual(self.journal.register('pc-claude', S1, 'claude', '/a')['state'], 'active')
+            self.assertIn('allowlist is invalid', str(error))
+            self.assertIn('refused new identity pc-newcomer', log.getvalue())
+            self.assertIn('invalid allowlist', request(self.config, '/health')['register_gate'])
+        self.assertTrue(request(self.config, '/health')['ok'])  # the server never crashed
+        self.gate(None)
+        register(newcomer, newcomer_path)
+
+    def test_register_gate_cli_shows_state_and_exits_non_zero_on_403(self):
+        import subprocess
+        import sys
+        config, path = self.agent('pi-claude')
+        self.gate(['pi-claude'])
+        out = io.StringIO()
+        with patch('sys.argv', ['agent_mailbox.py']), contextlib.redirect_stdout(out):
+            agent_mailbox.main(['--config', str(path), 'agents'])
+            agent_mailbox.main(['--config', str(path), 'status'])
+        self.assertEqual(out.getvalue().count('MAILBOX register gate: on (1 identities)'), 2)
+        stranger = self.root / 'pc-stranger.json'
+        stranger.write_text(json.dumps(dict(self.config, peer='pc-stranger')))
+        script = Path(agent_mailbox.__file__).resolve()
+        with contextlib.redirect_stderr(io.StringIO()):
+            run = subprocess.run([sys.executable, str(script), '--config', str(stranger), 'register'],
+                                 capture_output=True, text=True, timeout=60, cwd=str(self.root))
+        self.assertEqual(run.returncode, 1)
+        self.assertIn('MAILBOX error: HTTP 403: ' + agent_mailbox.GATE_REFUSAL, run.stderr)
+
     def test_agents_on_one_host_have_separate_identities_and_inboxes(self):
         mac, mac_path = self.agent('mac-claude')
         claude, claude_path = self.agent('pc-claude')

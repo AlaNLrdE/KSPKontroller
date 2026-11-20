@@ -245,7 +245,9 @@ Rule: no dead agents (session takeover, user 2026-11-18)
 --------------------------------------------------------
 
 1. Each repo/machine declares its identity explicitly in its CLAUDE.md and in
-   ``build/agent-mailbox/<identity>.json``; never infer it from the cwd the server shows.
+   ``build/agent-mailbox/<identity>.json``; never infer it from the cwd the server shows. A brand-new identity
+   registers only after the mailbox operator adds it to the server's ``allowlist.json`` (HTTP 403 otherwise;
+   ``docs/communication.rst``, register gate); identities already in the journal are never gated.
 2. Before taking over, confirm the old session is dead: server state ``gone`` **and** no live process of the
    same agent on that machine/folder. Only then ``register --takeover``. If the lease is alive (HTTP 409),
    work without the mailbox and tell the user.
