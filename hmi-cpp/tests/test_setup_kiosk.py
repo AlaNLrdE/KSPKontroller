@@ -85,26 +85,8 @@ class KioskTest(unittest.TestCase):
         for needle in ('--undo', 'ksphmi-splash.service', 'TAG+="systemd"', 'mask --now getty@tty1',
                        'apt-get install -y --no-install-recommends mpv', '/etc/ksphmi-mpv.installed',
                        'unmask getty@tty1', 'enable-linger', '.ksphmi-backup', 'Storage=persistent',
-                       '/etc/ksphmi-kiosk.applied', 'ATTR{name}=="vc4drmfb"', 'disable --now ksphmi-splash',
-                       '"$here/90-wifi-fallback" "$wifi"', '"$stamp" "$wifi"'):
+                       '/etc/ksphmi-kiosk.applied', 'ATTR{name}=="vc4drmfb"', 'disable --now ksphmi-splash'):
             self.assertIn(needle, text)
-
-    def test_wifi_fallback_follows_the_ethernet_link(self):
-        dispatcher = SCRIPT.parent / '90-wifi-fallback'
-        with tempfile.TemporaryDirectory() as folder:
-            log = Path(folder) / 'nmcli.log'
-            fake = Path(folder) / 'nmcli'
-            fake.write_text('#!/bin/sh\necho "$*" >> "%s"\n' % log)
-            fake.chmod(0o755)
-            env = dict(os.environ, PATH=folder + os.pathsep + os.environ['PATH'])
-            for iface, action in (('eth0', 'up'), ('eth0', 'down'), ('wlan0', 'up'), ('wlan0', 'down'),
-                                  ('eth0', 'dhcp4-change')):
-                subprocess.run(['sh', str(dispatcher), iface, action], env=env, check=True)
-            deadline = time.time() + 5  # "down" starts nmcli in the background
-            while time.time() < deadline and log.exists() and len(log.read_text().splitlines()) < 2:
-                time.sleep(0.05)
-            self.assertEqual(log.read_text().splitlines(),
-                             ['connection down wifi-fallback', 'connection up wifi-fallback'])
 
     def test_splash_unit_is_early_long_running_and_never_holds_up_the_boot(self):
         unit = (SCRIPT.parent / 'ksphmi-splash.service').read_text()

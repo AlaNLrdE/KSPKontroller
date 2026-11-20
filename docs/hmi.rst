@@ -1139,14 +1139,6 @@ The script is idempotent and keeps SSH, the network and the serial console. It:
   ``RuntimeMaxSec=660``, ``TimeoutStopSec=3``, running ``~/.local/share/ksphmi/systemd/ksphmi-intro.sh`` as the
   HMI user with the groups ``video``, ``render`` and ``audio`` (``KSPHMI_BIN=~/.local/bin/ksphmi`` for the
   fallback loading screen);
-* installs the NetworkManager dispatcher ``/etc/NetworkManager/dispatcher.d/90-wifi-fallback`` (from
-  ``hmi-cpp/systemd/``): Ethernet is preferred and the Wi-Fi profile ``wifi-fallback`` is used only without the
-  cable. ``eth0`` up takes the Wi-Fi down, so ``kspKontrollerPi.local`` never announces two addresses (the PC's
-  mDNS flip); ``eth0`` down brings it up, and at boot without the cable NetworkManager autoconnects it. The profile
-  holds the network name and password, so it is never in the repo: create it once with
-  ``sudo nmcli --ask device wifi connect <SSID> name wifi-fallback`` and
-  ``sudo nmcli connection modify wifi-fallback ipv4.route-metric 600 ipv6.route-metric 600``; the script prints
-  that hint while it is missing, and ``--undo`` removes only the dispatcher;
 * enables lingering and warns when ``ksphmi.service`` is not enabled yet (``./ci install_hmi`` or
   ``./ci deploy_hmi`` does that).
 
