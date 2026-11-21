@@ -1221,6 +1221,8 @@ class IdentityResolutionTest(unittest.TestCase):
                          self.state / 'pc-new.json')  # nothing yet: the state dir is where it goes
 
     def test_whoami_sends_nothing_and_the_cli_picks_the_resolved_config(self):
+        # Both in the state dir: a real build/agent-mailbox config in this checkout must not win
+        (self.state / 'pc-claude.json').write_text('{}', encoding='utf-8')
         (self.state / 'pc-codex.json').write_text(json.dumps(dict(url='http://127.0.0.1:9', token='t',
                                                                   peer='pc-codex')), encoding='utf-8')
         out, cwd = io.StringIO(), os.getcwd()
