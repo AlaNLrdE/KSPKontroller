@@ -28,3 +28,4 @@ description: Resolving, claiming and releasing a mailbox identity by (host, repo
 - Tests: `IdentityResolutionTest` and the claim tests in `tools/test_agent_mailbox.py`, `HomePointerTest` in
   `tools/test_agent_daemon.py`. In the Bash tool, Python test strings with many backslashes get mangled in heredocs:
   write edit scripts with the Write tool and build backslashes with `chr(92)`.
+- Installing a copy of the mailbox (server in ~/.local/lib/agent-mailbox, or any other folder): copy `tools/agent_identity.py` next to `agent_mailbox.py`. Since 9388126 it is imported from the script's own folder; the Pi server's first restart on 9388126 crashed with `ModuleNotFoundError: agent_identity` (mailbox #942).

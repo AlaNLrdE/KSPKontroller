@@ -197,7 +197,9 @@ Agent coordination mailbox
 ``tools/agent_mailbox.py`` is a development-only, standard-library LAN service, separate from
 all game protocols. Since 2026-11-18 the Raspberry Pi hosts it (user decision: the Pi is always on, the Mac and the
 PC come and go): user unit ``agent-mailbox.service`` (``tools/systemd/agent-mailbox.service``, lingering, no sudo),
-program ``~/.local/lib/agent-mailbox/agent_mailbox.py`` (a deliberate copy of the script) and data folder
+program ``~/.local/lib/agent-mailbox/agent_mailbox.py`` plus ``agent_identity.py`` next to it (deliberate copies
+of both scripts: since 9388126 ``agent_mailbox.py`` imports ``agent_identity.py`` from its own folder and the
+server does not start without it, mailbox #942) and data folder
 ``~/dev/run/mailbox`` (private ``server.json`` with the token, the log ``shared.jsonl``, ``backup/`` and
 ``evidence/``; ``~/agent-mailbox`` before 2026-11-19), URL ``http://kspKontrollerPi.local:50380`` (``localhost`` on the Pi).
 To move it: stop the old server, copy ``shared.jsonl`` (plus ``backup/`` and ``evidence/``) unchanged and check its
