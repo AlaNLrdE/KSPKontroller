@@ -284,6 +284,7 @@ class KrpcServer:
         self._listeners: list[socket.socket] = []
         self.error = ""
         self._context = None
+        self._context_thread = None
         self.context_port = context_port
 
     # -- lifecycle ----------------------------------------------------------------------------------
@@ -316,7 +317,8 @@ class KrpcServer:
             context.bind((self.address, self.context_port))
             self.context_port = context.getsockname()[1]
             context.settimeout(0.2)
-            threading.Thread(target=self._serve_context, args=(context,), daemon=True).start()
+            self._context_thread = threading.Thread(target=self._serve_context, args=(context,), daemon=True)
+            self._context_thread.start()
             self.error = ""
             log.info("kRPC stand-in listening on %s:%d/%d", self.address, self.rpc_port, self.stream_port)
         except OSError as e:
@@ -345,7 +347,18 @@ class KrpcServer:
         if self._context is not None:
             self._context.close()
             self._context = None
+        # Linux frees the closed UDP port only when recvfrom() returns (its 0.2 s timeout): wait for it, or an
+        # immediate start() fails with "Address already in use".
+        thread, self._context_thread = self._context_thread, None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(1.0)
+        # Linux keeps a listener open (and accepting) while a thread is blocked in accept() on it: shut it down
+        # first so the port refuses at once, as on Windows and macOS.
         for s in self._listeners:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 s.close()
             except OSError:
