@@ -222,8 +222,10 @@ Using a hostname alone does not install a Windows mDNS responder or configure a 
 
 The server is initialized once with ``init --url http://HOST:50380 --peer mac-claude`` (which
 creates the token) and started with ``serve --bind HOST``. Every other agent creates its own
-config with the same URL and token: ``init --url ... --peer pc-codex --token TOKEN``, at
-``build/agent-mailbox/pc-codex.json``. The public script is available at ``/client.py`` for
+config with the same URL and token: ``init --url ... --peer IDENTITY --token TOKEN``, at
+``build/agent-mailbox/<identity>.json``. ``init`` without ``--token`` generates a new random token, which only
+suits the config a server is started with; it prints a ``MAILBOX warning:`` line on stderr, because a client
+with that token gets HTTP 401 on every call. The public script is available at ``/client.py`` for
 bootstrap; no directories, credentials or history files are served. Pass ``--config PATH``
 before the subcommand::
 
@@ -293,16 +295,22 @@ protocol 3 and enforced by protocol 4:
   owner will edit; no two agents edit the same file at the same time (separate worktrees, as for subagents).
 * **Locks for shared resources.** Before using one, the agent acquires its lock and releases it after its RESULT:
   ``pi-deploy`` (``./ci deploy_hmi``), ``ksp-gamedata`` (plugin install into the shared game, which still needs the
-  user's OK and KSP closed), ``board-flash`` (sketch upload and board tests) and ``push-main`` (push to
-  ``origin/main``, which still needs the user's OK)::
+  user's OK and KSP closed), ``board-flash`` (sketch upload and board tests), ``push-main`` (push to
+  ``origin/main``, which still needs the user's OK) and ``ios-simulator`` (the Mac's Xcode simulators, shared by
+  mac-agentsapp and mac-iphonehmi). Lock names are free-form (``[a-z0-9._-]``, up to 40 characters), so a new
+  shared resource needs no server change; agree its name in the roster first. Each agent uses its own config::
 
-     python tools/agent_mailbox.py --config build/agent-mailbox/pc-codex.json lock acquire pi-deploy --reason "deploy 3634558"
-     python tools/agent_mailbox.py --config build/agent-mailbox/pc-codex.json lock release pi-deploy
-     python tools/agent_mailbox.py --config build/agent-mailbox/pc-codex.json locks
+     python tools/agent_mailbox.py --config build/agent-mailbox/<identity>.json lock acquire pi-deploy --reason "deploy 3634558"
+     python tools/agent_mailbox.py --config build/agent-mailbox/<identity>.json lock release pi-deploy
+     python tools/agent_mailbox.py --config build/agent-mailbox/<identity>.json locks
 
   A lock held by another agent is refused with its holder, reason and expiry (HTTP 409). Wait or message the
   holder; never work around it. Locks expire by themselves (TTL 60 s to 4 h, default 30 min), so a crashed agent
   cannot block for ever; renew a long job by acquiring again. Locks persist in the log.
+  A ``HOST-AGENT`` client sends its identity and session with ``lock`` (it renews the lease like any other call),
+  and the server then **binds** the lock: only that identity's live session may renew or release it. Any other
+  session of that identity, and an older session-less client that merely names the holder, gets HTTP 409. Older
+  clients still take and release unbound locks as before.
 * **Delegate and stay available** (user, 2026-11-17). An agent that receives new work through the mailbox or from
   the user does not do it inline: it delegates it at once to other agents (its own subagents in their own
   worktrees, or another mailbox agent as an addressed REQUEST) and stays free to take and schedule further work in
@@ -326,7 +334,19 @@ separately. ``/health`` reports ``"protocol": 4``.
   HTTP 409, even with ``--takeover``. After the lease expired or the holder ran ``register --release``,
   another session takes the identity only with ``register --takeover``, once the old agent is confirmed gone; the
   old session is then refused. ``agents`` lists identity, tool, directory, last heartbeat and state: ``active``
-  (lease alive), ``idle`` (expired less than an hour ago) or ``gone`` (released or older).
+  (lease alive), ``idle`` (expired less than an hour ago) or ``gone`` (released or older); user identities show
+  ``away`` instead of ``idle``/``gone`` and are marked ``kind=user`` (``/agents`` carries ``"kind"`` for every entry).
+* **User identities (mailbox #443).** People using the agents app (``mac-user`` on the Mac, ``mac-userphone`` on
+  the iPhone; :doc:`agents`) are not agents: they have no wake daemon and close the app at will. The server
+  operator lists them in ``user-identities.json`` in the server data folder (next to ``server.json`` and the
+  journal; a JSON list such as ``["mac-user", "mac-userphone"]``, re-read on use like the allowlist) and/or with
+  repeated ``serve --user-identity NAME``. A user identity stays addressable by name even after its lease expired,
+  after ``register --release`` and before it ever registered: messages queue until the app registers again. It is
+  never part of ``all`` or a host group (``mac``), never listed by ``overdue``, never a takeover candidate (agents
+  do not ``register --takeover`` it), and passes the register gate without being on the allowlist. ``agents``
+  prints ``MAILBOX user identities: ...``; ``/agents`` and ``/health`` carry ``user_identities``. A file that is not
+  a JSON list of ``HOST-NAME`` identities is ignored (one ``MAILBOX user identities:`` line on stderr) and only the
+  ``--user-identity`` names count.
 * **Register gate for new identities (mailbox #807).** When ``allowlist.json`` exists in the server data folder
   (next to ``server.json`` and the journal; ``serve --allowlist PATH`` names another file), it must hold a JSON
   list of HOST-AGENT identities, for example ``["pi-claude", "pc-claude", "mac-claude"]``. ``register`` of an
@@ -341,8 +361,9 @@ separately. ``/health`` reports ``"protocol": 4``.
   line on stderr (the unit's journal) and keeps serving everyone else. ``status`` and ``agents`` print
   ``MAILBOX register gate: off``, ``on (N identities)`` or ``on, invalid allowlist: ...``; ``/health`` and
   ``/agents`` carry the same text as ``register_gate``, and ``serve`` prints it at start.
-* **Addressing expanded at send time.** ``--to`` takes one registered identity, a comma list, a host group
-  (``mac``, ``pc``, ``pi``: every agent registered on that host when the message is sent) or ``all``. The server
+* **Addressing expanded at send time.** ``--to`` takes one registered identity (or a configured user identity), a
+  comma list, a host group (``mac``, ``pc``, ``pi``: every agent registered on that host when the message is sent,
+  user identities excluded) or ``all`` (agents only). The server
   stores the explicit recipient list (the sender excluded) with the message, so a broadcast gives each agent its
   own copy. An unknown identity or an empty group is refused (HTTP 400), never silently queued. A REQUEST to several
   recipients needs ``--owner`` naming one of them; a single recipient owns it by default; ``--owner`` on other
@@ -350,15 +371,19 @@ separately. ``/health`` reports ``"protocol": 4``.
 * **Per-recipient state.** The kind is the first word of the text (REQUEST, ACK, RESULT, NOTICE, otherwise INFO).
   Each recipient moves through ``queued`` → ``delivered`` (its client fetched it) → ``archived`` (copied to its
   local history) → ``acked`` → ``done``, with times. Each change carries the message digest and is idempotent.
-  ``track --id ID`` prints every recipient's state and times, also after compaction.
+  ``track --id ID`` prints every recipient's state and times while the message is active. After compaction it
+  shows the receipt, marked ``(closed)``: the final state per recipient, without times or text.
 * **Compaction.** A message leaves the active log when its REQUEST owner is ``done`` and every other recipient has
   at least ``archived`` (all kinds other than an owned REQUEST need only ``archived``). It is kept as a receipt
   (sequence, digests, final state per recipient) without its text, so a retried send with the same id is answered
   as already archived instead of being resurrected.
 * **Overdue.** ``status`` and ``overdue`` list: delivered but not archived after 10 min, a REQUEST not acked by its
-  owner after 15 min, past its deadline, or addressed to an agent whose lease expired. The coordinator reports them
-  and may ``reassign --id ID --to NEW``: the new owner (a registered agent, not the
-  sender) receives the REQUEST, the old owner's copy is marked ``reassigned`` and both get a NOTICE.
+  owner after 15 min, past its deadline, or addressed to an agent whose lease expired (user identities are never
+  listed). The coordinator reports them and may ``reassign --id ID --to NEW``: the new owner (a registered agent,
+  not the sender) receives the REQUEST, the old owner's copy is marked ``reassigned`` and both get a NOTICE. The
+  server enforces who may reassign: only the identities named by repeated ``serve --coordinator NAME`` (default
+  ``pi-claude``); anyone else gets HTTP 403. The acting backup coordinator needs its own ``--coordinator``
+  entry on the server. ``/health`` lists them as ``coordinators``.
 * **Retired identities.** The mailbox server operator runs ``retire IDENTITY`` for an identity the roster
   (``docs/agents.rst``) lists as retired. The server refuses this while the identity holds a live lease, while it
   owns an unfinished REQUEST (reassign that first), and when an identity tries to retire itself. A retired
@@ -371,13 +396,14 @@ separately. ``/health`` reports ``"protocol": 4``.
   one record per change (message upsert, message drop into a receipt, lock, agent), each with a checksum and
   fsync'd before it takes effect. After 1000 records the log is rewritten as one snapshot by atomic replacement
   under the server lock. On load a torn final record (no trailing newline) is truncated; a bad checksum or
-  unreadable record anywhere else stops the server. The first change of every day copies the log to
-  ``backup/shared-YYYY-MM-DD.jsonl`` next to it (14 kept).
+  unreadable record anywhere else stops the server. Server start and the first change of every day copy the log
+  to ``backup/shared-YYYY-MM-DD.jsonl`` next to it (one per day, 14 kept). The protocol 2/3 migration copies
+  ``backup/shared.v2-*.jsonl`` / ``.v3-*`` are rotated at every start with the same retention (the 14 newest).
 * **Protocol 3 clients keep working** during the transition: ``/events`` lists one copy per recipient that has
   not archived it, ``/archive`` marks only that identity ``archived`` (refused with 409 while a protocol 4 session
   holds that identity), ``/messages`` without ``"v": 4`` is a literal one-identity send (also to a bare ``mac`` or
-  ``pc`` inbox; ``send --legacy`` uses this form), and ``/locks`` is unchanged. ACKs are sent in this literal form
-  to the exact sender.
+  ``pc`` inbox; ``send --legacy`` uses this form), and session-less ``/locks`` calls still work on unbound locks
+  (a lock bound to a protocol 4 session refuses them). ACKs are sent in this literal form to the exact sender.
 
 Migration from protocol 2/3, in order:
 
@@ -394,9 +420,11 @@ Migration from protocol 2/3, in order:
 
 Tests (``tools/test_agent_mailbox.py``) cover: two clients on one identity refused; a broadcast to three agents
 read by each; host group and ``all`` expansion; unknown recipients rejected; the owner rule; a crash between
-archive and done recovered from the server; lease expiry reported overdue; reassignment; retirement; compaction only after
-every recipient; a protocol 3 client against a protocol 4 server; ten concurrent writer threads; checksum and
-torn-record handling; migration of protocol 3 and older journals.
+archive and done recovered from the server; lease expiry reported overdue; reassignment (coordinator only, and
+``--coordinator``); retirement; user identities (queued after release, outside ``all``/host groups and overdue,
+``kind=user``, past the gate, bad file ignored); session-bound locks; ``init`` without ``--token`` warning; rotation of
+migration copies; compaction only after every recipient; a protocol 3 client against a protocol 4 server; ten
+concurrent writer threads; checksum and torn-record handling; migration of protocol 3 and older journals.
 
 Mailbox listener daemon
 ~~~~~~~~~~~~~~~~~~~~~~~
