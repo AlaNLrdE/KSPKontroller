@@ -52,6 +52,7 @@ class MailboxTest(unittest.TestCase):
                            token='test-only-secret', peer='pc')  # a legacy protocol 3 identity
         self.quiet = contextlib.redirect_stdout(io.StringIO())
         self.quiet.__enter__()
+        self.extra = []  # further journals, closed before the temporary folder is removed (Windows)
 
     def tearDown(self):
         self.quiet.__exit__(None, None, None)
@@ -59,6 +60,8 @@ class MailboxTest(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
         self.journal.close()
+        for journal in self.extra:
+            journal.close()
         self.temp.cleanup()
 
     def agent(self, identity, name=None):
@@ -452,8 +455,13 @@ class MailboxTest(unittest.TestCase):
         mac, mac_path = self.agent('mac-claude')
         claude, claude_path = self.agent('pc-claude')
         codex, codex_path = self.agent('pc-codex')
+        pi, pi_path = self.agent('pi-claude')  # the default coordinator
         send_message(mac, mac_path, 'pc-claude', 'REQUEST: HMI fix', message_id='h1')
-        moved = agent_mailbox.agent_request(mac, mac_path, '/reassign', dict(id='h1', to='pc-codex'))
+        refused = self.assertRefused(403, agent_mailbox.agent_request, mac, mac_path, '/reassign',
+                                     dict(id='h1', to='pc-codex'))  # only the coordinator may reassign
+        self.assertIn('only the coordinator (pi-claude)', str(refused))
+        self.assertEqual(self.journal.messages['h1']['owner'], 'pc-claude')
+        moved = agent_mailbox.agent_request(pi, pi_path, '/reassign', dict(id='h1', to='pc-codex'))
         self.assertEqual((moved['owner'], moved['to']), ('pc-codex', ['pc-claude', 'pc-codex']))
         self.assertTrue(moved['state']['pc-claude']['reassigned'])
         notice = self.journal.messages['reassign-1-1']
@@ -465,9 +473,20 @@ class MailboxTest(unittest.TestCase):
         self.assertEqual([m['id'] for m in pending_messages(claude, claude_path)], ['reassign-1-1'])
         mark_done(codex, codex_path, message_id='h1')
         self.assertEqual(self.journal.receipts['h1']['recipients'], {'pc-claude': 'reassigned', 'pc-codex': 'done'})
-        self.assertRefused(404, agent_mailbox.agent_request, mac, mac_path, '/reassign', dict(id='h1', to='pc-claude'))
+        self.assertRefused(404, agent_mailbox.agent_request, pi, pi_path, '/reassign', dict(id='h1', to='pc-claude'))
         send_message(mac, mac_path, 'pc-claude', 'INFO only', message_id='i1')
-        self.assertRefused(400, agent_mailbox.agent_request, mac, mac_path, '/reassign', dict(id='i1', to='pc-codex'))
+        self.assertRefused(400, agent_mailbox.agent_request, pi, pi_path, '/reassign', dict(id='i1', to='pc-codex'))
+
+    def test_serve_coordinator_option_replaces_the_default(self):
+        j = Journal(self.root / 'coord' / 'shared.jsonl', coordinators=['pc-claude'])
+        self.extra.append(j)
+        for identity, session in (('mac-claude', S1), ('pc-claude', S2), ('pi-claude', 'session-three-000003')):
+            j.register(identity, session, 'claude', '/x', now=1000.0)
+        j.send(dict(v=4, sender='mac-claude', session=S1, to='pi-claude', text='REQUEST: x', id='q1'), now=1000.0)
+        with self.assertRaises(agent_mailbox.Forbidden):
+            j.reassign('pi-claude', 'session-three-000003', 'q1', 'pc-claude', now=1001.0)
+        self.assertEqual(j.reassign('pc-claude', S2, 'q1', 'pc-claude', now=1001.0)['owner'], 'pc-claude')
+        self.assertEqual(j.health(now=1001.0)['coordinators'], ['pc-claude'])
 
     def test_compaction_only_after_every_recipient_finished(self):
         j = self.journal
@@ -670,6 +689,133 @@ class MailboxTest(unittest.TestCase):
                     dict(name='pi-deploy', ttl=600, reason='')):
             with self.assertRaises(ValueError):
                 self.journal.lock('acquire', bad['name'], 'mac', bad['ttl'], bad['reason'])
+
+    def test_session_bound_lock_is_released_only_by_the_holders_live_session(self):
+        claude, claude_path = self.agent('pc-claude')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            agent_mailbox.main(['--config', str(claude_path), 'lock', 'acquire', 'ios-simulator', '--reason', 'ui test'])
+        self.assertTrue(self.journal.locks['ios-simulator']['bound'])
+        legacy = lambda **d: request(self.config, '/locks', d)  # an old, session-less client naming the holder
+        self.assertRefused(409, legacy, action='release', name='ios-simulator', holder='pc-claude')
+        self.assertRefused(409, legacy, action='acquire', name='ios-simulator', holder='pc-claude', ttl=600,
+                           reason='renew')
+        self.assertRefused(409, legacy, action='acquire', name='ios-simulator', holder='mac-claude', ttl=600,
+                           reason='steal')
+        self.assertRefused(409, request, self.config, '/locks', dict(action='release', name='ios-simulator',
+                           holder='pc-claude', identity='pc-claude', session='not-the-real-session-123'))
+        self.assertRefused(400, request, self.config, '/locks', dict(action='release', name='ios-simulator',
+                           holder='pc-claude', identity='mac-claude', session=S1))  # identity must be the holder
+        self.assertIn('ios-simulator', self.journal.locks)
+        with contextlib.redirect_stdout(out):
+            agent_mailbox.main(['--config', str(claude_path), 'lock', 'release', 'ios-simulator'])
+        self.assertNotIn('ios-simulator', self.journal.locks)
+        # Unbound (old client) locks behave exactly as before
+        self.assertTrue(legacy(action='acquire', name='pi-deploy', holder='pc-claude', ttl=600, reason='old')['acquired'])
+        self.assertNotIn('bound', self.journal.locks['pi-deploy'])
+        self.assertTrue(legacy(action='release', name='pi-deploy', holder='pc-claude')['released'])
+
+    def test_lock_help_lists_ios_simulator_and_free_form_names(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            agent_mailbox.main(['lock', '--help'])
+        text = ''.join(out.getvalue().split())  # argparse may wrap inside hyphenated words
+        self.assertIn('ios-simulator', text)
+        self.assertIn('arefree-form', text)
+
+    def test_init_without_token_warns_on_stderr(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            agent_mailbox.main(['--config', str(self.root / 'a.json'), 'init', '--url', 'http://h:50380',
+                                '--peer', 'pc-claude'])
+        self.assertIn('no --token', err.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            agent_mailbox.main(['--config', str(self.root / 'b.json'), 'init', '--url', 'http://h:50380',
+                                '--peer', 'pc-claude', '--token', 'known'])
+        self.assertEqual(err.getvalue(), '')
+        self.assertEqual(json.loads((self.root / 'b.json').read_text())['token'], 'known')
+
+    def test_migration_copies_are_rotated_like_daily_backups(self):
+        folder = self.root / 'rot'
+        backup = folder / 'backup'
+        backup.mkdir(parents=True)
+        names = ['shared.v%d-202611%02dT120000.jsonl' % (2 if day < 5 else 3, day) for day in range(1, 18)]
+        for name in names:
+            (backup / name).write_text('old')
+        (backup / 'unrelated.v3-20261101T120000.jsonl').write_text('keep')
+        j = Journal(folder / 'shared.jsonl')
+        self.extra.append(j)
+        left = sorted(p.name for p in backup.glob('shared.v*'))
+        self.assertEqual(left, sorted(names[-agent_mailbox.BACKUPS_KEPT:]))
+        self.assertTrue((backup / 'unrelated.v3-20261101T120000.jsonl').exists())
+
+    # -- user identities (mailbox #443) ------------------------------------------------------------------------
+    def users(self, names):
+        (self.root / agent_mailbox.USER_IDENTITIES).write_text(json.dumps(names))
+
+    def test_user_identity_stays_addressable_after_release_and_queues(self):
+        self.users(['mac-user'])
+        mac, mac_path = self.agent('mac-claude')
+        user, user_path = self.agent('mac-user')
+        register(user, user_path, release=True)
+        sent = send_message(mac, mac_path, 'mac-user', 'RESULT: done while you were away', message_id='u1')
+        self.assertEqual(sent['to'], ['mac-user'])
+        self.assertEqual(self.journal.messages['u1']['state']['mac-user']['state'], 'queued')
+        register(user, user_path)  # the app comes back with its own session: the queue is waiting
+        collect(user, user_path)
+        self.assertEqual([m['id'] for m in pending_messages(user, user_path)], ['u1'])
+        # never registered yet: still addressable because the server lists it
+        self.users(['mac-user', 'mac-userphone'])
+        self.assertEqual(send_message(mac, mac_path, 'mac-userphone', 'INFO: hi', message_id='u2')['to'],
+                         ['mac-userphone'])
+        self.assertRefused(400, send_message, mac, mac_path, 'mac-stranger', 'not a user identity')
+
+    def test_user_identities_are_not_in_all_or_host_groups_nor_overdue(self):
+        j = Journal(self.root / 'u' / 'shared.jsonl', users=['mac-user'])
+        self.extra.append(j)
+        j.register('mac-claude', S1, 'claude', '/m', now=1000.0)
+        j.register('pc-claude', S2, 'claude', '/p', now=1000.0)
+        j.register('mac-user', 'session-user-0000000003', 'app', '/', now=1000.0)
+        send = lambda to, mid, text='INFO x': j.send(dict(v=4, sender='pc-claude', session=S2, to=to, text=text,
+                                                         id=mid), now=1000.0)
+        self.assertEqual(send('all', 'a1')['to'], ['mac-claude'])
+        self.assertEqual(send('mac', 'a2')['to'], ['mac-claude'])
+        self.assertEqual(send('mac-user', 'a3', 'REQUEST: look at this')['to'], ['mac-user'])
+        later = 1000.0 + LEASE + OVERDUE_ACK + OVERDUE_ARCHIVE
+        self.assertEqual([i for i in j.overdue(now=later) if i['recipient'] == 'mac-user'], [])
+        self.assertTrue([i for i in j.overdue(now=later) if i['recipient'] == 'mac-claude'])
+        views = {a['identity']: a for a in j.agents_list(now=later)}
+        self.assertEqual((views['mac-user']['kind'], views['mac-user']['state']), ('user', 'away'))
+        self.assertEqual((views['mac-claude']['kind'], views['mac-claude']['state']), ('agent', 'idle'))
+
+    def test_user_identities_pass_the_gate_and_show_as_kind_user(self):
+        self.users(['mac-user'])
+        (self.root / agent_mailbox.ALLOWLIST).write_text(json.dumps(['pi-claude']))
+        pi, pi_path = self.agent('pi-claude')
+        self.agent('mac-user')  # not on the allowlist, but a configured user identity
+        listing = request(self.config, '/agents')
+        self.assertEqual(listing['user_identities'], ['mac-user'])
+        self.assertEqual({a['identity']: a['kind'] for a in listing['agents']},
+                         {'mac-user': 'user', 'pi-claude': 'agent'})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            agent_mailbox.main(['--config', str(pi_path), 'agents'])
+        self.assertIn('MAILBOX user identities: mac-user', out.getvalue())
+        self.assertIn('kind=user', [l for l in out.getvalue().splitlines() if 'AGENT mac-user' in l][0])
+        self.assertNotIn('kind=user', [l for l in out.getvalue().splitlines() if 'AGENT pi-claude' in l][0])
+
+    def test_invalid_user_identities_file_is_ignored_and_cli_names_still_count(self):
+        j = Journal(self.root / 'v' / 'shared.jsonl', users=['mac-user'])
+        self.extra.append(j)
+        (j.path.parent / agent_mailbox.USER_IDENTITIES).write_text('{"not": "a list"}')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(j.user_identities(), {'mac-user'})
+            j.user_identities()
+        self.assertEqual(err.getvalue().count('MAILBOX user identities:'), 1)  # logged once, not per call
+        with self.assertRaises(ValueError):
+            Journal(self.root / 'w' / 'shared.jsonl', users=['user'])
 
     # -- transport -------------------------------------------------------------------------------------------------
     def test_auth_and_no_file_or_config_exposure(self):
