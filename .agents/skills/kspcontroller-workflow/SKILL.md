@@ -15,6 +15,13 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 2. `KSPDIR="C:/Users/alanl/wk/wk-rea/Kerbal Space Program" ./ci deploy` then `./ci verify` (installed DLL == build, 163 mods intact).
 3. Tell the peer it is done. Flash: `./ci build_sketch && ./ci upload_sketch COM5`, then `./ci verify --board --port COM5`.
 4. If the upload says "No device found": the board is frozen. Double-tap RESET (orange LED pulses), or unplug USB 10 s.
+5. From WSL (2026-11-21): `ci` and `tools/verify.py` detect WSL (`is_wsl`, override `KSP_WSL=0/1`), search the
+   Windows installs under `/mnt/<drive>`, accept `KSPDIR="C:/..."` (converted by `wsl_path`) and check the game with
+   `tasklist.exe`: `pgrep` cannot see the Windows `KSP_x64.exe`, so a pgrep-only check passes with the game open.
+   Keep that in any new running-game check. `./ci verify` from WSL now finds the real install, so its install
+   and `log:` checks run there too; a DLL built in WSL differs byte-wise from the one built on Windows (embedded
+   paths), so `installed == built` fails until the install comes from the same checkout. The board's COM port is
+   not visible in WSL without usbipd-win: flash and board tests stay on Windows (`.\ci.cmd`).
 
 ## Before the user opens KSP (the test must be able to work)
 
