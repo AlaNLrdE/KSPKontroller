@@ -1,4 +1,5 @@
 #include "apollo.hpp"
+#include "audio.hpp"
 #include "cockpit.hpp"
 #include "mechjebpage.hpp"
 #include "resource_ui.hpp"
@@ -1762,12 +1763,12 @@ void ApolloSkin::waiting(Canvas& c, bool art, const Snapshot& s, double now, boo
         return;
     }
     orbit_art_->body(c, "Kerbin", cx, sy, 6 * u, !brass);
-    const double ang = now * 1.2;
+    const double ang = waiting_sweep_angle(brass ? "steampunk" : "apollo", now);  // the radar ping follows it
     const Color scan = brass ? palette.L_AMBER : Color{114, 246, 145};
     c.circle(float(cx + 11 * u * std::cos(ang)), float(sy + 11 * u * std::sin(ang)), float(.6 * u), scan);
     if (!brass) orbit_art_->glass(c, Rect::f(cx - 12 * u, sy - 12 * u, 24 * u, 24 * u));
     // the annunciator blinks at 1 Hz, as a master caution
-    if (std::fmod(now, 1.0) < .6) {
+    if (waiting_lamp_lit(now)) {  // the lamp click follows it
         Color lit = no_vessel ? palette.L_WHITE : palette.L_AMBER;
         lamp(c, annunciator, legend, 3.0f, false, &lit);
     }

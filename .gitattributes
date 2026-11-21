@@ -7,3 +7,4 @@ hmi-cpp/assets/**/*.png binary
 hmi-cpp/assets/**/*.bmp binary
 hmi-cpp/assets/**/*.ttf binary
 hmi-cpp/assets/**/*.mp4 binary
+hmi-cpp/**/*.wav binary

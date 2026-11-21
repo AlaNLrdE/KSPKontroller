@@ -15,6 +15,8 @@
 #include <thread>
 #include <time.h>
 
+#include "audio.hpp"
+#include "audioout.hpp"
 #include "bootstate.hpp"
 #include "canvas.hpp"
 #include "config.hpp"
@@ -42,16 +44,24 @@ void on_signal(int) { quit_signal = 1; }
 /// SIGUSR1: save the next frame exactly as the screen's renderer drew it (GPU included) to live_shot_path().
 volatile std::sig_atomic_t shot_signal = 0;
 void on_shot_signal(int) { shot_signal = 1; }
+/// SIGUSR2: write the last 60 s of the audio device's samples to live_audio_path() (from the frame loop).
+volatile std::sig_atomic_t audio_dump_signal = 0;
+void on_audio_dump_signal(int) { audio_dump_signal = 1; }
 
 std::string live_shot_path() {
     const char* dir = std::getenv("XDG_RUNTIME_DIR");
     return std::string(dir && *dir ? dir : "/tmp") + "/ksphmi-shot.png";
 }
 
+std::string live_audio_path() {
+    const char* dir = std::getenv("XDG_RUNTIME_DIR");
+    return std::string(dir && *dir ? dir : "/tmp") + "/ksphmi-audio.wav";
+}
+
 struct Args {
     std::string config, address, size, screenshot, skin, layer_cache, splash_state, monitor, flight_scene, mechjeb_page;
     bool demo = false, windowed = false, desktop = false, offscreen = false, splash = false, bench_anim = false;
-    bool vessel_heat = false;
+    bool vessel_heat = false, no_audio = false;
     double seconds = 1.5;
     int fps = 0, bench = 0;
 };
@@ -61,7 +71,7 @@ void usage(FILE* out) {
                  "usage: ksphmi [--config FILE] [--demo] [--address HOST] [--windowed | --desktop] [--size WxH]\n"
                  "              [--skin auto|classic|apollo|steampunk|ksp1|ksp2] [--monitor auto|N]\n"
                  "              [--screenshot FILE] [--seconds S] [--fps N] [--bench N [--bench-anim]] [--offscreen]\n"
-                 "              [--layer-cache auto|on|off]\n"
+                 "              [--layer-cache auto|on|off] [--no-audio]\n"
                  "       ksphmi --splash [--screenshot FILE --size WxH [--splash-state STAGE]]\n\n"
                  "KSP flight data display (kRPC client), for the Raspberry Pi.\n\n"
                  "  --config FILE      settings file instead of config.toml + config.local.toml\n"
@@ -84,6 +94,7 @@ void usage(FILE* out) {
                  "  --vessel-heat      start the VESSEL panel on heat instead of fuel (Ctrl+0 switches)\n"
                  "  --flight-scene S   first flight scene: instruments, cockpit or mechjeb (Ctrl+\"+\" / Ctrl+\"-\" switch)\n"
                  "  --mechjeb-page P   first MechJeb page: menu or ascent\n"
+                 "  --no-audio         no cockpit sounds (overrides [audio] enabled; Ctrl+M mutes while running)\n"
                  "  --offscreen        draw in memory only (never touches the screen; for --bench)\n"
                  "  --splash           animate the boot loading screen on $KSPHMI_FBDEV (default /dev/fb0) until\n"
                  "                     the HMI writes $XDG_RUNTIME_DIR/ksphmi.ready; reads no settings\n"
@@ -118,6 +129,7 @@ bool parse(int argc, char** argv, Args& a) {
         else if (k == "--monitor") value(a.monitor);
         else if (k == "--offscreen") a.offscreen = true;
         else if (k == "--vessel-heat") a.vessel_heat = true;
+        else if (k == "--no-audio") a.no_audio = true;
         else if (k == "--bench-anim") a.bench_anim = true;
         else if (k == "--layer-cache") value(a.layer_cache);
         else if (k == "--splash") a.splash = true;
@@ -507,6 +519,9 @@ int run(int argc, char** argv) {
 #ifdef SIGUSR1
     std::signal(SIGUSR1, on_shot_signal);
 #endif
+#ifdef SIGUSR2
+    std::signal(SIGUSR2, on_audio_dump_signal);
+#endif
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(0) != 0) throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
 
@@ -537,6 +552,12 @@ int run(int argc, char** argv) {
         std::unique_ptr<Canvas> canvas;
         std::unique_ptr<Display> display;
         std::string key_skin;  // Ctrl+1 through Ctrl+5 on the keyboard; survives a rebuild for a new screen size
+        // Cockpit audio (docs/hmi.rst "Audio"): never for screenshots, benchmarks or off-screen frames. The director
+        // turns each frame into cues; the frame loop only queues them, the SDL audio callback mixes.
+        AudioConfig audio_cfg = cfg.audio;
+        if (args.no_audio || args.bench || !args.screenshot.empty() || args.offscreen) audio_cfg.enabled = false;
+        AudioOut audio(audio_cfg);
+        AudioDirector director;
         Keyboard keyboard;     // the HMI keyboard as a remote KSP keyboard (keyboard.hpp)
         bool vessel_heat = args.vessel_heat;  // Ctrl+0: the VESSEL panel shows heat instead of fuel
         // The flight scene (Ctrl+"+" / Ctrl+"-", or a tab click): kept across screen rebuilds, like the skin.
@@ -604,6 +625,7 @@ int run(int argc, char** argv) {
         auto apply_keys = [&](const KeyResult& r) {
             if (r.quit) quit_signal = 1;
             send(r.commands);
+            if (r.toggle_mute) log::info(LOG, audio.toggle_mute() ? "audio: muted (Ctrl+M)" : "audio: unmuted (Ctrl+M)");
             if (r.flight_scene) set_scene(step_scene(scene, r.flight_scene));
             if (r.vessel_mode) {
                 vessel_heat = !vessel_heat;
@@ -732,8 +754,10 @@ int run(int argc, char** argv) {
             bool full = shot || snap != last || snap->state != State::Flight || stale(*snap, tick) ||
                         (panel && cockpit_input.busy(tick)) || (mechjeb && mechjeb_input.busy(tick));
             bool anim = !full && snap->state == State::Flight && display->navball().animating();
+            double drawn_at = tick;  // the time the painters used, so the radar ping matches the scan dot
             if (full || anim) {
                 double t0 = monotonic();
+                drawn_at = t0;
                 if (!(anim && display->animate())) display->draw(*snap, t0), anim = false;
                 double t1 = monotonic(), c1 = thread_cpu();
                 if (shot) {  // before present: the back buffer is undefined after a page flip
@@ -757,6 +781,18 @@ int run(int argc, char** argv) {
                     out.repaint_all();
                     repainted = true;
                 }
+            }
+            if (audio.active()) {
+                audio.play(director.update({snap->state, display->skin(), shows_waiting_screen(*snap), drawn_at}));
+                if (audio_dump_signal) {
+                    audio_dump_signal = 0;
+                    const std::string path = live_audio_path();
+                    if (audio.dump(path)) log::info(LOG, "audio dump: " + path);
+                    else log::warning(LOG, "audio dump failed: cannot write " + path);
+                }
+            } else if (audio_dump_signal) {
+                audio_dump_signal = 0;
+                log::warning(LOG, "audio dump: no audio device open, nothing to dump");
             }
             if (args.bench && frames >= args.bench) {
                 std::printf("HMI_RENDER_MS=%.1f HMI_PRESENT_MS=%.1f HMI_PRESENT_CPU_MS=%.1f frames=%d full=%d "

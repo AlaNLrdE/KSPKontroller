@@ -554,6 +554,21 @@ TEST(config_layers_and_environment) {
     check::remove_dir(dir);
 }
 
+TEST(ctrl_m_mutes_the_hmi_and_plain_m_stays_the_map_key) {
+    Keyboard kb;
+    KeyEvent ctrl{Key::LeftCtrl, -1, true}, ctrl_m{Key::M, -1, true}, m{Key::M};
+    kb.down(ctrl, 0);
+    KeyResult r = kb.down(ctrl_m, 0.01);
+    CHECK(r.toggle_mute);
+    CHECK(r.commands.empty());  // consumed by the HMI: never KSP's map view
+    kb.up(ctrl_m, 0.02);
+    CHECK_EQ(kb.held(1.0).throttle, 0);  // a Ctrl+M chord never ramps the throttle down
+    kb.up(ctrl, 1.0);
+    r = kb.down(m, 2);
+    CHECK(!r.toggle_mute);
+    CHECK(r.commands.size() == 1 && r.commands[0] == Command{Command::ToggleMap});
+}
+
 TEST(config_integer_fields_reject_invalid_conversions) {
     for (const char* key : {"display.fps", "krpc.rpc_port", "krpc.stream_port"}) {
         for (const char* value : {"1e100", "-1e100", "inf", "-inf", "nan", "1.5", "-0.5",

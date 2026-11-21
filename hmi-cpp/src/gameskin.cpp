@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 
+#include "audio.hpp"
 #include "cockpit.hpp"
 #include "mechjebpage.hpp"
 #include "config.hpp"
@@ -713,7 +714,8 @@ void GameSkin::waiting(Canvas& c, bool art, const Snapshot& s, double now) {
                {float(left.centerx() + 2 * u), float(left.y + 14 * u)}, float(.6 * u), WHITE);
     } else {
         orbit_art_.body(c, "Kerbin", cx, cy, 8 * u, false);
-        c.circle(float(cx + 12 * u * std::cos(now)), float(cy + 12 * u * std::sin(now)), float(.5 * u),
+        const double ang = waiting_sweep_angle(redux_ ? "ksp2" : "ksp1", now);  // the radar ping follows it
+        c.circle(float(cx + 12 * u * std::cos(ang)), float(cy + 12 * u * std::sin(ang)), float(.5 * u),
                  s.state == State::Connecting ? AMBER : p.green);
         p.text(s.state == State::Connecting ? "WAITING FOR GAME" : "NOT IN FLIGHT", 3.8f,
                s.state == State::Connecting ? AMBER : p.green, left.centerx(), left.y + 29 * u, Anchor::Center,

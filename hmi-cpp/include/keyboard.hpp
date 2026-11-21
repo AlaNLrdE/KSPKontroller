@@ -13,7 +13,7 @@ namespace ksphmi {
 enum class Key {
     Unknown,
     T, R, F, Z, X, G, U, B,                 // SAS, RCS, SAS hold, throttle full / cut, gear, lights, brakes (held)
-    M,                                      // map view toggle
+    M,                                      // map view toggle; Ctrl+M mutes the HMI sounds
     Space, Backspace,                       // stage, abort
     Comma, Period, Slash,                   // time warp down / up / stop
     F5, F9,                                 // quicksave, quickload (held 1 s)
@@ -81,12 +81,13 @@ struct Held {
 };
 
 /// What a key event asks for: game commands, a skin ("classic" / "apollo"), the VESSEL view switch (Ctrl+0),
-/// a flight scene step (Ctrl+"+" = +1, Ctrl+"-" = -1) and/or quitting.
+/// a flight scene step (Ctrl+"+" = +1, Ctrl+"-" = -1), muting (Ctrl+M) and/or quitting.
 struct KeyResult {
     std::vector<Command> commands;
     std::string skin;
     bool vessel_mode = false;
     int flight_scene = 0;
+    bool toggle_mute = false;  ///< Ctrl+M: the HMI's cockpit sounds on / off (consumed, never sent to KSP)
     bool quit = false;
 };
 
@@ -109,7 +110,7 @@ public:
 private:
     std::set<Key> down_;
     double ctrl_since_ = -1;
-    bool ctrl_used_ = false;  ///< a Ctrl+digit or Ctrl+"+"/"-" chord: this Ctrl press never ramps the throttle
+    bool ctrl_used_ = false;  ///< a Ctrl+digit, Ctrl+M or Ctrl+"+"/"-" chord: this Ctrl press never ramps the throttle
     double f9_since_ = -1;
     bool f9_fired_ = false;
 };

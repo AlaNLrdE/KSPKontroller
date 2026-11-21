@@ -34,6 +34,16 @@ flight_scene = "instruments"  # first flight scene: instruments | cockpit (the c
 [format]
 day_hours = 6            # KSP calendar (6 h days); 24 if the game uses Earth time
 
+[audio]                  # cockpit sounds (docs/hmi.rst "Audio"); Ctrl+M mutes, --no-audio turns them off
+enabled = true
+volume = 0.6             # master gain, 0..1
+alerts = 1.0             # link lost
+feedback = 0.8           # radar ping, lamp click
+events = 0.7             # link acquired
+ambient = 0.5            # the low cockpit hum
+device = ""              # SDL output device name; "" = the system default
+dump_dir = ""            # a directory: every run records its whole session there as WAV ("" = none)
+
 [vab]
 target = "mun_landing"   # destination highlighted while KSP's delta-v app shows Kerbin; another body picks its own
 launch_twr_min = 1.0     # launch stage TWR shown red below this (it cannot leave the pad)

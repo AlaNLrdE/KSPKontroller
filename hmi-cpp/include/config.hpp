@@ -12,6 +12,15 @@ namespace ksphmi {
 /// Most destinations the VAB screens have room for.
 constexpr int MAX_DESTINATIONS = 12;
 
+/// [audio]: the cockpit sounds (docs/hmi.rst "Audio"). Gains are 0..1.
+struct AudioConfig {
+    bool enabled = true;
+    double volume = 0.6;  ///< master
+    double alerts = 1.0, feedback = 0.8, events = 0.7, ambient = 0.5;  ///< category gains
+    std::string device;    ///< SDL output device name, "" = the system default
+    std::string dump_dir;  ///< "" = no session recording; else each run records a WAV file there
+};
+
 struct Config {
     std::string source = "krpc";  // krpc | demo | redux | auto (Redux first, kRPC when Redux is silent)
     struct {
@@ -50,6 +59,7 @@ struct Config {
         /// m/s of ascent counted at Kerbin sea level before later stages count in vacuum (mission delta-v)
         double atmosphere_dv = 1200;
     } vab;
+    AudioConfig audio;
     std::vector<std::string> loaded;  ///< files read, in order
 };
 

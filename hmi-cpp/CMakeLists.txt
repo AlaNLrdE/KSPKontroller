@@ -79,6 +79,12 @@ add_executable(ksphmi_intro_tests tests/test_intro.cpp)
 target_link_libraries(ksphmi_intro_tests PRIVATE ksphmi_core)
 add_test(NAME intro COMMAND ksphmi_intro_tests)
 
+# Cockpit audio: director, mixer, WAV dumps, [audio] settings and the SDL device (SDL_AUDIODRIVER=dummy).
+add_executable(ksphmi_audio_tests tests/test_audio.cpp)
+target_link_libraries(ksphmi_audio_tests PRIVATE ksphmi_ui)
+target_compile_definitions(ksphmi_audio_tests PRIVATE KSPHMI_SOURCE_DIR="${KSPHMI_TEST_SOURCE_DIR}")
+add_test(NAME audio COMMAND ksphmi_audio_tests)
+
 add_executable(ksphmi_render_tests tests/test_render.cpp)
 target_link_libraries(ksphmi_render_tests PRIVATE ksphmi_ui)
 add_test(NAME render COMMAND ksphmi_render_tests)

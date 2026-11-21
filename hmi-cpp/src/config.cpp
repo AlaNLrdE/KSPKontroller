@@ -251,6 +251,17 @@ void apply_toml(Config& c, const TomlValues& m) {
         throw std::runtime_error("format.day_hours must be a positive integer within the int range");
     c.format.day_hours = static_cast<int>(day_hours);
     apply_vab(c, m);
+    // [audio]: master and category gains are finite and within 0..1
+    c.audio.enabled = to_bool(m, "audio.enabled", c.audio.enabled);
+    for (auto [key, field] : {std::pair<const char*, double*>{"audio.volume", &c.audio.volume},
+                              {"audio.alerts", &c.audio.alerts}, {"audio.feedback", &c.audio.feedback},
+                              {"audio.events", &c.audio.events}, {"audio.ambient", &c.audio.ambient}}) {
+        const double v = to_double(m, key, *field);
+        if (!std::isfinite(v) || v < 0 || v > 1) throw std::runtime_error(std::string(key) + " must be a gain between 0 and 1");
+        *field = v;
+    }
+    c.audio.device = to_string(m, "audio.device", c.audio.device);
+    c.audio.dump_dir = to_string(m, "audio.dump_dir", c.audio.dump_dir);
 }
 
 bool valid_monitor(const std::string& setting) {

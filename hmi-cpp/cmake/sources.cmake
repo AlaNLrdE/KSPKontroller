@@ -4,6 +4,7 @@
 
 # Pure logic: formatting, attitude and orbit geometry, config, scenes, discovery, kRPC client, telemetry sources.
 set(KSPHMI_CORE_SOURCES
+  src/audio.cpp
   src/bootstate.cpp
   src/cockpitinput.cpp
   src/config.cpp
@@ -33,6 +34,7 @@ set(KSPHMI_CORE_SOURCES
 # Drawing: SDL2 renderer (GPU when available, software for /dev/fb0 and off-screen frames) and SDL2_ttf text.
 set(KSPHMI_UI_SOURCES
   src/apollo.cpp
+  src/audioout.cpp
   src/canvas.cpp
   src/cockpit.cpp
   src/display.cpp

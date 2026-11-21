@@ -1,5 +1,6 @@
 #include "display.hpp"
 
+#include "audio.hpp"
 #include "cockpit.hpp"
 #include "mechjebpage.hpp"
 #include "gameskin.hpp"
@@ -457,7 +458,7 @@ void Display::waiting(const Snapshot& snap, double now) {
     const double cx = c_.w / 2.0, cy = c_.h * 0.5;
     // A small moon circling a planet, so a frozen screen is easy to tell from a waiting one.
     orbit_art_->body(c_, "Kerbin", cx, cy-12*u, 6*u, false);
-    double ang = now * 1.2;
+    double ang = waiting_sweep_angle("classic", now);  // the radar ping follows it
     c_.ring(static_cast<float>(cx), static_cast<float>(cy - 12 * u), static_cast<float>(11 * u),
             std::max(1.0f, static_cast<float>(static_cast<int>(0.25 * u))), GRID);
     c_.circle(static_cast<float>(cx + 11 * u * std::cos(ang)), static_cast<float>(cy - 12 * u + 11 * u * std::sin(ang)),
