@@ -253,6 +253,11 @@ The installs are detected, not guessed, and ``./ci ksp_list`` shows them:
 * every Steam library in ``libraryfolders.vdf``;
 * common GOG and ``Games`` folders on drives C: to H:.
 
+Under WSL the same search covers the Windows side (``/mnt/c/Users/*/AppData/LocalLow`` for ``Player.log``,
+the Windows Steam folders, ``/mnt/c`` to ``/mnt/h``), a Windows-style ``KSPDIR`` (``C:/...``) is converted with
+``wslpath``, and the closed-game check also asks ``tasklist.exe``, because ``pgrep`` cannot see the Windows
+``KSP_x64.exe`` (``KSP_WSL=0`` or ``1`` overrides the detection; ``tools/verify.py`` does the same).
+
 With one install it is used directly. With several, ``ci`` prints a numbered list and asks which to
 use (Enter picks the first). Without a terminal it stops instead of choosing, so scripts must set
 ``KSPDIR``, which also skips the question:

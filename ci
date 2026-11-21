@@ -87,6 +87,24 @@ log() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
+# WSL: Linux tools, but the game is the Windows install under /mnt/<drive> and runs as a Windows process that
+# pgrep cannot see. KSP_WSL=0/1 overrides the detection (same variable as ksp-workbench's tools/platform.sh).
+is_wsl() {
+  case "${KSP_WSL:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [ "$(uname -s)" = Linux ] && { [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null; }
+}
+# Windows path (C:\x, C:/x, C://x) -> /mnt/c/x under WSL; anything else unchanged.
+wsl_path() {
+  if is_wsl; then
+    case "$1" in
+      [A-Za-z]:[\\/]*)
+        if command -v wslpath >/dev/null 2>&1; then wslpath -u "$(printf '%s' "$1" | sed 's#//*#/#g')"; return; fi
+        printf '/mnt/%s/%s\n' "$(printf '%s' "${1%%:*}" | tr 'A-Z' 'a-z')" "$(printf '%s' "${1#?:}" | tr '\\' '/' | sed 's#^/*##; s#//*#/#g')"
+        return ;;
+    esac
+  fi
+  printf '%s\n' "$1"
+}
 
 # ---------------------------------------------------------------- arduino-cli
 
@@ -260,6 +278,7 @@ ksp_candidates() {
   local seen="|" log p key c steam lib root pf86
   pf86="$(printenv "ProgramFiles(x86)" 2>/dev/null || true)"
   add() {
+    set -- "$(wsl_path "$1")" "$2"
     is_kspdir "$1" || return 0
     key="$(cd "$1" && pwd -P)"
     case "$seen" in *"|$key|"*) return 0 ;; esac
@@ -269,22 +288,24 @@ ksp_candidates() {
 
   for log in "${LOCALAPPDATA:-}/../LocalLow/Squad/Kerbal Space Program/Player.log" \
              "$HOME/.config/unity3d/Squad/Kerbal Space Program/Player.log" \
-             "$HOME/Library/Logs/Squad/Kerbal Space Program/Player.log"; do
+             "$HOME/Library/Logs/Squad/Kerbal Space Program/Player.log" \
+             /mnt/c/Users/*/AppData/LocalLow/Squad/"Kerbal Space Program"/Player.log; do
     [ -f "$log" ] || continue
     c="$(sed -n "s#^Mono path\[0\] = '\(.*\)/KSP[^/]*_Data/Managed'.*#\1#p" "$log" | head -1 | tr -d '\r')"
     [ -n "$c" ] && add "$c" "last launched"
   done
 
   for steam in "${ProgramFiles:-}/Steam" "$pf86/Steam" "$HOME/.steam/steam" \
-               "$HOME/Library/Application Support/Steam"; do
+               "$HOME/Library/Application Support/Steam" \
+               "/mnt/c/Program Files (x86)/Steam" "/mnt/c/Program Files/Steam"; do
     [ -f "$steam/steamapps/libraryfolders.vdf" ] || continue
     while IFS= read -r lib; do
       add "$lib/steamapps/common/Kerbal Space Program" "Steam"
     done < <({ echo "$steam"; sed -n 's#.*"path"[[:space:]]*"\(.*\)".*#\1#p' "$steam/steamapps/libraryfolders.vdf" | sed 's#\\#/#g'; } | tr -d '\r')
   done
 
-  # GOG and plain "Games" folders on any Windows drive
-  for root in /c /d /e /f /g /h; do
+  # GOG and plain "Games" folders on any Windows drive (Git Bash /c, WSL /mnt/c)
+  for root in /c /d /e /f /g /h /mnt/c /mnt/d /mnt/e /mnt/f /mnt/g /mnt/h; do
     [ -d "$root" ] || continue
     for p in "$root"/GOG*/"Kerbal Space Program" "$root"/GOG*/*/"Kerbal Space Program" \
              "$root"/"Program Files"*/"GOG Galaxy"/Games/"Kerbal Space Program" \
@@ -297,6 +318,7 @@ ksp_candidates() {
 # Print the KSP install to use: $KSPDIR if set, else the only one found, else ask which one
 find_kspdir() {
   if [ -n "${KSPDIR:-}" ]; then
+    KSPDIR="$(wsl_path "$KSPDIR")"
     is_kspdir "$KSPDIR" || die "KSPDIR=$KSPDIR is not a KSP install (no GameData folder and game executable)"
     echo "$KSPDIR"
     return
@@ -342,8 +364,23 @@ ksp_list() {
   done < <(ksp_candidates)
 }
 
+# Under WSL the game is a Windows process: only tasklist.exe sees it. If it cannot run (interop off, /mnt/c not
+# mounted, not on PATH, timeout) the state is unknown and the check fails closed (dies) instead of trusting pgrep.
+wsl_tasklist() {
+  local tl out
+  tl="$(command -v tasklist.exe 2>/dev/null || true)"
+  [ -n "$tl" ] || { [ -x /mnt/c/Windows/System32/tasklist.exe ] && tl=/mnt/c/Windows/System32/tasklist.exe; } || true
+  if [ -n "$tl" ] && out="$(timeout 30 "$tl" 2>/dev/null)" && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+  die "cannot check KSP from WSL: tasklist.exe unavailable (set KSP_WSL=0 only if the game is not a Windows install)"
+}
+
 ksp_running() {
   if command -v tasklist >/dev/null 2>&1; then tasklist 2>/dev/null | grep -qi "KSP_x64.exe"
+  elif is_wsl; then
+    local list
+    list="$(wsl_tasklist)" || exit 1
+    printf '%s\n' "$list" | grep -qi "KSP_x64.exe" && return 0
+    pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1  # a Linux game inside WSL too
   else pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1; fi  # same as tools/verify.py KSP_PROCESS
 }
 

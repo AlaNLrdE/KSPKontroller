@@ -63,10 +63,41 @@ def sha(path):
 KSP_PROCESS = r"KSP\.x86_64|KSP\.app/Contents/MacOS/"
 
 
+def is_wsl():
+    """Linux under WSL: the game is then a Windows process, invisible to pgrep. KSP_WSL=0/1 overrides."""
+    env = os.environ.get("KSP_WSL")
+    if env in ("0", "1"):
+        return env == "1"
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open("/proc/version") as f:
+            return bool(os.environ.get("WSL_DISTRO_NAME")) or "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
 def ksp_running():
     if os.name == "nt":
         out = subprocess.run(["tasklist"], capture_output=True, text=True).stdout
         return "KSP_x64.exe" in out
+    if is_wsl():
+        # Only tasklist.exe sees the Windows game. Unknown state fails closed: report "running" so nothing is
+        # installed or trusted, with the reason on stderr (pgrep alone would always say closed).
+        exe = shutil.which("tasklist.exe") or ("/mnt/c/Windows/System32/tasklist.exe"
+                                               if os.path.isfile("/mnt/c/Windows/System32/tasklist.exe") else None)
+        try:
+            if not exe:
+                raise OSError("tasklist.exe not found")
+            r = subprocess.run([exe], capture_output=True, text=True, timeout=30)
+            if r.returncode != 0 or not r.stdout.strip():
+                raise OSError(f"tasklist.exe exit {r.returncode}")
+            if "KSP_x64.exe" in r.stdout:
+                return True
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"cannot check KSP from WSL ({e}): treating it as running "
+                  "(set KSP_WSL=0 only if the game is not a Windows install)", file=sys.stderr)
+            return True
     return subprocess.run(["pgrep", "-f", KSP_PROCESS], capture_output=True).returncode == 0
 
 
