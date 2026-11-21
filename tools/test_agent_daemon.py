@@ -225,6 +225,131 @@ class PauseTest(unittest.TestCase):
             third.close()
 
 
+def fake_table(*procs):
+    """A process table for find_holder/holder_state: pid -> info."""
+    table = {p['pid']: dict(dict(cmd='', start=str(p.get('order')), order=None), **p) for p in procs}
+    return lambda pid: table.get(pid)
+
+
+class StalePauseTest(unittest.TestCase):
+    TABLE = [dict(pid=50, ppid=40, name='python.exe', order=5), dict(pid=40, ppid=30, name='python.exe', order=4),
+             dict(pid=30, ppid=20, name='bash.exe', order=3), dict(pid=20, ppid=10, name='claude.exe', order=2),
+             dict(pid=10, ppid=1, name='explorer.exe', order=1)]
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.f = daemon.files(Path(self.dir.name) / 'pi-claude.json')
+        self.info = fake_table(*self.TABLE)
+        self.holder = daemon.find_holder(50, self.info)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def listing(self, state='active', idle=0, at=None):
+        return {'agents': [dict(identity=ME, state=state, last_seen=(at or time.time()) - idle)]}
+
+    def test_holder_is_the_nearest_claude_ancestor(self):
+        self.assertEqual((self.holder['pid'], self.holder['name'], self.holder['how']), (20, 'claude', 'session'))
+        self.assertEqual(self.holder['start'], '2')
+        node = fake_table(dict(pid=5, ppid=4, name='python3', order=3),
+                          dict(pid=4, ppid=3, name='node', cmd='node /usr/lib/node_modules/@openai/codex/bin/codex.js',
+                               order=2), dict(pid=3, ppid=1, name='zsh', order=1))
+        self.assertEqual(daemon.find_holder(5, node)['pid'], 4)
+        plain = fake_table(dict(pid=5, ppid=4, name='python.exe', order=3), dict(pid=4, ppid=3, name='bash', order=2))
+        self.assertEqual(daemon.find_holder(5, plain)['pid'], 4)  # fallback: the parent, skipping python launchers
+        self.assertEqual(daemon.find_holder(5, plain)['how'], 'parent')
+
+    def test_holder_unreadable_degrades_to_a_time_only_pause(self):
+        def broken(pid):
+            raise daemon.ProcessUnknown('no ps')
+        with mock.patch.object(daemon, 'log'):
+            self.assertIsNone(daemon.find_holder(5, broken))
+            daemon.pause(self.f, 5, holder=daemon.find_holder(5, broken) or {})
+        self.assertTrue(daemon.paused_until(self.f))
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, broken, self.listing('gone', 3600)))
+        self.assertEqual(daemon.holder_state({'pid': 20, 'host': daemon.socket.gethostname()}, broken), 'unknown')
+
+    def test_live_holder_keeps_the_pause(self):
+        daemon.pause(self.f, 60, holder=self.holder)
+        self.assertEqual(daemon.holder_state(self.holder, self.info), 'alive')
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, self.info, self.listing()))
+        self.assertIn('(session; alive)', daemon.describe_holder(daemon.read_json(self.f['pause'], {}), self.info))
+
+    def test_dead_holder_is_stale(self):
+        daemon.pause(self.f, 60, holder=self.holder)
+        gone = fake_table(*[p for p in self.TABLE if p['pid'] != 20])
+        self.assertEqual(daemon.holder_state(self.holder, gone), 'gone')
+        self.assertIn('PID 20 exited', daemon.stale_reason(self.f, 'cfg', ME, gone, self.listing()))
+
+    def test_reused_pid_is_stale(self):
+        daemon.pause(self.f, 60, holder=self.holder)
+        reused = fake_table(*[p for p in self.TABLE if p['pid'] != 20], dict(pid=20, ppid=1, name='claude.exe',
+                                                                              order=99))
+        self.assertEqual(daemon.holder_state(self.holder, reused), 'reused')
+        self.assertIn('another process', daemon.stale_reason(self.f, 'cfg', ME, reused, self.listing()))
+        # walking up: a parent PID younger than its child is a reused PID, not the real parent
+        orphan = fake_table(dict(pid=5, ppid=4, name='python', order=3), dict(pid=4, ppid=1, name='claude', order=9))
+        self.assertIsNone(daemon.find_holder(5, orphan))
+
+    def test_expired_lease_is_stale_after_the_grace(self):
+        daemon.pause(self.f, 60, holder=self.holder)
+        late = time.time() + daemon.LEASE_GRACE + 60
+        grace = daemon.LEASE_GRACE
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, self.info, self.listing('idle', grace + 60)))  # new
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, self.info, self.listing('idle', 300, at=late), now=late))
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, self.info, self.listing('active', at=late), now=late))
+        reason = daemon.stale_reason(self.f, 'cfg', ME, self.info, self.listing('idle', grace + 120, at=late), now=late)
+        self.assertIn('lease of pi-claude idle', reason)
+        self.assertIn('lease of pi-claude gone', daemon.stale_reason(self.f, 'cfg', ME, self.info,
+                                                                     self.listing('gone', 7200, at=late), now=late))
+        with mock.patch.object(daemon, 'agents_listing', side_effect=OSError('down')), \
+                mock.patch.object(daemon, 'log'):
+            self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, self.info, now=late))  # server down: keep
+
+    def test_legacy_pause_without_holder_is_time_only(self):
+        daemon.write_json(self.f['pause'], {'until': time.time() + 60, 'by': 'interactive session'})
+        self.assertTrue(daemon.paused_until(self.f))
+        self.assertIsNone(daemon.stale_reason(self.f, 'cfg', ME, fake_table(), self.listing('gone', 7200),
+                                              now=time.time() + 30))
+        self.assertIn('time-only', daemon.describe_holder(daemon.read_json(self.f['pause'], {})))
+
+    def test_clearing_resumes_informs_the_coordinator_and_the_user(self):
+        daemon.pause(self.f, 60, holder=self.holder)
+        sent = []
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'mac-claude.json'
+            daemon.write_json(config, {'peer': 'mac-claude'})
+            with mock.patch.object(daemon, 'send', side_effect=lambda *a: sent.append(a) or True), \
+                    mock.patch.object(daemon.subprocess, 'run') as run, mock.patch.object(daemon, 'log'):
+                daemon.clear_stale(config, 'mac-claude', self.f, 'holder claude PID 20 exited', 'macos')
+            self.assertFalse(daemon.paused_until(self.f))
+            (_, to, message_id, text), = sent
+            self.assertEqual(to, 'pi-claude')
+            self.assertTrue(message_id.startswith('daemon-stale-pause-mac-claude-'))
+            self.assertEqual(text, 'INFO: daemon of mac-claude cleared a stale pause (holder claude PID 20 exited)')
+            self.assertEqual(run.call_args[0][0][0], 'osascript')
+
+    def test_coordinator_is_configurable(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'pc-claude.json'
+            self.assertEqual(daemon.notify_target(config, 'pc-claude'), 'pi-claude')  # missing config: default
+            self.assertEqual(daemon.notify_target(config, 'pi-claude'), 'pc-claude')  # coordinator: backup
+            daemon.write_json(config, {'coordinator': 'mac-claude', 'backup_coordinator': 'pi-claude'})
+            self.assertEqual(daemon.notify_target(config, 'pc-claude'), 'mac-claude')
+            self.assertEqual(daemon.notify_target(config, 'mac-claude'), 'pi-claude')
+
+    def test_the_real_process_table_finds_a_live_holder(self):
+        holder = daemon.find_holder()
+        if holder is None:
+            self.skipTest('process table unreadable here')
+        self.assertEqual(holder['host'], daemon.socket.gethostname())
+        self.assertEqual(daemon.holder_state(holder), 'alive')
+        self.assertEqual(daemon.holder_state(dict(holder, start='1')), 'reused')
+        mine = daemon.proc_info(daemon.os.getpid())
+        self.assertIsNotNone(mine)
+        self.assertEqual(mine['ppid'], daemon.os.getppid())
+
+
 class HealthTest(unittest.TestCase):
     def finish(self, f, state, rc, output, system='linux'):
         sent = []
@@ -383,9 +508,17 @@ class ProfileTest(unittest.TestCase):
 
     def test_run_prompt_names_the_git_c_forms(self):
         text = daemon.RUN_PROMPT.format(identity=ME, ids='#1', repo='/repo', tools='/repo', mailbox='mb',
-                                        limits='x', gitc='/repo', pull='')
+                                        limits='x', never='y', gitc='/repo', pull='')
         self.assertIn('git -C /repo <status|log|diff|show|branch|fetch|worktree list|worktree add>', text)
         self.assertIn('`git -C` into a worktree is refused', text)
+
+    def test_run_prompt_steps_are_numbered_in_order(self):
+        for name in sorted(daemon.PROFILES):
+            _, _, p = profile(name)
+            text = daemon.run_prompt(ME, '#1', p)
+            steps = [int(l[0]) for l in text.splitlines() if len(l) > 1 and l[0].isdigit() and l[1] == '.']
+            self.assertEqual(steps, [1, 2, 3, 4, 5], name)
+            self.assertIn('3. Never deploy', text)
 
     def test_rule_paths_for_windows_and_posix(self):
         self.assertEqual(daemon.rule_path(r'C:\Users\a\wk\K'), '//c/Users/a/wk/K')
@@ -541,6 +674,7 @@ class InstallerTest(unittest.TestCase):
                                                          '/home/pi/.config/systemd/user/agent-daemon@.service'])
         unit = plan['files'][1][1]
         self.assertEqual(unit, installer.UNIT_TEMPLATE.read_text(encoding='utf-8'))  # universal newlines: LF
+        self.assertIn('\nRestart=on-failure\n', unit)  # a crashed listener comes back
         text = self.dry('linux', identity='pi-claude', tools='/home/pi/dev/ksp1/KSPKontroller')
         self.assertIn('ExecStart=/usr/bin/python3 %h/.local/lib/agent-daemon/agent_daemon.py', text)
         self.assertNotIn('.service.d', text.split('run systemctl')[0])  # Pi: tools home = work repo, no drop-in
