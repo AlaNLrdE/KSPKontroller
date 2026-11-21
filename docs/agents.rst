@@ -73,7 +73,8 @@ pi-claude (reviewed 2026-11-18)
   unhealthy, ``systemctl --user restart agent-mailbox.service``, reported with INFO to all. ``pi-deploy`` only
   for ``./ci install_hmi``. Host of the installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``,
   state in ``~/dev/run/ksphmi``).
-- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign; merge agent branches into
+- Can: plan, assign one owner and the locks per job, watch ``overdue``, reassign (the server allows
+  ``reassign`` only to the ``serve --coordinator`` identities, default pi-claude); merge agent branches into
   KSPKontroller main with ``tools/merge_agent.py`` (user 2026-11-18); read-only Pi/ksphmi diagnostics; Python
   tests and edits in its own worktrees; measurements scheduled by the user. In an interactive session,
   ``./ci install_hmi`` on the Pi (native build from ``~/dev``, install, restart ksphmi) under the ``pi-deploy``
@@ -154,6 +155,9 @@ Joined 2026-11-18 with the user's approval (mailbox #335, #337).
   ``mac-userphone`` (iPhone app), one per device, using the shared LAN token. They are not agents and have
   no wake daemon; their messages are the user's own words typed in the app. Receiving agents still apply
   their own consent rules: push, deploy, install, flash and publish need the user's OK in their own chat.
+  The server lists them as user identities (``user-identities.json`` or ``serve --user-identity``, mailbox #443;
+  :doc:`communication`): always addressable, queued while the app is closed, outside ``all``/host groups and
+  ``overdue``, shown as ``kind=user``, and never taken over by an agent.
 - Can: build/test, run simulators, run the macOS app against the mailbox, local commits, mailbox replies.
 - Repo remote (user OK, mailbox #549): private GitHub repo ``AlaNLrdE/iKSPModAgentsApp`` as ``origin``;
   every push of it needs the user's OK typed in mac-agentsapp's own chat.

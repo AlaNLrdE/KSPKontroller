@@ -49,6 +49,8 @@ ORDER = {name: index for index, name in enumerate(STATES)}
 KINDS = ('REQUEST', 'ACK', 'RESULT', 'NOTICE')  # anything else is INFO
 ALLOWLIST = 'allowlist.json'  # next to the journal (and server.json): a JSON list of identities that may register
 GATE_REFUSAL = 'identity not on the allowlist; see agent-bus-handbook docs/onboarding.rst'
+USER_IDENTITIES = 'user-identities.json'  # next to the journal: a JSON list of USER identities (people, not agents)
+COORDINATORS = ('pi-claude',)  # who may reassign a REQUEST unless serve --coordinator names others
 
 
 def valid_identity(name):
@@ -229,11 +231,20 @@ class Journal:
     The first record is a header snapshot (version, last sequence, receipts, locks, agents); each following
     record upserts a message, drops a finished one into a receipt, or changes a lock or an agent. Protocol 2/3
     journals (plain JSONL with an unchecked header) are migrated on load after a backup copy."""
-    def __init__(self, path, allowlist=None):
+    def __init__(self, path, allowlist=None, users=(), users_file=None, coordinators=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # The register gate: re-read on every register so the operator edits it without a restart.
         self.allowlist_path = Path(allowlist) if allowlist else self.path.parent / ALLOWLIST
+        # USER identities (people using an app, mailbox #443): always addressable, never in all/host groups,
+        # never overdue. serve --user-identity names plus user-identities.json, re-read on use like the gate.
+        for name in users:
+            if not AGENT.match(name):
+                raise ValueError('user identity %r must be HOST-NAME such as mac-user' % name)
+        self.cli_users = frozenset(users)
+        self.users_path = Path(users_file) if users_file else self.path.parent / USER_IDENTITIES
+        self._users_problem = None
+        self.coordinators = frozenset(coordinators or COORDINATORS)
         self.backup_dir = self.path.parent / 'backup'
         self.condition = threading.Condition()
         self.messages = {}  # id -> message, in sequence order
@@ -260,6 +271,7 @@ class Journal:
             stamp = datetime.now().strftime('%Y%m%dT%H%M%S')
             replace_bytes(self.backup_dir / ('%s.v%d-%s%s' % (self.path.stem, migrated, stamp, self.path.suffix)),
                           self.path.read_bytes())
+        self._rotate_migration_copies()
         if migrated is not None or not self._records or self._records > COMPACT_AFTER:
             self.compact()
         else:
@@ -415,6 +427,17 @@ class Journal:
         except OSError as error:
             print('MAILBOX backup failed: %s' % error, file=sys.stderr, flush=True)
 
+    def _rotate_migration_copies(self):
+        """Keep the newest BACKUPS_KEPT protocol 2/3 migration copies (shared.vN-STAMP.jsonl), oldest stamp first."""
+        pattern = re.compile(r'^%s\.v\d+-(\d{8}T\d{6})%s$' % (re.escape(self.path.stem), re.escape(self.path.suffix)))
+        try:
+            found = sorted((match.group(1), path) for path in self.backup_dir.glob('%s.v*' % self.path.stem)
+                           for match in [pattern.match(path.name)] if match)
+            for _stamp, path in found[:-BACKUPS_KEPT]:
+                path.unlink()
+        except OSError as error:
+            print('MAILBOX backup rotation failed: %s' % error, file=sys.stderr, flush=True)
+
     def _after_change(self, now):
         if self._records > COMPACT_AFTER:
             self.compact()
@@ -423,13 +446,37 @@ class Journal:
     # -- agents ----------------------------------------------------------------------------------------------
     def _agent_view(self, agent, now):
         view = {key: value for key, value in agent.items() if key != 'session'}
-        if agent.get('released'):
-            view['state'] = 'gone'
-        elif agent['lease_expires'] > now:
+        user = agent['identity'] in self.user_identities()
+        view['kind'] = 'user' if user else 'agent'
+        if not agent.get('released') and agent['lease_expires'] > now:
             view['state'] = 'active'
+        elif user:
+            view['state'] = 'away'  # a person who closed the app: messages queue, never a takeover candidate
+        elif agent.get('released'):
+            view['state'] = 'gone'
         else:
             view['state'] = 'idle' if now - agent['last_seen'] < GONE_AFTER else 'gone'
         return view
+
+    def user_identities(self):
+        """serve --user-identity names plus a valid user-identities.json; a bad file is ignored and logged once."""
+        names, problem = set(self.cli_users), None
+        try:
+            listed = json.loads(self.users_path.read_bytes().decode('utf-8-sig'))
+            if isinstance(listed, list) and all(isinstance(n, str) and AGENT.match(n) for n in listed):
+                names.update(listed)
+            else:
+                problem = 'must be a JSON list of HOST-NAME identities'
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            problem = 'unreadable: %s' % error
+        if problem != self._users_problem:
+            self._users_problem = problem
+            if problem:
+                print('MAILBOX user identities: %s %s, ignored' % (self.users_path.name, problem),
+                      file=sys.stderr, flush=True)
+        return names
 
     def register_gate(self):
         """(state, names, problem): ('off', None, None) without an allowlist file, ('on', set, None) for a valid
@@ -479,7 +526,7 @@ class Journal:
             raise ValueError('tool 1..40 and cwd up to 400 characters required')
         with self.condition:
             old = self.agents.get(identity)
-            if old is None and not release:
+            if old is None and not release and identity not in self.user_identities():
                 self._check_gate(identity)
             if old is not None and old.get('retired'):
                 raise Conflict('identity %s was retired by %s on %s; only retire --undo brings it back'
@@ -599,17 +646,21 @@ class Journal:
     def _expand(self, address, sender):
         if not isinstance(address, str) or not 0 < len(address) <= 400:
             raise ValueError('to: one identity, a comma list, a host group (mac, pc, pi) or all')
+        users = self.user_identities()
         live = sorted(identity for identity, agent in self.agents.items() if not agent.get('released'))
+        agents = [identity for identity in live if identity not in users]  # groups never reach a person
         result = []
         for name in (part.strip() for part in address.split(',')):
             if name == 'all':
-                group = live
+                group = agents
             elif name in HOSTS:
-                group = [identity for identity in live if host_of(identity) == name]
+                group = [identity for identity in agents if host_of(identity) == name]
                 if not group:
                     raise ValueError('no agents registered on host %s' % name)
             elif valid_identity(name) and name in live:
                 group = [name]
+            elif name in users and not self.agents.get(name, {}).get('retired'):
+                group = [name]  # released or not registered yet: queued until the app registers again
             else:
                 raise ValueError('unknown recipient %r: it must be registered (agents lists them); use send '
                                  '--legacy for a protocol 3 inbox' % name)
@@ -812,9 +863,10 @@ class Journal:
         now = time.time() if now is None else now
         found = []
         with self.condition:
+            users = self.user_identities()
             for m in self.messages.values():
                 for recipient, entry in m['state'].items():
-                    if self._complete(m, recipient, entry):
+                    if recipient in users or self._complete(m, recipient, entry):
                         continue
                     owner = m['kind'] == 'REQUEST' and recipient == m['owner']
                     reasons = []
@@ -837,6 +889,9 @@ class Journal:
         now = time.time() if now is None else now
         with self.condition:
             self._touch(identity, session, now)
+            if identity not in self.coordinators:
+                raise Forbidden('only the coordinator (%s) may reassign; ask it with a message'
+                                % ', '.join(sorted(self.coordinators)))
             m = self.messages.get(message_id)
             if m is None:
                 raise NotFound('no active message %s' % message_id)
@@ -925,9 +980,13 @@ class Journal:
             self._commit(dict(k='lock', name=name, lock=None))
         return bool(expired)
 
-    def lock(self, action, name, holder, ttl=None, reason='', now=None):
+    def lock(self, action, name, holder, ttl=None, reason='', now=None, session=None, identity=None):
         """Acquire (or renew, by the same holder), release or list shared-resource locks. A lock held by another
-        agent raises LockBusy; it expires by itself after its TTL, so a crashed agent cannot block for ever."""
+        agent raises LockBusy; it expires by itself after its TTL, so a crashed agent cannot block for ever.
+
+        With a session (protocol 4 clients) the call is authenticated as the holder and the lock is bound: only
+        the holder's live session may renew or release it. Session-less (older) clients still work on unbound
+        locks, but can no longer release or renew a bound one by naming its holder."""
         now = time.time() if now is None else now
         with self.condition:
             self._prune(now)
@@ -935,7 +994,14 @@ class Journal:
                 return sorted(self.locks.values(), key=lambda l: l['name'])
             if not isinstance(name, str) or not LOCK_NAME.match(name) or not valid_identity(holder):
                 raise ValueError('lock name [a-z0-9._-] up to 40 characters and a valid holder identity required')
+            if identity is not None and identity != holder:
+                raise ValueError('a session may only take or release locks for its own identity')
+            if session is not None:
+                self._touch(holder, session, now)
             current = self.locks.get(name)
+            if current and current['holder'] == holder and current.get('bound') and session is None:
+                raise Conflict('lock %s is bound to the live session of %s: only that session may renew or release '
+                               'it (update this client)' % (name, holder))
             if action == 'acquire':
                 if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not LOCK_TTL[0] <= ttl <= LOCK_TTL[1]:
                     raise ValueError('ttl must be %d..%d seconds' % LOCK_TTL)
@@ -945,6 +1011,8 @@ class Journal:
                     raise LockBusy(current)
                 lock = dict(name=name, holder=holder, reason=reason,
                             since=current['since'] if current else now, expires=now + ttl)
+                if session is not None:
+                    lock['bound'] = True
                 self._commit(dict(k='lock', name=name, lock=lock))
                 result = dict(lock, acquired=True)
             elif action == 'release':
@@ -963,7 +1031,9 @@ class Journal:
         with self.condition:
             active = sum(1 for a in self.agents.values() if self._agent_view(a, now)['state'] == 'active')
             return {'ok': True, 'protocol': PROTOCOL, 'messages': len(self.messages), 'last_seq': self.last_seq,
-                    'agents': active, 'overdue': len(self.overdue(now)), 'register_gate': self.gate_summary()}
+                    'agents': active, 'overdue': len(self.overdue(now)), 'register_gate': self.gate_summary(),
+                    'user_identities': sorted(self.user_identities()),
+                    'coordinators': sorted(self.coordinators)}
 
 
 def make_server(host, port, journal, token, artifact_dir=None):
@@ -1024,7 +1094,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
                 return self.guarded(lambda: {'locks': journal.lock('list', None, None)})
             if url.path == '/agents':
                 return self.reply(200, {'agents': journal.agents_list(retired=args.get('retired') == '1'),
-                                        'register_gate': journal.gate_summary()})
+                                        'register_gate': journal.gate_summary(),
+                                        'user_identities': sorted(journal.user_identities())})
             if url.path == '/overdue':
                 return self.reply(200, {'overdue': journal.overdue()})
             if url.path == '/track':
@@ -1056,7 +1127,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
                 '/messages': lambda d: journal.send(d) if d.get('v') == 4 else journal.append(d),
                 '/archive': lambda d: journal.remove(d.get('seq'), d.get('peer'), d.get('digest')),
                 '/locks': lambda d: journal.lock(d.get('action'), d.get('name'), d.get('holder'),
-                                                 d.get('ttl'), d.get('reason', '')),
+                                                 d.get('ttl'), d.get('reason', ''), session=d.get('session'),
+                                                 identity=d.get('identity')),
                 '/register': lambda d: journal.register(d.get('identity'), d.get('session'), d.get('tool'),
                                                         d.get('cwd', ''), bool(d.get('takeover')),
                                                         bool(d.get('release'))),
@@ -1408,7 +1480,8 @@ def main(argv=None):
     init = sub.add_parser('init')
     init.add_argument('--url', required=True)
     init.add_argument('--peer', required=True, help='This agent\'s own identity: HOST-AGENT such as pc-codex')
-    init.add_argument('--token')
+    init.add_argument('--token', help='The server\'s shared token (required for a client config; without it a '
+                      'new random token is generated, which only suits the config a server is started with)')
     serve = sub.add_parser('serve')
     serve.add_argument('--bind', default='127.0.0.1',
                        help='Use 0.0.0.0 on a trusted LAN to follow interface IP changes; default is loopback only')
@@ -1417,6 +1490,12 @@ def main(argv=None):
     serve.add_argument('--artifacts', default='build/agent-mailbox/evidence')
     serve.add_argument('--allowlist', help='Register gate file (default: allowlist.json next to the journal); '
                        'without the file every identity may register')
+    serve.add_argument('--user-identity', action='append', default=[], metavar='NAME',
+                       help='A USER identity (a person\'s app, e.g. mac-user): always addressable, queued while '
+                       'away, never in all/host groups or overdue; repeat it. Also read from user-identities.json '
+                       'next to the journal')
+    serve.add_argument('--coordinator', action='append', default=[], metavar='NAME',
+                       help='Identity allowed to reassign REQUESTs (repeat it; default pi-claude)')
     reg = sub.add_parser('register', help='Register this identity and take its exclusive session lease')
     reg.add_argument('--tool', help='claude, codex ... (default: the AGENT part of the identity)')
     reg.add_argument('--takeover', action='store_true', help='Only after the old session is confirmed dead')
@@ -1455,8 +1534,9 @@ def main(argv=None):
     which = done.add_mutually_exclusive_group(required=True)
     which.add_argument('--id')
     which.add_argument('--seq', type=int)
-    locker = sub.add_parser('lock', help='Acquire or release a shared-resource lock (pi-deploy, ksp-gamedata, '
-                                         'board-flash, push-main) before using that resource')
+    lock_help = ('Acquire or release a shared-resource lock before using that resource: pi-deploy, ksp-gamedata, '
+                 'board-flash, push-main, ios-simulator; names are free-form ([a-z0-9._-], up to 40 characters)')
+    locker = sub.add_parser('lock', help=lock_help, description=lock_help)
     locker.add_argument('action', choices=('acquire', 'release'))
     locker.add_argument('name')
     locker.add_argument('--ttl', type=int, default=1800, help='Seconds until it expires by itself (60..14400)')
@@ -1475,16 +1555,22 @@ def main(argv=None):
         parsed = urllib.parse.urlsplit(args.url)
         if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.query or parsed.fragment:
             parser.error('expected an HTTP(S) server URL without credentials or query')
+        if not args.token:
+            print('MAILBOX warning: no --token, so a new random token was generated. Only the config a server is '
+                  'started with (serve) may do that; a client must use the server\'s token or every call gets 401.',
+                  file=sys.stderr)
         write_json(config_path, {'url': args.url.rstrip('/'), 'peer': args.peer,
                                  'token': args.token or secrets.token_urlsafe(32)})
         print('Created ' + str(config_path) + ' (private; do not commit)')
         return
     config = json.loads(config_path.read_text(encoding='utf-8'))
     if args.command == 'serve':
-        journal = Journal(args.journal, args.allowlist)
+        journal = Journal(args.journal, args.allowlist, args.user_identity, coordinators=args.coordinator)
         server = make_server(args.bind, args.port, journal, config['token'], args.artifacts)
-        print('MAILBOX protocol %d listening on %s:%s; journal %s; register gate %s' % (
-            PROTOCOL, *server.server_address, args.journal, journal.gate_summary()), flush=True)
+        print('MAILBOX protocol %d listening on %s:%s; journal %s; register gate %s; users %s; coordinators %s' % (
+            PROTOCOL, *server.server_address, args.journal, journal.gate_summary(),
+            ','.join(sorted(journal.user_identities())) or 'none', ','.join(sorted(journal.coordinators))),
+            flush=True)
         try:
             server.serve_forever()
         finally:
@@ -1494,8 +1580,11 @@ def main(argv=None):
     elif args.command == 'agents':
         listing = request(config, '/agents' + ('?retired=1' if args.retired else ''))
         print('MAILBOX register gate: %s' % listing.get('register_gate', 'unknown (older server)'))
+        if 'user_identities' in listing:
+            print('MAILBOX user identities: %s' % (', '.join(listing['user_identities']) or 'none'))
         for agent in listing['agents']:
-            print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}{retired}'.format(
+            print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}{retired}{kindtag}'.format(
+                kindtag=' kind=user' if agent.get('kind') == 'user' else '',
                 last=iso(agent['last_seen']), **dict(agent, retired=' RETIRED %s by %s' % (
                     iso(agent['retired']), agent.get('retired_by', '?')) if agent.get('retired') else '')))
     elif args.command == 'retire':
@@ -1503,8 +1592,11 @@ def main(argv=None):
         print('%s %s (state %s)' % (agent['identity'], 'retired' if agent.get('retired') else 'not retired',
                                     agent['state']))
     elif args.command == 'lock':
-        result = legacy_request(config, '/locks', dict(action=args.action, name=args.name, holder=config['peer'],
-                                                       ttl=args.ttl, reason=args.reason))
+        data = dict(action=args.action, name=args.name, holder=config['peer'], ttl=args.ttl, reason=args.reason)
+        if AGENT.match(config.get('peer', '')):
+            result = agent_request(config, config_path, '/locks', data)  # bound to this identity's session
+        else:
+            result = legacy_request(config, '/locks', data)
         print(json.dumps(result))
     elif args.command == 'locks':
         for lock in request(config, '/locks')['locks']:
