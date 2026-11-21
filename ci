@@ -38,6 +38,7 @@
 #                            the same tests, install, restart and kiosk steps as deploy_hmi, with local commands
 #   ./ci hmi_logs [N]        Last N lines (default 60) of the HMI service log on the Pi
 #                            (build_hmi_cpp and test_hmi_cpp are old names of build_hmi and test_hmi)
+#   ./ci hmi_audio_dump      The Pi HMI's last 60 s of sound (SIGUSR2 to ksphmi) as WAV into build/audio-dumps/
 #   ./ci sim [ARGS]          Simulated KSP for tests without the game: drives the Arduino (KSPSerialIO protocol)
 #                            and serves the Pi HMI (kRPC protocol); --no-board, --no-krpc, --headless, --port COMx
 #   ./ci test_sim            Simulator tests, including the krpc client against the simulated kRPC server
@@ -788,7 +789,7 @@ HMI_CROSS_DEBS="g++-13-aarch64-linux-gnu gcc-13-aarch64-linux-gnu cpp-13-aarch64
   gcc-13-aarch64-linux-gnu-base gcc-13-cross-base binutils-aarch64-linux-gnu libstdc++-13-dev-arm64-cross
   libgcc-13-dev-arm64-cross libstdc++6-arm64-cross libgcc-s1-arm64-cross"
 # The test programs the Pi runs before a cross-built ksphmi replaces the running one (ctest's C++ tests).
-HMI_PI_TESTS="ksphmi_tests ksphmi_redux_tests ksphmi_intro_tests ksphmi_render_tests"
+HMI_PI_TESTS="ksphmi_tests ksphmi_redux_tests ksphmi_intro_tests ksphmi_audio_tests ksphmi_render_tests"
 
 hmi_ssh_client() {
   local client=ssh
@@ -1456,6 +1457,31 @@ hmi_logs() {
   hmi_ssh "journalctl _SYSTEMD_USER_UNIT=ksphmi.service -n ${1:-60} --no-pager -o short"
 }
 
+# SIGUSR2 makes ksphmi write the exact device samples of the last 60 s to $XDG_RUNTIME_DIR/ksphmi-audio.wav
+# (docs/hmi.rst "Audio"); wait until the file stops growing, then copy it here. Read-only on the Pi otherwise.
+hmi_audio_dump() {
+  local out="$BUILD/audio-dumps" file
+  mkdir -p "$out"
+  file="$out/ksphmi-audio-$(date +%Y%m%d-%H%M%S).wav"
+  # shellcheck disable=SC2016
+  if ! hmi_ssh 'set -e
+    pid="$(systemctl --user show ksphmi.service -p MainPID --value)"
+    [ "${pid:-0}" != 0 ] || { echo "ksphmi.service is not running" >&2; exit 1; }
+    f="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ksphmi-audio.wav"
+    rm -f "$f"; kill -USR2 "$pid"; last=-1; i=0
+    while [ $i -lt 40 ]; do
+      size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+      [ "$size" -gt 44 ] && [ "$size" = "$last" ] && break
+      last="$size"; i=$((i + 1)); sleep 0.25
+    done
+    [ "$size" -gt 44 ] || { echo "no audio dump appeared: audio off or no device (./ci hmi_logs)" >&2; exit 1; }
+    cat "$f"' </dev/null > "$file"; then
+    rm -f "$file"
+    die "audio dump from $HMI_HOST failed"
+  fi
+  log "Audio dump: $file ($(wc -c < "$file" | tr -d ' ') bytes)"
+}
+
 clean() {
   log "Removing build outputs"
   rm -rf "$BUILD" "$PLUGIN_OUT" "$ROOT/KSPSerialIO/KSPSerialIO/obj"
@@ -1501,6 +1527,7 @@ case "${1:-help}" in
   hmi_sysroot_unpack) hmi_sysroot_unpack ;;
   hmi_cross_check)   hmi_cross_env ;;
   hmi_logs)          shift; hmi_logs "$@" ;;
+  hmi_audio_dump)    hmi_audio_dump ;;
   sim)               shift; sim "$@" ;;
   test_sim)          test_sim ;;
   ios_build)         ios_build ;;

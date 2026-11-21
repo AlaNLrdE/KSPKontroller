@@ -428,3 +428,23 @@ work. Remind them the board and the HMI only get data once a vessel is **in flig
 - Daemon for another repo (2026-11-18, mailbox #378/#380/#381): keep the *tools home* (KSPKontroller: venv, agent_daemon.py, agent_mailbox.py, configs) apart from the *work repo* (claude -p cwd, Edit and git -C root). `agent_daemon_install.py --repo <work> [--tools-dir <KSPKontroller>]`; foreign repos get the `foreign` profile and run tests only if `<work>/.claude/agent-daemon.json` declares them. Mailbox rules and the prompt use absolute tools-home paths. In Git Bash, `/Users/...` arguments to a Windows python are rewritten to `C:/Program Files/Git/Users/...`: prefix `MSYS_NO_PATHCONV=1` for macOS dry runs.
 - Stale daemon pause (2026-11-21, mailbox #673): `pause` records the holder (nearest claude/codex ancestor PID + start time) and the daemon clears the pause when it exits, its PID is reused or the lease is idle >10 min. On Windows the venv `python.exe` is a launcher that starts the real interpreter as a child: `os.getppid()` of the script is that short-lived launcher, never the session, so walk ancestors (ctypes Toolhelp32 + GetProcessTimes) and skip python names. A Windows PPID can point at a reused PID: a parent younger than its child is not the parent. Unreadable process tables or an unreachable server must keep the pause (unknown, not gone).
 - Running cross-built tests on the Pi without a deploy (2026-11-21, #622): stage with `git archive HEAD hmi-cpp | tar -x --strip-components=1`, never `git archive HEAD:hmi-cpp` (a subtree archive loses the `hmi-cpp/** eol=lf` attribute and CRLF fixtures fail 5 ksphmi_tests checks); copy build/hmi-cpp-pi/ksphmi_* into build/, `chmod +x` them on the Pi (exec bits are lost from Windows), run under the pi-deploy lock in /tmp and remove it; Git Bash tar needs `--force-local` for C:/ paths. WSL `E_FAIL` at start: the user runs `wsl --shutdown`.
+
+## Cockpit audio (2026-11-21, phase 1, docs/hmi.rst "Audio")
+
+- Logic in `src/audio.cpp` (core, no SDL: AudioDirector, synthesis, Mixer, WAV, SampleRing); the device in
+  `src/audioout.cpp` (SDL2 core audio, no SDL2_mixer, so no new Pi sysroot package). The radar ping uses the
+  painters' own `waiting_sweep_angle(skin, now)` / `waiting_lamp_lit(now)`: change a scan rate there, never
+  inline in a skin, or the ping drifts from the dot.
+- Log lines: `audio: device "NAME" (driver D), 48000 Hz, 2 ch, 512 samples`, `audio: no output device ...:
+  silent`, `audio: off ...`, `audio: muted (Ctrl+M)`, `audio dump: PATH`. Ctrl+M is consumed by the HMI; plain M
+  stays the map key.
+- Hear what the Pi played without being there: `./ci hmi_audio_dump` (SIGUSR2, waits for the file to stop
+  growing, copies `$XDG_RUNTIME_DIR/ksphmi-audio.wav` into `build/audio-dumps/`). Whole sessions: `[audio]
+  dump_dir` in `~/dev/run/ksphmi/config.local.toml`.
+- Tests: `ksphmi_audio_tests` sets `SDL_AUDIODRIVER=dummy`, which runs the callback on its own thread with no
+  sound card (it produced ~4% more samples than wall time under WSL: never time things by dump length).
+  `SDL_AUDIODRIVER=no-such-driver` checks the silent path. Locally under WSL run the HMI binaries through
+  `./ci test_hmi` (or with its `hmi_env` LD_LIBRARY_PATH): the unpacked SDL debs need libpulse from
+  `build/hmi-cpp-deps`.
+- Signalling a local test instance: `pkill -USR2 -f build/hmi-cpp/ksphmi` also matches the Bash tool's own
+  shell (its command line contains the pattern) and kills it; use `pkill -USR2 -x ksphmi`.

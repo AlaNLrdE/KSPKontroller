@@ -90,6 +90,9 @@ digits by the character on the user's layout, ``, . /`` also by physical positio
      - quicksave / quickload
    * - Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4 / Ctrl+5
      - classic / apollo / steampunk / ksp1 / ksp2 skin until the HMI exits, over the context reply and ``[display] skin``
+   * - Ctrl+M
+     - mute / unmute the HMI's own :ref:`cockpit sounds <hmi-audio>`; consumed by the HMI (plain ``M`` stays
+       KSP's map view) and never ramps the throttle
    * - Ctrl+0
      - VESSEL panel: fuel or heat (``--vessel-heat`` starts on heat)
    * - Ctrl+"+" / Ctrl+"-"
@@ -275,6 +278,71 @@ signals the worker without waiting for a system DNS lookup; its shared state sur
 The service log is read with ``journalctl _SYSTEMD_USER_UNIT=ksphmi.service`` (``./ci hmi_logs``): Raspberry
 Pi OS keeps no per-user journal, so ``journalctl --user`` finds nothing.
 
+.. _hmi-audio:
+
+Audio
+-----
+
+The HMI plays its own cockpit sounds (phase 1, user-approved 2026-11-21, mailbox #978/#980), synthesized in
+code at startup in a KSP1 Stock character; no sound files and no SDL2_mixer, so the Pi sysroot needs no new
+package. ``src/audio.cpp`` (``ksphmi_core``, no SDL) holds the logic and ``src/audioout.cpp`` (``ksphmi_ui``)
+the device.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 18 60
+
+   * - Cue
+     - Category
+     - When
+   * - radar ping (bright blip)
+     - feedback
+     - the waiting screen's LINK SEARCH scan dot completes a turn; softer (0.45) in NoVessel than while
+       connecting
+   * - lamp click (soft click)
+     - feedback
+     - each time the 1 Hz waiting annunciator lights, only while connecting (State::Connecting)
+   * - link acquired (short chord)
+     - events
+     - once on the edge Connecting/NoVessel to Flight
+   * - link lost (descending tone)
+     - alerts
+     - once on the edge Flight to Connecting/NoVessel
+   * - hum (low, continuous)
+     - ambient
+     - always while audio is on (the category is on by default)
+
+``AudioDirector`` gets each frame's state, skin, whether the waiting screen is shown and the time the painters
+drew with, and returns the cues. The scan dot angle and the lamp blink come from the same functions the skins
+draw with (``waiting_sweep_angle``, ``waiting_lamp_lit``), so a ping lands within one frame of the dot's
+crossing and cannot drift from the picture. There is no cue on the first frame (startup), none when the skin
+changes mid-sweep, and identical cues closer than 150 ms are dropped. The frame loop only queues cues into a
+lock-free single-producer/single-consumer ring; the SDL audio callback (48 kHz, 16-bit stereo, 512-sample
+buffer, 8 voices) mixes them. A missing device or audio subsystem is one log line and silence, never a
+startup failure; an opened one is logged as ``audio: device "NAME" (driver D), 48000 Hz, 2 ch, 512 samples``.
+Screenshots, ``--bench`` and ``--offscreen`` never open a device.
+
+``[audio]`` settings (gains are finite and within 0..1, otherwise the configuration is rejected):
+
+=============  =========  ======================================================================
+Key            Default    Meaning
+=============  =========  ======================================================================
+``enabled``    ``true``   ``false`` (or ``--no-audio``) opens no device
+``volume``     ``0.6``    master gain
+``alerts``     ``1.0``    link lost
+``feedback``   ``0.8``    radar ping, lamp click
+``events``     ``0.7``    link acquired
+``ambient``    ``0.5``    the hum
+``device``     ``""``     SDL output device name; ``""`` = the system default
+``dump_dir``   ``""``     a directory: each run records its whole session as
+                          ``ksphmi-audio-YYYYmmdd-HHMMSS.wav`` there
+=============  =========  ======================================================================
+
+**Dumps.** The device keeps a ring buffer of the last 60 s of the exact mixed samples it played (about 11 MB).
+``kill -USR2 <pid>`` sets a flag; the frame loop then writes them to ``$XDG_RUNTIME_DIR/ksphmi-audio.wav``
+(``/tmp`` without it) and logs ``audio dump: PATH``. ``./ci hmi_audio_dump`` does that on the Pi over SSH and
+copies the file to ``build/audio-dumps/``. With ``dump_dir`` a background thread appends what is new every
+0.25 s and rewrites the WAV header each time, so the file stays valid if the HMI is killed.
 
 .. _hmi-cockpit:
 
@@ -886,7 +954,7 @@ when the Pi resolves it to the address the SSH session comes from, so a DHCP cha
 redeploy; otherwise to the PC's address as the Pi sees it, or to ``HMI_KRPC_ADDRESS`` if set. The HMI resolves
 the name again at every reconnect (user, 2026-11-16: Mac, PC and Pi reach each other by name). Options: ``--demo --address --windowed --desktop --monitor auto|N --size WxH
 --screenshot FILE --seconds S --config FILE --fps N --bench N [--bench-anim] --offscreen --skin NAME
---layer-cache auto|on|off`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
+--layer-cache auto|on|off --no-audio`` (``ksphmi --help``). ``--bench N --bench-anim`` keeps one sample and turns only the attitude, so it times
 NavBall-only frames (full frames when the cache is off).
 
 **PC on Ethernet and Wi-Fi (prefer_mac).** A PC connected both ways announces its mDNS name with one address
@@ -1450,6 +1518,7 @@ Commands
 ``./ci install_hmi``        On the Pi itself: native build from its checkout, then the same steps as
                             ``deploy_hmi`` with local commands
 ``./ci hmi_logs [N]``       Last N lines of the service log on the Pi
+``./ci hmi_audio_dump``     The Pi HMI's last 60 s of sound (SIGUSR2) as WAV into ``build/audio-dumps/``
 ``./ci verify``             ``hmi:`` lines: views and resources, local test build current, service state and
                             unit, kRPC address still this PC, screen, cursor, kiosk, Pi render budget
 ==========================  ===========================================================================
