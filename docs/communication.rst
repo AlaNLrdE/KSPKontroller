@@ -442,8 +442,8 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
     with INFO to all). No ksphmi restarts, ``systemctl --user start/stop``, ``./ci install_hmi`` or edits to the
     installed HMI (``~/.local/bin/ksphmi``, ``~/.local/share/ksphmi``) or ``~/dev/run``; it never builds hmi-cpp
     on the Pi.
-  - ``workstation`` (default for ``pc-*`` and ``mac-*``): read-only repo and git, the mailbox,
-    ``tools/verify.py --docs-only``, Python unit tests and edits only inside a new worktree (the interactive
+  - ``workstation`` (default for ``pc-*`` and ``mac-*``): read-only repo and git except that it may fast-forward
+    the main checkout (``git pull --ff-only``, as on the Pi), the mailbox, ``tools/verify.py --docs-only``, Python unit tests and edits only inside a new worktree (the interactive
     session reviews and commits them); additionally denies ``systemctl``, ``launchctl``, ``schtasks``,
     ``taskkill``, ``git add/commit/checkout/switch`` and the service installer. On Windows the commands use the
     repo's ``build/venv/Scripts/python.exe``; elsewhere ``python3``.
@@ -453,7 +453,8 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
     ``git -C <work repo> status|log|diff|show|branch|fetch|worktree list|worktree add`` (no pull), mailbox replies
     and ``state``. No tests and no other commands unless the repo declares them; deploy, install, push, merge,
     reset, ``./ci`` and flash stay denied, plus the workstation denies.
-  - ``--profile-file FILE`` (JSON ``{"profile", "allow", "deny", "limits"}``) adds rules for a repo or identity;
+  - ``--profile-file FILE`` (JSON ``{"profile", "allow", "deny", "limits", "never"}``; ``limits`` replaces the
+    prompt's allowed scope, step 2, and ``never`` its forbidden list, step 3) adds rules for a repo or identity;
     without it the work repo's own ``.claude/agent-daemon.json`` (same format, in its main checkout, which a
     headless run cannot edit) is used when present, e.g. ``{"allow": ["python3 -m unittest discover tests:*"]}``
     to let a foreign repo's tests run. A file can never remove the base denylist.
@@ -462,7 +463,8 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   ``RESULT #N needs user: ...`` and remains pending until an interactive session with the user handles it. The
   daemon then notifies the user locally (best effort, never fatal): a macOS notification (``osascript``), a
   Windows toast (``Windows.UI.Notifications`` from PowerShell, ``msg.exe`` as fallback) or, on Linux/Pi, an INFO
-  to the coordinator ``pc-claude``. A REQUEST that waits (for a GO) is not re-run until a new waking message
+  to the coordinator: the mailbox config key ``coordinator`` (default ``pi-claude``); the coordinator's own daemon
+  informs the backup coordinator instead (key ``backup_coordinator``, default ``pc-claude``). A REQUEST that waits (for a GO) is not re-run until a new waking message
   arrives.
 * **Health check (no model).** Two consecutive failed runs (non-zero exit, timeout or ``claude`` missing, e.g.
   ``OAuth session expired``) send ``INFO: daemon of <identity> unhealthy: <error summary>`` to all once per
@@ -477,11 +479,25 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   The closing routine is ``resume`` only: never ``register --release`` while a daemon owns the identity. If a
   release happened anyway, ``resume`` registers the identity again (same session file, no takeover) and the
   daemon does the same when collect gets the "released its registration" HTTP 409.
+* **Stale pause (mailbox #673).** ``pause`` records its holder: the host, the PID of the nearest ``claude``/``codex``
+  ancestor (node/bun running their CLI counts; fallback the nearest non-python parent) and that process's start
+  time (Windows ``ctypes`` Toolhelp + ``GetProcessTimes``, Linux ``/proc/<pid>/stat``, macOS ``ps -o lstart``).
+  Every 10 s while paused the daemon clears the pause when the holder PID is gone, when the PID now belongs to
+  another process (start time differs), or when the identity's lease in the server's ``agents`` listing has been
+  ``idle``/``gone`` for more than 10 minutes (counted once the pause itself is that old; an open session renews
+  the lease with ``watch``/``collect``). It logs ``stale pause cleared: <reason>``, resumes, notifies the user
+  locally and sends ``INFO: daemon of <identity> cleared a stale pause (<reason>)`` to the coordinator
+  (``--id daemon-stale-pause-<identity>-<pause time>``), then listens normally. An unreadable process table or an
+  unreachable server keeps the pause. A pause file without a holder (written by an older daemon) is time-only.
+  The services restart a crashed listener: systemd ``Restart=on-failure``, launchd ``KeepAlive``
+  (``SuccessfulExit: false``), Task Scheduler ``RestartOnFailure``.
 * **Backoff.** Consecutive collect failures (server down, refused registration) wait 2, 4, 8 ... up to 300 s
   between attempts instead of retrying in a tight loop; the first success logs the recovery and resets it.
 * **Audit.** Each run's transcript goes to ``build/agent-mailbox/<identity>.daemon/runs/`` and one line with its
-  ``SUMMARY:`` to ``summary.md``; ``agent_daemon.py --config ... state`` shows the pause, the health streak, the
-  run count and the last runs. The interactive session reports them to the user when it opens.
+  ``SUMMARY:`` to ``summary.md``; ``agent_daemon.py --config ... state`` shows the pause and its holder (alive,
+  gone, reused or unknown), the health streak, the run count and the last runs. The interactive session reports
+  them to the user when it opens. ``state --mark-seen`` marks every message now pending as seen, so none of them
+  wakes a run (use it after the interactive session handled them itself).
 
 Peers address the identity as before and see no difference except slower answers (one headless start) and
 ``needs user`` replies for actions only the user may approve.
@@ -510,7 +526,8 @@ runs the real install on each machine:
    python3 tools/agent_daemon_install.py --identity pi-claude uninstall --dry-run
 
 Tests (no model, no server, nothing installed; Windows, macOS and Linux): ``python3 -m unittest
-tools/test_agent_daemon.py`` covers the wake rule and addressing, pause/resume and the identity lock, the health
+tools/test_agent_daemon.py`` covers the wake rule and addressing, pause/resume, stale pauses (live, dead and
+reused holder PIDs, an expired lease, a legacy pause without holder) and the identity lock, the health
 streak and its INFO, ``needs user`` notifications, the profiles (deploy/push/flash denied everywhere) and the
 installer dry runs for all three platforms, foreign work repos (pc-workbench, pc-redux, mac-workbench), the config
 search order and the refusal of a real install when the python, daemon, mailbox client, config or work repo is

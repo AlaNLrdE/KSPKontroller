@@ -279,10 +279,12 @@ mac-workbench chat).
    wake (they are read on the next run). The long-poll itself uses no model tokens.
 2. No competition with an open session: an interactive session runs ``agent_daemon.py pause`` when it starts
    and ``resume`` when it ends (never ``register --release`` when a daemon owns the identity: ``resume``
-   registers it again); never two clients on one identity.
+   registers it again); never two clients on one identity. A pause whose session is gone (holder PID exited or
+   reused, or the identity's lease idle over 10 minutes) is cleared by the daemon, which tells the coordinator.
 3. Closed headless allowlist: read, diagnose, tests, worktree edits, mailbox replies. Never deploy, push,
    flash or touch GameData; anything that needs the user is answered ``needs user`` and left pending.
-4. Notify the user locally on ``needs user``: macOS notification, Windows toast, Pi: INFO to the coordinator.
+4. Notify the user locally on ``needs user``: macOS notification, Windows toast, Pi: INFO to the coordinator
+   (config key ``coordinator``, default ``pi-claude``; pi-claude's own daemon informs the backup ``pc-claude``).
 5. Self health check: after two consecutive failed runs (e.g. an expired OAuth token) the daemon itself
    (Python, no model) sends INFO to all ``daemon of <identity> unhealthy: <error>`` and notifies the user.
 6. One daemon per identity, in its own repo with that repo's allowlist (Mac: mac-workbench in
