@@ -303,6 +303,27 @@ mac-workbench chat).
    Each ``CLAUDE.md`` editor stores this rule as a LOCAL commit (KSPKontroller pc-claude, ksp-workbench
    mac-workbench, KSP2_decompilation pc-redux).
 
+Rule: identity resolution (user 2026-11-19)
+-------------------------------------------
+
+An identity is resolved from **(host, repo, scope)**, not from a folder path that drifts between machines and
+worktrees (mailbox #714; details in :doc:`communication`, "Identity resolution"):
+
+1. Each repo commits ``.agent-bus.toml`` at its root (``repo = "..."`` plus ``[[identity]]`` entries with
+   ``host``, ``identity`` and optional ``subdir``/``branch`` matchers); the most specific match wins, a tie
+   resolves no identity. ``AGENT_IDENTITY`` (comma list for multi-identity sessions) overrides it.
+2. Each machine has a state dir (``AGENT_BUS_STATE``, ``%APPDATA%\agent-bus``, ``~/.config/agent-bus``; Pi
+   ``~/dev/run/agent-mailbox``) with the ``host`` file, the ``<identity>.json`` configs and their files;
+   ``build/agent-mailbox/`` stays the fallback.
+3. A session starts with ``agent_mailbox.py claim`` (never a takeover of a live lease or a live local session;
+   a dead one is taken over and announced with ``INFO HANDOVER`` to all) and ends with ``unclaim``, which
+   resumes the daemon. ``whoami`` shows the resolution without sending anything.
+4. The daemon runs headless work in the worktree named by ``<identity>.home.json``; a missing worktree means
+   no run and ``INFO ... unhealthy`` to all. Services no longer need a fixed ``--repo``.
+5. Rollout after the tools land: each ``CLAUDE.md`` editor adds the repo's ``.agent-bus.toml`` and
+   SessionStart/SessionEnd hooks; each machine writes its ``host`` file; service reinstalls only with the user's
+   OK in that agent's own chat.
+
 Retired identities
 ------------------
 
