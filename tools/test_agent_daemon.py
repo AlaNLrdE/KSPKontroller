@@ -67,16 +67,16 @@ FORBIDDEN = ['./ci deploy', './ci deploy_all', './ci deploy_hmi', './ci install'
 
 class WakeTest(unittest.TestCase):
     def test_request_and_notice_wake(self):
-        self.assertIs(daemon.select([msg('a')], {}, 6, time.time(), ME), True)
-        self.assertIs(daemon.select([msg('n', 'NOTICE', 'NOTICE: reassigned')], {}, 6, time.time(), ME), True)
+        self.assertIs(daemon.select([msg('a')], {}, ME), True)
+        self.assertIs(daemon.select([msg('n', 'NOTICE', 'NOTICE: reassigned')], {}, ME), True)
 
     def test_info_ack_and_result_never_wake(self):
         for kind, text in (('INFO', 'GO'), ('ACK', 'ACK #1'), (None, 'ACK #1 (protocol 3)'), ('RESULT', 'RESULT #3'),
                            (None, 'just a note')):
-            self.assertIs(daemon.select([msg('a', kind, text)], {}, 6, time.time(), ME), False, text)
+            self.assertIs(daemon.select([msg('a', kind, text)], {}, ME), False, text)
 
     def test_legacy_items_take_the_kind_from_the_text(self):
-        self.assertIs(daemon.select([msg('a', None, 'request: legacy')], {}, 6, time.time(), ME), True)
+        self.assertIs(daemon.select([msg('a', None, 'request: legacy')], {}, ME), True)
 
     def test_addressing_identity_group_and_all(self):
         for address in (ME, 'pi', 'all', 'mac-claude,pi', 'pc-claude, pi-claude'):
@@ -90,19 +90,27 @@ class WakeTest(unittest.TestCase):
 
     def test_a_seen_waiting_request_does_not_rerun_and_info_does_not_revive_it(self):
         state = {'seen': {'a': 'x'}}
-        self.assertIs(daemon.select([msg('a')], state, 6, time.time(), ME), False)
-        self.assertIs(daemon.select([msg('a'), msg('go', 'INFO', 'GO')], state, 6, time.time(), ME), False)
-        self.assertIs(daemon.select([msg('a'), msg('go', 'REQUEST', 'REQUEST: GO')], state, 6, time.time(), ME),
+        self.assertIs(daemon.select([msg('a')], state, ME), False)
+        self.assertIs(daemon.select([msg('a'), msg('go', 'INFO', 'GO')], state, ME), False)
+        self.assertIs(daemon.select([msg('a'), msg('go', 'REQUEST', 'REQUEST: GO')], state, ME),
                       True)
 
     def test_three_failures_give_up(self):
-        self.assertIs(daemon.select([msg('a')], {'failures': {'a': 2}}, 6, time.time(), ME), True)
-        self.assertIs(daemon.select([msg('a')], {'failures': {'a': 3}}, 6, time.time(), ME), False)
+        self.assertIs(daemon.select([msg('a')], {'failures': {'a': 2}}, ME), True)
+        self.assertIs(daemon.select([msg('a')], {'failures': {'a': 3}}, ME), False)
 
-    def test_rate_limit_counts_the_last_hour_only(self):
+    def test_no_hourly_run_limit(self):
         now = time.time()
-        self.assertEqual(daemon.select([msg('a')], {'runs': [now - 60] * 6}, 6, now, ME), 'rate-limited')
-        self.assertIs(daemon.select([msg('a')], {'runs': [now - 4000] * 6}, 6, now, ME), True)
+        self.assertIs(daemon.select([msg('a')], {'runs': [now - 60] * 50}, ME), True)
+
+    def test_installed_services_may_still_pass_max_runs(self):
+        with tempfile.TemporaryDirectory() as d:
+            config = Path(d) / 'pi-claude.json'
+            config.write_text('{}', encoding='utf-8')
+            with mock.patch.object(daemon, 'run') as run:
+                daemon.main(['--config', str(config), 'run', '--max-runs', '6'])
+            run.assert_called_once()
+            self.assertEqual(run.call_args[0][0].command, 'run')
 
 
 class CycleTest(unittest.TestCase):
@@ -119,7 +127,7 @@ class CycleTest(unittest.TestCase):
         with mock.patch.object(daemon, 'mailbox', return_value=ok) as mailbox, \
                 mock.patch.object(daemon, 'pending', return_value=(self.mb, {}, items)), \
                 mock.patch.object(daemon, 'launch') as launch:
-            daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'})
+            daemon.cycle('cfg.json', ME, self.f, {'name': 'pi'})
         return mailbox, launch
 
     def test_paused_daemon_does_not_collect(self):
@@ -152,7 +160,7 @@ class CycleTest(unittest.TestCase):
         with mock.patch.object(daemon, 'mailbox', side_effect=[released, ok, ok]) as mailbox, \
                 mock.patch.object(daemon, 'pending', return_value=(self.mb, {}, [msg('a')])), \
                 mock.patch.object(daemon, 'launch') as launch:
-            self.assertTrue(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+            self.assertTrue(daemon.cycle('cfg.json', ME, self.f, {'name': 'pi'}))
         self.assertEqual([c.args for c in mailbox.call_args_list],
                          [('cfg.json', 'collect'), ('cfg.json', 'register'), ('cfg.json', 'collect')])
         launch.assert_called_once()
@@ -161,7 +169,7 @@ class CycleTest(unittest.TestCase):
         down = subprocess.CompletedProcess([], 1, '', 'connection refused')
         with mock.patch.object(daemon, 'mailbox', return_value=down) as mailbox, \
                 mock.patch.object(daemon, 'launch') as launch:
-            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, {'name': 'pi'}))
         mailbox.assert_called_once_with('cfg.json', 'collect')
         launch.assert_not_called()
 
@@ -169,7 +177,7 @@ class CycleTest(unittest.TestCase):
         released = subprocess.CompletedProcess([], 1, '', 'HTTP 409: identity x released its registration')
         refused = subprocess.CompletedProcess([], 1, '', 'HTTP 409: in use by a live session')
         with mock.patch.object(daemon, 'mailbox', side_effect=[released, refused]) as mailbox:
-            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, 6, {'name': 'pi'}))
+            self.assertFalse(daemon.cycle('cfg.json', ME, self.f, {'name': 'pi'}))
         self.assertEqual(mailbox.call_count, 2)  # no second collect without a registration
 
     def test_backoff_grows_and_is_capped(self):
@@ -575,7 +583,7 @@ class InstallerTest(unittest.TestCase):
         for piece in (r'<Command>C:\Users\alanl\wk\KSPKontroller\build\venv\Scripts\pythonw.exe</Command>',
                       r'"C:\Users\alanl\wk\KSPKontroller\tools\agent_daemon.py" --config '
                       r'"C:\Users\alanl\wk\KSPKontroller\build\agent-mailbox\pc-workbench.json" '
-                      r'--repo "C:\Users\alanl\wk\decompilation\ksp-workbench" run --max-runs 6',
+                      r'--repo "C:\Users\alanl\wk\decompilation\ksp-workbench" run --log',
                       r'<WorkingDirectory>C:\Users\alanl\wk\decompilation\ksp-workbench</WorkingDirectory>',
                       tools + r'\build\agent-mailbox\pc-workbench.daemon\daemon.log',
                       tools + r'\build\agent-mailbox\pc-workbench.daemon\task.xml'):
@@ -602,7 +610,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(data['ProgramArguments'][1:], [
             '/Users/alan/wk/KSPKontroller/tools/agent_daemon.py', '--config',
             '/Users/alan/wk/KSPKontroller/build/agent-mailbox/mac-workbench.json', '--repo',
-            '/Users/alan/wk/ksp-workbench', 'run', '--max-runs', '6'])
+            '/Users/alan/wk/ksp-workbench', 'run'])
         self.assertEqual(data['WorkingDirectory'], '/Users/alan/wk/ksp-workbench')
         self.assertEqual(data['EnvironmentVariables']['AGENT_DAEMON_REPO'], '/Users/alan/wk/KSPKontroller')
         self.assertEqual(data['EnvironmentVariables']['AGENT_DAEMON_WORK_REPO'], '/Users/alan/wk/ksp-workbench')
@@ -636,7 +644,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(path, '/home/pi/.config/systemd/user/agent-daemon@pi-x.service.d/work-repo.conf')
         for piece in ('WorkingDirectory=/home/pi/wk/other', 'Environment=AGENT_DAEMON_WORK_REPO=/home/pi/wk/other',
                       'Environment=AGENT_DAEMON_REPO=/home/pi/wk/KSPKontroller', '\nExecStart=\n',
-                      '--repo /home/pi/wk/other run --max-runs 6'):
+                      '--repo /home/pi/wk/other run\n'):
             self.assertIn(piece, dropin)
         self.assertIn(path, plan['remove'])
 

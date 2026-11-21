@@ -92,12 +92,12 @@ def resolve_config(system, identity, tools, work, config=None, exists=os.path.ex
     return candidates[0][1], 'none found (default: tools home)'
 
 
-def daemon_args(config, work, tools, max_runs, system):
+def daemon_args(config, work, tools, system):
     """agent_daemon.py arguments after the script: the work repo is explicit whenever it is not the tools home."""
     args = ['--config', str(config)]
     if pure(system)(work) != pure(system)(tools):
         args += ['--repo', str(work)]
-    return args + ['run', '--max-runs', str(max_runs)]
+    return args + ['run']
 
 
 def requirements(python, tools, config, work, system):
@@ -107,7 +107,7 @@ def requirements(python, tools, config, work, system):
             ('work repo', str(work))]
 
 
-def plan_linux(identity, tools, work, config, home, max_runs=6, python=None, **_):
+def plan_linux(identity, tools, work, config, home, python=None, **_):
     """systemd --user: the unit template stays the source and the Pi keeps it unchanged (tools home = work repo =
     ~/dev/ksp1/KSPKontroller); another tools home rewrites the template, another work repo, config or python goes into
     the identity's own drop-in."""
@@ -115,8 +115,6 @@ def plan_linux(identity, tools, work, config, home, max_runs=6, python=None, **_
     unit = UNIT_TEMPLATE.read_text(encoding='utf-8').replace('\r\n', '\n')
     if tools != home / 'dev' / 'ksp1' / 'KSPKontroller':
         unit = unit.replace('%h/dev/ksp1/KSPKontroller', str(tools))
-    if max_runs != 6:
-        unit = unit.replace('run --max-runs 6', 'run --max-runs %d' % max_runs)
     service = 'agent-daemon@%s.service' % identity
     dropin = str(home / '.config/systemd/user' / (service + '.d') / 'work-repo.conf')
     files = [(str(home / '.local/lib/agent-daemon/agent_daemon.py'), ('copy', str(tools / 'tools/agent_daemon.py'))),
@@ -127,7 +125,7 @@ def plan_linux(identity, tools, work, config, home, max_runs=6, python=None, **_
                  '[Service]', 'WorkingDirectory=%s' % work, 'Environment=AGENT_DAEMON_REPO=%s' % tools,
                  'Environment=AGENT_DAEMON_WORK_REPO=%s' % work, 'ExecStart=',
                  'ExecStart=%s %%h/.local/lib/agent-daemon/agent_daemon.py %s' % (
-                     python or '/usr/bin/python3', ' '.join(daemon_args(config, work, tools, max_runs, 'linux')))]
+                     python or '/usr/bin/python3', ' '.join(daemon_args(config, work, tools, 'linux')))]
         files.append((dropin, '\n'.join(lines) + '\n'))
     return dict(
         files=files,
@@ -138,14 +136,14 @@ def plan_linux(identity, tools, work, config, home, max_runs=6, python=None, **_
         notes=['needs lingering for a start at boot without login: loginctl enable-linger (the user runs it)'])
 
 
-def plan_macos(identity, tools, work, config, home, uid, max_runs=6, python=None, **_):
+def plan_macos(identity, tools, work, config, home, uid, python=None, **_):
     home, tools, work = PurePosixPath(home), PurePosixPath(tools), PurePosixPath(work)
     python = python or '/usr/bin/python3'
     base = PurePosixPath(config).parent / (PurePosixPath(config).stem + '.daemon')
     plist = plistlib.dumps({
         'Label': label(identity),
         'ProgramArguments': [python, str(tools / 'tools/agent_daemon.py')]
-                            + daemon_args(config, work, tools, max_runs, 'macos'),
+                            + daemon_args(config, work, tools, 'macos'),
         'WorkingDirectory': str(work),
         'EnvironmentVariables': {'AGENT_DAEMON_REPO': str(tools), 'AGENT_DAEMON_WORK_REPO': str(work),
                                  'PATH': '%s/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' % home},
@@ -164,12 +162,12 @@ def plan_macos(identity, tools, work, config, home, uid, max_runs=6, python=None
                 notes=['logs: ' + str(base / 'daemon.log')])
 
 
-def task_xml(identity, tools, work, config, user, max_runs=6, python=None):
+def task_xml(identity, tools, work, config, user, python=None):
     tools, work, config = PureWindowsPath(tools), PureWindowsPath(work), PureWindowsPath(config)
     pythonw = PureWindowsPath(python) if python else tools / 'build' / 'venv' / 'Scripts' / 'pythonw.exe'
     base = config.parent / (config.stem + '.daemon')
     arguments = ' '.join('"%s"' % a if (' ' in a or '\\' in a or '/' in a) else a for a in (
-        [str(tools / 'tools' / 'agent_daemon.py')] + daemon_args(config, work, tools, max_runs, 'windows')
+        [str(tools / 'tools' / 'agent_daemon.py')] + daemon_args(config, work, tools, 'windows')
         + ['--log', str(base / 'daemon.log')]))
     return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -226,13 +224,13 @@ def task_xml(identity, tools, work, config, user, max_runs=6, python=None):
            command=escape(str(pythonw)), arguments=escape(arguments), work=escape(str(work)))
 
 
-def plan_windows(identity, tools, work, config, user, max_runs=6, python=None, **_):
+def plan_windows(identity, tools, work, config, user, python=None, **_):
     tools_w, config_w = PureWindowsPath(tools), PureWindowsPath(config)
     base = config_w.parent / (config_w.stem + '.daemon')
     xml_path = str(base / 'task.xml')
     pythonw = PureWindowsPath(python) if python else tools_w / 'build' / 'venv' / 'Scripts' / 'pythonw.exe'
     name = task_name(identity)
-    return dict(files=[(xml_path, ('utf-16', task_xml(identity, tools, work, config, user, max_runs, python)))],
+    return dict(files=[(xml_path, ('utf-16', task_xml(identity, tools, work, config, user, python)))],
                 install=[['schtasks', '/Create', '/TN', name, '/XML', xml_path, '/F'], ['schtasks', '/Run', '/TN', name]],
                 uninstall=[['schtasks', '/End', '/TN', name], ['schtasks', '/Delete', '/TN', name, '/F']],
                 remove=[xml_path], requires=requirements(pythonw, tools, config, work, 'windows'),
@@ -242,13 +240,13 @@ def plan_windows(identity, tools, work, config, user, max_runs=6, python=None, *
 PLANS = {'linux': plan_linux, 'macos': plan_macos, 'windows': plan_windows}
 
 
-def make_plan(system, identity, tools, home, uid=None, user=None, max_runs=6, work=None, config=None, python=None):
+def make_plan(system, identity, tools, home, uid=None, user=None, work=None, config=None, python=None):
     """``tools`` is the tools home; ``work`` (default: the tools home) the work repo; ``config`` defaults to the
     tools home's build/agent-mailbox/<identity>.json."""
     work = work or tools
     config = config or str(pure(system)(tools) / 'build' / 'agent-mailbox' / (identity + '.json'))
     return PLANS[system](identity=identity, tools=tools, work=work, config=config, home=home, uid=uid, user=user,
-                         max_runs=max_runs, python=python)
+                         python=python)
 
 
 def missing(plan, exists=os.path.exists):
@@ -310,7 +308,8 @@ def main(argv=None):
                     '<identity>.json)')
     ap.add_argument('--python', help='interpreter the service runs (default: tools venv pythonw.exe on Windows, '
                     '/usr/bin/python3 elsewhere)')
-    ap.add_argument('--max-runs', type=int, default=6)
+    # Accepted and ignored for old command lines: the daemon has no hourly run limit any more.
+    ap.add_argument('--max-runs', type=int, help=argparse.SUPPRESS)
     ap.add_argument('action', choices=('install', 'uninstall'))
     ap.add_argument('--dry-run', action='store_true', help='print what would be written and run, change nothing')
     args = ap.parse_args(argv)
@@ -333,7 +332,7 @@ def main(argv=None):
     home = str(Path.home()) if system == here else str(PurePosixPath(tools).parents[1]) if system != 'windows' else ''
     uid = os.getuid() if hasattr(os, 'getuid') and system == here else 501
     user = os.environ.get('USERDOMAIN', '') + '\\' + getpass.getuser() if system == 'windows' else getpass.getuser()
-    plan = make_plan(system, args.identity, tools, home, uid=uid, user=user, max_runs=args.max_runs, work=work,
+    plan = make_plan(system, args.identity, tools, home, uid=uid, user=user, work=work,
                      config=str(config), python=args.python)
     absent = missing(plan) if system == here and args.action == 'install' else []
     if args.dry_run:

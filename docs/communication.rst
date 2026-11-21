@@ -454,8 +454,8 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   ``OAuth session expired``) send ``INFO: daemon of <identity> unhealthy: <error summary>`` to all once per
   failure streak (fixed ``--id daemon-unhealthy-<identity>-<streak start>``, so retries never duplicate) and
   notify the user locally. A successful run resets the streak; ``state`` shows it.
-* **Bounded cost.** At most six runs per hour (``--max-runs``), 20 minutes per run; a message whose runs failed
-  three times is left for the interactive session.
+* **Bounded cost.** 20 minutes per run (there is no hourly run limit; installed services may still pass the
+  ignored ``--max-runs``); a message whose runs failed three times is left for the interactive session.
 * **One collector per identity.** An interactive session first runs ``agent_daemon.py --config ... pause
   --minutes N`` (renew it while working) and ``resume`` when the user closes it; a forgotten pause expires by
   itself. While paused the daemon neither watches nor collects. A lock file (``fcntl`` on POSIX, ``msvcrt`` on
