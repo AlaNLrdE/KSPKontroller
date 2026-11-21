@@ -753,6 +753,21 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('tools home: /Users/alan/wk/KSPKontroller', text)
         self.assertIn('work repo:  /Users/alan/wk/ksp-workbench', text)
 
+
+    def test_no_fixed_repo_is_needed_and_repo_stays_accepted(self):
+        text = self.dry('linux', identity='pi-claude', tools='/home/pi/dev/ksp1/KSPKontroller')
+        self.assertNotIn('--repo', text)
+        self.assertNotIn('AGENT_DAEMON_WORK_REPO', text)
+        text = self.dry('linux', identity='pi-x', repo='/home/pi/wk/other', tools='/home/pi/dev/ksp1/KSPKontroller')
+        self.assertIn('--repo /home/pi/wk/other', text)
+        tools, work = '/t', '/w'
+        found = lambda *paths: (lambda p: p in paths)
+        both = found('/s/mac-claude.json', '/t/build/agent-mailbox/mac-claude.json')
+        path, source = installer.resolve_config('macos', 'mac-claude', tools, work, exists=both, state='/s')
+        self.assertEqual((str(path), source), ('/s/mac-claude.json', 'state dir'))
+        path, source = installer.resolve_config('macos', 'mac-claude', tools, work, exists=found(), state='/s')
+        self.assertEqual((str(path), source[:10]), ('/t/build/agent-mailbox/mac-claude.json', 'none found'))
+
     def test_config_resolution_order(self):
         tools, work = '/t', '/w'
         found = lambda *paths: (lambda p: p in paths)
@@ -819,6 +834,101 @@ class InstallerTest(unittest.TestCase):
         other = 'macos' if installer.platform_name() != 'macos' else 'windows'
         with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
             installer.main(['--identity', 'pc-claude', '--os', other, 'install'])
+
+
+class HomePointerTest(unittest.TestCase):
+    """<identity>.home.json (written by agent_mailbox.py claim) picks the run's worktree before each run."""
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.dir.name)
+        self.config = self.root / 'pc-claude.json'
+        self.config.write_text(json.dumps({'peer': 'pc-claude'}), encoding='utf-8')
+        self.f = daemon.files(self.config)
+        self.mb = mock.Mock()
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def home(self, worktree):
+        daemon.write_json(daemon.home_file(self.config), {'identity': 'pc-claude', 'worktree': str(worktree)})
+
+    def cycle(self, items, profile_for=None):
+        ok = subprocess.CompletedProcess([], 0, '', '')
+        with mock.patch.object(daemon, 'mailbox', return_value=ok), \
+                mock.patch.object(daemon, 'pending', return_value=(self.mb, {}, items)), \
+                mock.patch.object(daemon, 'launch') as launch, \
+                mock.patch.object(daemon, 'send', return_value=True) as send, \
+                mock.patch.object(daemon, 'local_notify', return_value=True) as notify, \
+                mock.patch.object(daemon, 'log'):
+            self.assertTrue(daemon.cycle(self.config, 'pc-claude', self.f, {'name': 'workstation'}, profile_for))
+        return launch, send, notify
+
+    def test_without_a_home_pointer_the_work_repo_applies(self):
+        launch, _, _ = self.cycle([msg('a', recipient='pc-claude')])
+        self.assertIsNone(launch.call_args[0][6])  # launch falls back to WORK
+
+    def test_the_home_worktree_is_the_runs_cwd_and_allowlist_root(self):
+        work = self.root / 'wt'
+        work.mkdir()
+        self.home(work)
+        launch, send, _ = self.cycle([msg('a', recipient='pc-claude')], profile_for=lambda w: {'name': 'for', 'w': w})
+        args = launch.call_args[0]
+        self.assertEqual((args[5], args[6]), ({'name': 'for', 'w': work}, work))
+        send.assert_not_called()
+
+    def test_a_missing_worktree_means_no_run_and_one_unhealthy_info(self):
+        self.home(self.root / 'gone')
+        launch, send, notify = self.cycle([msg('a', recipient='pc-claude')])
+        launch.assert_not_called()
+        self.assertEqual(send.call_count, 1)
+        to, message_id, text = send.call_args[0][1:]
+        self.assertEqual(to, 'all')
+        self.assertTrue(message_id.startswith('daemon-home-missing-pc-claude-'))
+        self.assertIn('unhealthy', text)
+        self.assertIn(str(self.root / 'gone'), text)
+        notify.assert_called_once()
+        launch, send, notify = self.cycle([msg('a', recipient='pc-claude')])  # reported once per worktree
+        launch.assert_not_called()
+        send.assert_not_called()
+        (self.root / 'gone').mkdir()  # the worktree is back (or a new claim): runs resume, flag cleared
+        launch, _, _ = self.cycle([msg('a', recipient='pc-claude')])
+        launch.assert_called_once()
+        self.assertNotIn('home_missing', daemon.read_json(self.f['state'], {}))
+
+    def test_headless_runs_get_agent_daemon_run(self):
+        work = self.root / 'wt'
+        work.mkdir()
+        seen = {}
+
+        def fake_run(argv, **kw):
+            seen.update(cwd=kw.get('cwd'), env=kw.get('env'))
+            kw['stdout'].write('SUMMARY: ok\n')
+            return subprocess.CompletedProcess(argv, 0, '', '')
+
+        p = daemon.load_profile(work, self.config, 'pc-claude', tools=work)
+        with mock.patch.object(daemon.subprocess, 'run', side_effect=fake_run), \
+                mock.patch.object(daemon, 'record_health'), mock.patch.object(daemon, 'log'):
+            daemon.launch(self.config, 'pc-claude', [msg('m1', recipient='pc-claude')], self.f, {}, p, work)
+        self.assertEqual((seen['cwd'], seen['env']['AGENT_DAEMON_RUN']), (work, '1'))
+
+    def test_config_is_found_in_the_state_dir_first(self):
+        state, tools = self.root / 'state', self.root / 'tools'
+        (tools / 'build' / 'agent-mailbox').mkdir(parents=True)
+        (tools / 'build' / 'agent-mailbox' / 'pc-claude.json').write_text('{}', encoding='utf-8')
+        old, cwd = (daemon.TOOLS, daemon.WORK), os.getcwd()
+        os.chdir(self.root)
+        try:
+            daemon.TOOLS = daemon.WORK = tools
+            with mock.patch.dict(os.environ, {'AGENT_BUS_STATE': str(state)}):
+                self.assertEqual(daemon.resolve_config('build/agent-mailbox/pc-claude.json'),
+                                 (tools / 'build' / 'agent-mailbox' / 'pc-claude.json').resolve())  # fallback
+                state.mkdir()
+                (state / 'pc-claude.json').write_text('{}', encoding='utf-8')
+                self.assertEqual(daemon.resolve_config('build/agent-mailbox/pc-claude.json'),
+                                 (state / 'pc-claude.json').resolve())
+        finally:
+            os.chdir(cwd)
+            daemon.TOOLS, daemon.WORK = old
 
 
 if __name__ == '__main__':

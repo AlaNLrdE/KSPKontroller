@@ -426,6 +426,73 @@ archive and done recovered from the server; lease expiry reported overdue; reass
 migration copies; compaction only after every recipient; a protocol 3 client against a protocol 4 server; ten
 concurrent writer threads; checksum and torn-record handling; migration of protocol 3 and older journals.
 
+Identity resolution (2026-11-19)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Paths drift between machines and worktrees (mailbox #714: ``agents`` listed Mac cwds under ``~/wk/devKSP/...`` and
+a stale ``~/wk/KSPKontroller`` for pi-claude while the roster named other folders), so a session resolves its
+identity from **(host, repo, scope)** instead of a hard-coded config path (direction approved by the user in
+pi-claude's chat 2026-11-19; spec in the agent-bus-handbook, ``docs/protocol/identity-resolution.rst``).
+``tools/agent_identity.py`` implements it (stdlib, Python 3.9+; ``tomllib`` when present, else a minimal parser
+for the subset below). Protocol 4 is unchanged and old clients and configs keep working.
+
+* **host** is the first word of the per-machine file ``<state dir>/host`` (``pc``, ``mac``, ``pi``), never the
+  hostname.
+* **repo and scope** come from the versioned ``.agent-bus.toml`` at the worktree top (the nearest directory with
+  the file; the upward search stops at the first directory with ``.git`` and no file)::
+
+     repo = "KSPKontroller"
+     [[identity]]
+     host = "pc"
+     identity = "pc-claude"
+     [[identity]]
+     host = "pc"
+     identity = "pc-codex"
+     subdir = "tools"           # optional: path prefix of the cwd relative to the worktree top
+     branch = "agent/codex-*"   # optional: exact branch or fnmatch pattern
+
+  An entry matches when its host equals the host file and every matcher it has matches (``subdir`` compares
+  whole path components). The most specific match wins: deeper ``subdir`` first, then an exact ``branch``
+  before a pattern before none. A tie between different identities is an error and resolves no identity.
+  The branch and HEAD are read from the git files (linked worktrees included), no git binary needed.
+* ``AGENT_IDENTITY`` (one identity, or a comma list for a multi-identity session) overrides the file; it needs
+  neither a host file nor a toml.
+* **State dir**: ``AGENT_BUS_STATE``, else ``%APPDATA%\agent-bus`` on Windows, else ``~/.config/agent-bus``
+  (the Pi sets ``AGENT_BUS_STATE=~/dev/run/agent-mailbox``). It holds ``host``, ``<identity>.json`` with all its
+  per-identity files (session, history, done, cursor, ``<identity>.daemon/``) and ``<identity>.home.json``. The
+  client looks there first; ``build/agent-mailbox/`` (of the cwd, the worktree top, then the tools home) is the
+  fallback, so existing configs keep working. Without ``--config`` every command uses the resolved identity's
+  config (``--identity NAME`` picks one); with nothing resolved the old default
+  ``build/agent-mailbox/config.json`` applies, and ``init`` without ``--config`` writes into the state dir.
+
+Commands::
+
+   python tools/agent_mailbox.py whoami    # resolve and print identity, config candidates, home pointer; sends nothing
+   python tools/agent_mailbox.py claim     # take the resolved identity(ies) for this session
+   python tools/agent_mailbox.py unclaim   # give them back to the daemon
+
+``claim`` never takes over a live identity. It reports and changes nothing (exit 3) when ``<identity>.home.json``
+or the daemon's pause names a running local process other than the caller (``held-locally``), or the server
+refuses with 409 because the lease belongs to a live session elsewhere (``alive-elsewhere``). Otherwise it
+registers (``--takeover`` only when the old lease ended), writes ``<identity>.home.json`` (worktree, repo, scope,
+branch, head, a digest of the session, the caller's pid and holder, time), pauses the daemon through
+``agent_daemon.pause`` (holder = the calling claude/codex process, so the stale-pause check applies), runs
+``collect`` + ``pending`` and, for a session other than the recorded one, sends ``INFO HANDOVER: <id> claimed by a
+new session in <worktree> (was <old>); pending: ...`` to all. ``unclaim`` resumes the daemon (unless another live
+session holds the pause) and clears the holder, keeping the worktree for the daemon's runs. Both do nothing
+inside a headless daemon run (``AGENT_DAEMON_RUN=1``). ``register`` also sends optional ``repo``, ``scope`` and
+``head`` fields, which ``agents`` shows; older servers ignore them and older clients omit them.
+
+Tests: ``tools/test_agent_mailbox.py`` (``IdentityResolutionTest``: toml subset, subdir/branch matching in a
+linked worktree, most specific wins, tie error, ``AGENT_IDENTITY`` override and comma list, host file, state dir
+per platform, state dir first with fallback, ``whoami``; claim states: alive elsewhere, live local pid, dead
+identity taken over with home.json and INFO HANDOVER, daemon runs skipped, unclaim) and
+``tools/test_agent_daemon.py`` (``HomePointerTest``, installer without a fixed ``--repo``).
+
+Out of scope for the tools change and done by each ``CLAUDE.md`` editor afterwards: the ``.agent-bus.toml`` per
+repo, the ``host`` file per machine, SessionStart/SessionEnd hooks calling ``claim``/``unclaim``, and service
+reinstalls (user OK in each agent's own chat).
+
 Mailbox listener daemon
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -443,7 +510,12 @@ selects the identity. On the Pi it is the user unit ``agent-daemon@pi-claude.ser
   ``claude -p`` and the root of its Edit (``<work repo>/.claude/worktrees/**``) and ``git -C`` rules. Mailbox
   commands in the prompt and the allowlist always use absolute tools-home paths (``<python> <tools
   home>/tools/agent_mailbox.py --config <absolute config>``), so replies work from any work repo. ``--config`` is
-  resolved as given, then under the tools home, then under the work repo. On the Pi both are
+  resolved as given, then in the state dir (see "Identity resolution"), then under the tools home, then under the
+  work repo. **Home pointer:** before each run the daemon reads ``<identity>.home.json`` (written by ``claim``) and
+  uses its worktree as the run's cwd and allowlist root instead of the fixed work repo; a worktree that no longer
+  exists means no run, one ``INFO: daemon of <identity> unhealthy: home worktree ... no longer exists`` to all and
+  a local notification, until the worktree is back or a session claims again. Headless runs get
+  ``AGENT_DAEMON_RUN=1``, so a SessionStart hook inside them never claims the identity. On the Pi both are
   ``~/dev/ksp1/KSPKontroller`` and the unit is unchanged; the daemon runs from the installed copy
   ``~/.local/lib/agent-daemon/agent_daemon.py``, and its config and state stay in ``build/agent-mailbox/``,
   which on the Pi is a symlink to ``~/dev/run/agent-mailbox``.
@@ -543,8 +615,9 @@ runs the real install on each machine:
    # Windows: Task Scheduler \KSPKontroller\agent-daemon-pc-claude (at logon, restart on failure,
    # build\venv\Scripts\pythonw.exe, log in build\agent-mailbox\pc-claude.daemon\daemon.log)
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-claude install --dry-run
-   # Another work repo: python, daemon, config and log stay in the KSPKontroller tools home,
-   # WorkingDirectory and the claude -p cwd are the work repo (foreign profile)
+   # No fixed --repo needed any more: runs follow <identity>.home.json (claim). --repo stays accepted as the
+   # fallback for an identity without a home pointer: python, daemon, config and log stay in the KSPKontroller
+   # tools home, WorkingDirectory and the claude -p cwd are the work repo (foreign profile)
    build/venv/Scripts/python.exe tools/agent_daemon_install.py --identity pc-workbench \
        --repo C:/Users/alanl/wk/decompilation/ksp-workbench install --dry-run
    python3 tools/agent_daemon_install.py --os macos --identity mac-workbench --repo /Users/alan/wk/devKSP/ksp1/ksp-workbench \

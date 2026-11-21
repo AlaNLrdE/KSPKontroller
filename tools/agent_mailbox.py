@@ -51,6 +51,8 @@ ALLOWLIST = 'allowlist.json'  # next to the journal (and server.json): a JSON li
 GATE_REFUSAL = 'identity not on the allowlist; see agent-bus-handbook docs/onboarding.rst'
 USER_IDENTITIES = 'user-identities.json'  # next to the journal: a JSON list of USER identities (people, not agents)
 COORDINATORS = ('pi-claude',)  # who may reassign a REQUEST unless serve --coordinator names others
+CONTEXT_KEYS = ('repo', 'scope', 'head')  # optional register fields (identity resolution), shown by agents
+HANDOVER_TEXT = 1500  # characters of the pending list an INFO HANDOVER carries
 
 
 def valid_identity(name):
@@ -516,7 +518,9 @@ class Journal:
               file=sys.stderr, flush=True)
         raise Forbidden(GATE_REFUSAL)
 
-    def register(self, identity, session, tool, cwd, takeover=False, release=False, now=None):
+    def register(self, identity, session, tool, cwd, takeover=False, release=False, now=None, context=None):
+        """``context``: optional {repo, scope, head} strings a newer client sends (identity resolution); shown by
+        agents, never required, so protocol 4 and older clients are unchanged."""
         now = time.time() if now is None else now
         if not isinstance(identity, str) or not AGENT.match(identity):
             raise ValueError('register a HOST-AGENT identity such as pc-codex; bare mac/pc/pi are host groups')
@@ -524,6 +528,14 @@ class Journal:
             raise ValueError('session must be 16..64 characters [A-Za-z0-9_-]')
         if not isinstance(tool, str) or not 0 < len(tool) <= 40 or not isinstance(cwd, str) or len(cwd) > 400:
             raise ValueError('tool 1..40 and cwd up to 400 characters required')
+        extra = {}
+        for key in CONTEXT_KEYS:
+            value = (context or {}).get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str) or len(value) > 200:
+                raise ValueError('%s must be a string of up to 200 characters' % key)
+            extra[key] = value
         with self.condition:
             old = self.agents.get(identity)
             if old is None and not release and identity not in self.user_identities():
@@ -547,7 +559,7 @@ class Journal:
                                        'that agent is gone, then register --takeover' % (identity, who))
                 agent = dict(identity=identity, host=host_of(identity), tool=tool, cwd=cwd, session=session,
                              registered=old['registered'] if same else now, last_seen=now,
-                             lease_expires=now + LEASE, released=None)
+                             lease_expires=now + LEASE, released=None, **extra)
             self._commit(dict(k='agent', a=agent))
             self._saved[identity] = now
             self._after_change(now)
@@ -1131,7 +1143,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
                                                  identity=d.get('identity')),
                 '/register': lambda d: journal.register(d.get('identity'), d.get('session'), d.get('tool'),
                                                         d.get('cwd', ''), bool(d.get('takeover')),
-                                                        bool(d.get('release'))),
+                                                        bool(d.get('release')),
+                                                        context={k: d.get(k) for k in CONTEXT_KEYS}),
                 '/state': lambda d: journal.set_state(d.get('identity'), d.get('session'), d.get('id'),
                                                       d.get('state'), d.get('digest'), d.get('recipient')),
                 '/lookup': lambda d: journal.lookup(d.get('identity'), d.get('session'), d.get('ids'),
@@ -1217,6 +1230,31 @@ def require_agent(config):
                          % config.get('peer'))
 
 
+def identity_module():
+    """tools/agent_identity.py next to this file (identity resolution, state dir)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import agent_identity
+    finally:
+        sys.path.pop(0)
+    return agent_identity
+
+
+def session_context(cwd=None):
+    """{repo, scope, head} of the cwd for register; empty when nothing is known (never fatal)."""
+    try:
+        info = identity_module().resolve(cwd)
+    except Exception:  # an unreadable checkout must never block register
+        return {}
+    out = {}
+    if info.get('repo'):
+        out['repo'] = info['repo']
+        out['scope'] = info.get('scope') or ''
+    if info.get('head'):
+        out['head'] = info['head'][:12]
+    return out
+
+
 def register(config, config_path, tool=None, takeover=False, release=False):
     require_agent(config)
     session_path = paths(config_path)['session']
@@ -1225,7 +1263,8 @@ def register(config, config_path, tool=None, takeover=False, release=False):
     tool = tool or saved.get('tool') or config['peer'].split('-', 1)[1]
     try:
         result = request(config, '/register', dict(identity=config['peer'], session=session, tool=tool,
-                                                   cwd=os.getcwd(), takeover=takeover, release=release))
+                                                   cwd=os.getcwd(), takeover=takeover, release=release,
+                                                   **session_context()))
     except urllib.error.HTTPError as error:
         if error.code >= 500:
             raise
@@ -1457,6 +1496,163 @@ def watch(config, config_path, once=False, continuous=True):
             return
 
 
+# -- identity resolution: whoami, claim, unclaim (tools/agent_identity.py) ---------------------------------------------
+LEGACY_CONFIG = 'build/agent-mailbox/config.json'  # the old --config default, used when nothing resolves
+CLAIM_MINUTES = 720  # the daemon pause a claim takes; the daemon clears it earlier once the holder exits
+
+
+def daemon_module():
+    """tools/agent_daemon.py next to this file: claim pauses and unclaim resumes through its own code path."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import agent_daemon
+    finally:
+        sys.path.pop(0)
+    return agent_daemon
+
+
+def same_process(a, b):
+    return bool(a and b and a.get('pid') and a.get('pid') == b.get('pid') and a.get('host') == b.get('host')
+                and str(a.get('start')) == str(b.get('start')))
+
+
+def describe_process(holder):
+    return '%s PID %s on %s' % (holder.get('name') or 'process', holder.get('pid'), holder.get('host') or '?')
+
+
+def config_paths(args):
+    """--config as given; else the identities --identity names or the cwd resolves to (state dir first,
+    build/agent-mailbox/ fallback); else the old default. init without --config writes into the state dir."""
+    ident = identity_module()
+    if args.config:
+        return [Path(args.config)], None
+    if args.command == 'init':
+        return [ident.state_dir() / (args.peer + '.json')], None
+    info = ident.resolve()
+    names = ident.split_identities(args.identity) if args.identity else info['identities']
+    if not names:
+        if args.command in ('claim', 'unclaim'):
+            raise ValueError('cannot resolve this session\'s identity: %s (pass --identity or --config)'
+                             % info['error'])
+        return [Path(LEGACY_CONFIG)], info
+    return [ident.config_path(n, worktree=info['worktree']) for n in names], info
+
+
+def whoami(args):
+    """Resolve and print, send nothing. rc 2 when no identity resolves."""
+    ident = identity_module()
+    info = ident.resolve()
+    names = ident.split_identities(args.identity) if args.identity else info['identities']
+    if args.config:
+        names = names or [Path(args.config).stem]
+    out = dict(info, identities=[])
+    for name in names:
+        path = Path(args.config) if args.config else ident.config_path(name, worktree=info['worktree'])
+        out['identities'].append(dict(identity=name, config=str(path), config_exists=path.is_file(),
+                                      candidates=[str(p) for p in ident.config_candidates(
+                                          name, worktree=info['worktree'])],
+                                      home=ident.read_home(path)))
+    print(json.dumps(out, indent=2))
+    return 0 if names else 2
+
+
+def claim(config, config_path, info=None, minutes=CLAIM_MINUTES, daemon=None, holder=None, env=None):
+    """Take this identity for the calling session, never from a live one.
+
+    Refused (reported, nothing changed) when a live local session holds it (home.json or the daemon pause names
+    a running process other than the caller) or the server lease belongs to a live session elsewhere (409).
+    Otherwise: register (--takeover when the old lease ended), write <identity>.home.json, pause the daemon
+    (agent_daemon.pause, holder = the caller), collect + pending, and INFO HANDOVER to all for a new session."""
+    env = os.environ if env is None else env
+    identity = config.get('peer')
+    if env.get('AGENT_DAEMON_RUN') == '1':
+        return dict(identity=identity, state='skipped',
+                    detail='headless daemon run (AGENT_DAEMON_RUN=1): the daemon already owns the identity')
+    require_agent(config)
+    ident = identity_module()
+    info = info if info is not None else ident.resolve()
+    daemon = daemon or daemon_module()
+    me = daemon.find_holder() if holder is None else holder
+    home = ident.read_home(config_path) or {}
+    f = daemon.files(config_path)
+    paused = daemon.read_json(f['pause'], {}) if daemon.paused_until(f) else {}
+    for where, other in (('home.json', None if home.get('released') else home.get('holder')),
+                         ('daemon pause', paused.get('holder'))):
+        if other and not same_process(other, me) and daemon.holder_state(other) == 'alive':
+            return dict(identity=identity, state='held-locally',
+                        detail='%s names a live session: %s in %s; not taken over' % (
+                            where, describe_process(other), home.get('worktree') or '?'))
+    previous = None
+    try:
+        previous = next((a for a in request(config, '/agents')['agents'] if a.get('identity') == identity), None)
+    except Exception:  # an older or unreachable listing only loses the "was" detail
+        pass
+    try:
+        register(config, config_path)  # same session file (a dead local session or the daemon): no takeover
+        how = 'registered'
+    except MailboxError as error:
+        if error.code != 409 or 'lease ended' not in str(error):
+            if error.code == 409 and 'live session' in str(error):
+                return dict(identity=identity, state='alive-elsewhere', detail=str(error))
+            raise
+        register(config, config_path, takeover=True)
+        how = 'takeover'
+    session = read_json(paths(config_path)['session'], {}).get('session', '')
+    record = dict(identity=identity, worktree=info.get('worktree') or os.getcwd(), repo=info.get('repo'),
+                  scope=info.get('scope') or '', branch=info.get('branch'), head=info.get('head'),
+                  session=hashlib.sha256(session.encode('utf-8')).hexdigest()[:12], pid=(me or {}).get('pid'),
+                  holder=me, time=iso(time.time()), how=how)
+    write_json(ident.home_path(config_path), record)
+    daemon.pause(f, minutes, by='claim', holder=me)
+    collect(config, config_path)
+    items = pending_messages(config, config_path)
+    handover = None
+    if not same_process(home.get('holder'), me):
+        if home.get('worktree'):
+            was = '%s in %s' % (describe_process(home['holder']) if home.get('holder') else 'a session',
+                                home['worktree'])
+        elif previous:
+            was = '%s in %s, %s' % (previous.get('tool', '?'), previous.get('cwd', '?'), previous.get('state', '?'))
+        else:
+            was = 'no earlier session'
+        listed = ', '.join('#%s %s' % (i['seq'], i['id']) for i in items) or 'none'
+        if len(listed) > HANDOVER_TEXT:
+            listed = listed[:HANDOVER_TEXT] + ' ... (%d in all)' % len(items)
+        handover = 'handover-%s-%s' % (identity, datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ'))
+        try:
+            send_message(config, config_path, 'all', 'INFO HANDOVER: %s claimed by a new session in %s (was %s); '
+                         'pending: %s' % (identity, record['worktree'], was, listed), message_id=handover)
+        except MailboxError as error:  # e.g. nobody else registered: the claim itself stands
+            print('MAILBOX warning: INFO HANDOVER not sent: %s' % error, file=sys.stderr)
+            handover = None
+    return dict(identity=identity, state='claimed', how=how, worktree=record['worktree'], pending=len(items),
+                handover=handover)
+
+
+def unclaim(config, config_path, daemon=None, holder=None, env=None):
+    """Give the identity back to the daemon (agent_daemon.resume); home.json keeps the worktree for its runs.
+    A pause held by another live session is left alone."""
+    env = os.environ if env is None else env
+    identity = config.get('peer')
+    if env.get('AGENT_DAEMON_RUN') == '1':
+        return dict(identity=identity, state='skipped', detail='headless daemon run (AGENT_DAEMON_RUN=1)')
+    ident = identity_module()
+    daemon = daemon or daemon_module()
+    me = daemon.find_holder() if holder is None else holder
+    f = daemon.files(config_path)
+    paused = daemon.read_json(f['pause'], {}) if daemon.paused_until(f) else {}
+    other = paused.get('holder')
+    if other and not same_process(other, me) and daemon.holder_state(other) == 'alive':
+        return dict(identity=identity, state='held-locally',
+                    detail='the daemon pause belongs to %s; not resumed' % describe_process(other))
+    daemon.resume(f)
+    home = ident.read_home(config_path)
+    if home is not None:
+        home.update(holder=None, pid=None, released=iso(time.time()))
+        write_json(ident.home_path(config_path), home)
+    return dict(identity=identity, state='released', worktree=(home or {}).get('worktree'))
+
+
 def show_track(item):
     lines = ['TRACK #%d %s %s from %s owner=%s%s' % (item['seq'], item['id'], item.get('kind', '?'),
                                                     item.get('sender', '?'), item.get('owner'),
@@ -1475,7 +1671,10 @@ def show_overdue(items):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', default='build/agent-mailbox/config.json')
+    parser.add_argument('--config', help='This identity\'s config. Default: the identity --identity names or the cwd '
+                        'resolves to (AGENT_IDENTITY, .agent-bus.toml + the state dir host file), its <identity>.json '
+                        'in the state dir, else build/agent-mailbox/; with nothing resolved ' + LEGACY_CONFIG)
+    parser.add_argument('--identity', help='Use this identity (or comma list for claim/unclaim) instead of resolving')
     sub = parser.add_subparsers(dest='command', required=True)
     init = sub.add_parser('init')
     init.add_argument('--url', required=True)
@@ -1542,11 +1741,34 @@ def main(argv=None):
     locker.add_argument('--ttl', type=int, default=1800, help='Seconds until it expires by itself (60..14400)')
     locker.add_argument('--reason', default='')
     sub.add_parser('locks', help='List held locks with holder, reason and expiry')
+    sub.add_parser('whoami', help='Resolve this session\'s identity, config and home pointer; sends nothing')
+    claimer = sub.add_parser('claim', help='Take the resolved identity(ies) for this session, never from a live one')
+    claimer.add_argument('--minutes', type=float, default=CLAIM_MINUTES, help='daemon pause length')
+    sub.add_parser('unclaim', help='Give the identity(ies) back to the daemon (resume)')
     watcher = sub.add_parser('watch')
     watcher.add_argument('--once', action='store_true',
                          help='Exit when a message or a tracked change arrives; re-arm after handling it')
     args = parser.parse_args(argv)
-    config_path = Path(args.config)
+    if args.command == 'whoami':
+        return whoami(args)
+    configs, info = config_paths(args)
+    if args.command in ('claim', 'unclaim'):
+        rc = 0
+        for path in configs:
+            config = json.loads(path.read_text(encoding='utf-8'))
+            if args.command == 'claim':
+                result = claim(config, path, info, args.minutes)
+            else:
+                result = unclaim(config, path)
+            print('MAILBOX %s %s: %s%s' % (args.command, result['identity'], result['state'],
+                                          ' (%s)' % result['detail'] if result.get('detail') else ''))
+            print(json.dumps(result))
+            rc = rc or (3 if result['state'] in ('held-locally', 'alive-elsewhere') else 0)
+        return rc
+    if len(configs) > 1:
+        parser.error('several identities resolve (%s): pass --identity or --config'
+                     % ', '.join(p.stem for p in configs))
+    config_path = configs[0]
     if args.command == 'init':
         if config_path.exists():
             parser.error('configuration already exists; use another path instead of rotating a live token')
@@ -1583,8 +1805,9 @@ def main(argv=None):
         if 'user_identities' in listing:
             print('MAILBOX user identities: %s' % (', '.join(listing['user_identities']) or 'none'))
         for agent in listing['agents']:
-            print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}{retired}{kindtag}'.format(
+            print('AGENT {identity} {state} tool={tool} cwd={cwd}{context} last={last}{retired}{kindtag}'.format(
                 kindtag=' kind=user' if agent.get('kind') == 'user' else '',
+                context=''.join(' %s=%s' % (k, agent[k] or '.') for k in CONTEXT_KEYS if k in agent),
                 last=iso(agent['last_seen']), **dict(agent, retired=' RETIRED %s by %s' % (
                     iso(agent['retired']), agent.get('retired_by', '?')) if agent.get('retired') else '')))
     elif args.command == 'retire':
@@ -1648,7 +1871,7 @@ def main(argv=None):
 
 if __name__ == '__main__':
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(130)
     except urllib.error.HTTPError as error:
