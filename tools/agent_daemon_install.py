@@ -5,12 +5,16 @@ One service per agent identity. Two places are kept apart:
 
 * the **tools home** (``--tools-dir``, default the KSPKontroller checkout containing this script): Python (the
   venv on Windows), tools/agent_daemon.py, tools/agent_mailbox.py and usually build/agent-mailbox/<identity>.json;
-* the **work repo** (``--repo``/``--workdir``, default the tools home): the service's working directory, the
-  headless ``claude -p`` cwd and the root of its Edit and ``git -C`` rules (``foreign`` profile when it differs).
+* the **work repo**: since identity resolution the daemon takes it before each run from
+  ``<identity>.home.json`` (written by ``agent_mailbox.py claim``), so a service needs no fixed ``--repo`` any
+  more. ``--repo``/``--workdir`` stays accepted as the fallback for an identity without a home pointer (default
+  the tools home): the service's working directory, the headless ``claude -p`` cwd and the root of its Edit and
+  ``git -C`` rules (``foreign`` profile when it differs).
 
-``--config`` is resolved in this order: the option, ``<tools home>/build/agent-mailbox/<identity>.json``, then
-``<work repo>/build/agent-mailbox/<identity>.json``; the dry run shows which one was used. A real install refuses
-when the python, the daemon, the mailbox client, the config or the work repo is missing.
+``--config`` is resolved in this order: the option, the per-machine state dir (``AGENT_BUS_STATE``,
+``%APPDATA%\\agent-bus``, ``~/.config/agent-bus``; this OS only), ``<tools home>/build/agent-mailbox/<identity>.json``,
+then ``<work repo>/build/agent-mailbox/<identity>.json``; the dry run shows which one was used. A real install
+refuses when the python, the daemon, the mailbox client, the config or the work repo is missing.
 
 * Linux / Pi: systemd user unit ``agent-daemon@<identity>.service`` (tools/systemd/agent-daemon@.service; the
   daemon is copied to ~/.local/lib/agent-daemon/ so a worktree change cannot alter a running listener). A work
@@ -50,6 +54,15 @@ TASK_FOLDER = 'KSPKontroller'
 DEFAULT_REPO = '~/wk/KSPKontroller'
 
 
+def state_dir():
+    """The per-machine agent-bus state dir (as tools/agent_identity.state_dir)."""
+    if os.environ.get('AGENT_BUS_STATE'):
+        return os.path.expanduser(os.environ['AGENT_BUS_STATE'])
+    if platform_name() == 'windows':
+        return str(Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'agent-bus')
+    return str(Path.home() / '.config' / 'agent-bus')
+
+
 def platform_name(value=None):
     value = value or sys.platform
     if value in ('windows', 'macos', 'linux'):
@@ -69,9 +82,12 @@ def pure(system):
     return PureWindowsPath if system == 'windows' else PurePosixPath
 
 
-def config_candidates(system, identity, tools, work):
+def config_candidates(system, identity, tools, work, state=None):
     p = pure(system)
     seen, out = set(), []
+    if state:
+        out.append(('state dir', p(state) / (identity + '.json')))
+        seen.add(out[0][1])
     for where, base in (('tools home', tools), ('work repo', work)):
         path = p(base) / 'build' / 'agent-mailbox' / (identity + '.json')
         if path not in seen:
@@ -80,16 +96,16 @@ def config_candidates(system, identity, tools, work):
     return out
 
 
-def resolve_config(system, identity, tools, work, config=None, exists=os.path.exists):
-    """(path, source): the option, then the tools home, then the work repo; the tools home's path when none exists
-    (the install then refuses, a dry run says so)."""
+def resolve_config(system, identity, tools, work, config=None, exists=os.path.exists, state=None):
+    """(path, source): the option, then the state dir (when given), the tools home, the work repo; the tools
+    home's path when none exists (the install then refuses, a dry run says so)."""
     if config:
         return pure(system)(config), '--config'
-    candidates = config_candidates(system, identity, tools, work)
+    candidates = config_candidates(system, identity, tools, work, state)
     for where, path in candidates:
         if exists(str(path)):
             return path, where
-    return candidates[0][1], 'none found (default: tools home)'
+    return next(path for where, path in candidates if where == 'tools home'), 'none found (default: tools home)'
 
 
 def daemon_args(config, work, tools, system):
@@ -302,10 +318,10 @@ def main(argv=None):
     ap.add_argument('--os', choices=sorted(PLANS), help='default: this machine; another OS is dry-run only')
     ap.add_argument('--tools-dir', help='tools home: python, agent_daemon.py, agent_mailbox.py (default: this '
                     'checkout; for another --os ~/wk/KSPKontroller of this user, ~/dev/ksp1/KSPKontroller on Linux)')
-    ap.add_argument('--repo', '--workdir', dest='repo', help='work repo: service cwd, claude -p cwd and allowlist '
-                    'root (default: the tools home)')
-    ap.add_argument('--config', help='mailbox config (default: tools home, then work repo build/agent-mailbox/'
-                    '<identity>.json)')
+    ap.add_argument('--repo', '--workdir', dest='repo', help='optional fallback work repo for runs without '
+                    '<identity>.home.json (written by agent_mailbox.py claim); default: the tools home')
+    ap.add_argument('--config', help='mailbox config (default: state dir <identity>.json, then tools home, then '
+                    'work repo build/agent-mailbox/<identity>.json)')
     ap.add_argument('--python', help='interpreter the service runs (default: tools venv pythonw.exe on Windows, '
                     '/usr/bin/python3 elsewhere)')
     # Accepted and ignored for old command lines: the daemon has no hourly run limit any more.
@@ -325,7 +341,7 @@ def main(argv=None):
     tools = str(pure(system)(tools))
     work = str(pure(system)(args.repo or tools))
     if system == here:
-        config, source = resolve_config(system, args.identity, tools, work, args.config)
+        config, source = resolve_config(system, args.identity, tools, work, args.config, state=state_dir())
     else:  # another OS: nothing to look at here
         config, source = resolve_config(system, args.identity, tools, work, args.config, exists=lambda _: False)
         source = '--config' if args.config else 'default: tools home (not checked on another OS)'

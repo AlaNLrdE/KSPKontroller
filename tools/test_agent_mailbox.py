@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import os
 import socket
 from pathlib import Path
 import tempfile
@@ -13,12 +14,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import agent_daemon
+import agent_identity
 import agent_mailbox
 from agent_mailbox import (Journal, LockBusy, Conflict, MailboxError, make_server, request, digest, core_digest,
                            register, send_message, collect, pending_messages, mark_done, watch, history_messages,
                            LEASE, OVERDUE_ARCHIVE, OVERDUE_ACK)
 
 S1, S2 = 'session-one-0000000001', 'session-two-0000000002'
+ME_HOLDER = dict(host=socket.gethostname(), pid=31337, start='me', name='claude', how='session')
 
 
 class V3Client:
@@ -71,6 +75,96 @@ class MailboxTest(unittest.TestCase):
         path.write_text(json.dumps(config))
         register(config, path)
         return config, path
+
+    # -- identity resolution: register context, claim, unclaim ---------------------------------------------------
+    def test_register_context_is_optional_and_shown_by_agents(self):
+        view = self.journal.register('pc-claude', S1, 'claude', '/w', context=dict(repo='KSPKontroller',
+                                                                                   scope='tools', head='abc'))
+        self.assertEqual((view['repo'], view['scope'], view['head']), ('KSPKontroller', 'tools', 'abc'))
+        old = self.journal.register('pc-codex', S2, 'codex', '/w')  # an old client sends none of them
+        self.assertNotIn('repo', old)
+        with self.assertRaises(ValueError):
+            self.journal.register('pc-other', S2, 'x', '/w', context=dict(repo='x' * 201))
+        config, path = self.agent('pi-claude')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            agent_mailbox.main(['--config', str(path), 'agents'])
+        self.assertIn('repo=KSPKontroller scope=tools head=abc', out.getvalue())
+
+    def claimant(self, identity='pc-claude', folder='new'):
+        path = self.root / folder / (identity + '.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = dict(self.config, peer=identity)
+        path.write_text(json.dumps(config))
+        return config, path
+
+    def test_claim_never_takes_an_identity_alive_elsewhere(self):
+        self.agent('pc-claude')  # a live lease from another config (another machine's session)
+        config, path = self.claimant()
+        result = agent_mailbox.claim(config, path, dict(worktree=str(self.root)), holder=ME_HOLDER, env={})
+        self.assertEqual(result['state'], 'alive-elsewhere')
+        self.assertIsNone(agent_identity.read_home(path))
+        self.assertFalse(agent_daemon.files(path)['pause'].exists())
+
+    def test_claim_never_takes_an_identity_from_a_live_local_session(self):
+        config, path = self.claimant()
+        other = dict(ME_HOLDER, pid=4242, start='other')
+        agent_mailbox.write_json(agent_identity.home_path(path), dict(worktree='/old', holder=other, pid=4242))
+        with patch.object(agent_daemon, 'holder_state', return_value='alive'):
+            result = agent_mailbox.claim(config, path, dict(worktree=str(self.root)), holder=ME_HOLDER, env={})
+        self.assertEqual(result['state'], 'held-locally')
+        self.assertIn('4242', result['detail'])
+        self.assertEqual(agent_identity.read_home(path)['worktree'], '/old')  # unchanged
+
+    def test_claim_of_a_dead_identity_takes_over_and_announces_it(self):
+        self.journal.register('pc-claude', S1, 'claude', '/old/checkout', now=time.time() - 4000)
+        pi, pi_path = self.agent('pi-claude')
+        send_message(pi, pi_path, 'pc-claude', 'REQUEST: please do x', message_id='req-x')
+        config, path = self.claimant()
+        dead = dict(ME_HOLDER, pid=4242, start='gone')
+        agent_mailbox.write_json(agent_identity.home_path(path), dict(worktree='/old/checkout', holder=dead))
+        info = dict(worktree=str(self.root), repo='KSPKontroller', scope='tools', branch='main', head='abc')
+        with patch.object(agent_daemon, 'holder_state', return_value='gone'):
+            result = agent_mailbox.claim(config, path, info, holder=ME_HOLDER, env={})
+        self.assertEqual((result['state'], result['how'], result['pending']), ('claimed', 'takeover', 1))
+        home = agent_identity.read_home(path)
+        self.assertEqual((home['worktree'], home['repo'], home['scope'], home['branch'], home['pid']),
+                         (str(self.root), 'KSPKontroller', 'tools', 'main', ME_HOLDER['pid']))
+        self.assertNotIn(read_session(path), json.dumps(home))  # only a digest of the session secret
+        pause = json.loads(agent_daemon.files(path)['pause'].read_text(encoding='utf-8'))
+        self.assertEqual((pause['by'], pause['holder']), ('claim', ME_HOLDER))
+        collect(pi, pi_path)
+        texts = [m['text'] for m in pending_messages(pi, pi_path)]
+        handover = [t for t in texts if t.startswith('INFO HANDOVER: pc-claude claimed by a new session in ')]
+        self.assertEqual(len(handover), 1, texts)
+        self.assertIn('(was claude PID 4242 on %s in /old/checkout)' % ME_HOLDER['host'], handover[0])
+        self.assertIn('pending: #', handover[0])
+        self.assertIn('req-x', handover[0])
+        # the same session claiming again announces nothing new
+        again = agent_mailbox.claim(config, path, info, holder=ME_HOLDER, env={})
+        self.assertEqual((again['state'], again['how'], again['handover']), ('claimed', 'registered', None))
+
+    def test_claim_and_unclaim_are_skipped_inside_a_daemon_run(self):
+        config, path = self.claimant()
+        for call in (agent_mailbox.claim, agent_mailbox.unclaim):
+            result = call(config, path, holder=ME_HOLDER, env={'AGENT_DAEMON_RUN': '1'})
+            self.assertEqual(result['state'], 'skipped')
+        self.assertIsNone(agent_identity.read_home(path))
+
+    def test_unclaim_resumes_the_daemon_and_keeps_the_worktree(self):
+        config, path = self.claimant()
+        agent_mailbox.claim(config, path, dict(worktree=str(self.root)), holder=ME_HOLDER, env={})
+        f = agent_daemon.files(path)
+        self.assertTrue(agent_daemon.paused_until(f))
+        other = dict(ME_HOLDER, pid=99, start='x')
+        with patch.object(agent_daemon, 'holder_state', return_value='alive'):
+            refused = agent_mailbox.unclaim(config, path, holder=other, env={})
+        self.assertEqual(refused['state'], 'held-locally')
+        result = agent_mailbox.unclaim(config, path, holder=ME_HOLDER, env={})
+        self.assertEqual(result['state'], 'released')
+        self.assertFalse(agent_daemon.paused_until(f))
+        home = agent_identity.read_home(path)
+        self.assertEqual((home['worktree'], home['holder']), (str(self.root), None))
 
     def send(self, **changes):
         data = dict(sender='mac', to='pc', text='Ready to test: Δv', id='one')
@@ -966,6 +1060,188 @@ class MailboxTest(unittest.TestCase):
             self.assertEqual(response.read(), b'png-fixture')
         for name in ('../config.json', 'config.json', 'x%5Cconfig.txt'):
             self.assertRefused(400, request, self.config, '/artifact?name=' + name)
+
+
+def read_session(path):
+    return json.loads(Path(path).with_suffix('.session.json').read_text(encoding='utf-8'))['session']
+
+
+TOML_TEXT = """# identities of this repo
+repo = "KSPKontroller"
+
+[[identity]]
+host = "pc"
+identity = "pc-claude"
+
+[[identity]]
+host = "pc"
+identity = "pc-codex"
+subdir = "tools"
+
+[[identity]]
+host = "pc"
+identity = "pc-redux"
+subdir = "tools/kspsim"
+branch = "agent/redux-*"  # a pattern
+
+[[identity]]
+host = "mac"
+identity = "mac-claude"
+"""
+
+
+class IdentityResolutionTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        self.state = self.root / 'state'
+        self.state.mkdir()
+        (self.state / 'host').write_text('# this machine\npc\n', encoding='utf-8')
+        self.repo = self.repo_at(self.root / 'main', 'main')
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def repo_at(self, top, branch, toml=TOML_TEXT):
+        (top / '.git' / 'refs' / 'heads').mkdir(parents=True)
+        (top / '.git' / 'HEAD').write_text('ref: refs/heads/%s\n' % branch, encoding='utf-8')
+        ref = top / '.git' / 'refs' / 'heads' / branch
+        ref.parent.mkdir(parents=True, exist_ok=True)
+        ref.write_text('1234567890abcdef\n', encoding='utf-8')
+        (top / 'tools' / 'kspsim').mkdir(parents=True)
+        if toml is not None:
+            (top / agent_identity.TOML).write_text(toml, encoding='utf-8')
+        return top
+
+    def worktree(self, name, branch):
+        """A linked worktree: .git is a file pointing at main/.git/worktrees/NAME (HEAD there, refs in common)."""
+        top = self.root / 'wt' / name
+        (top / 'tools' / 'kspsim').mkdir(parents=True)
+        (top / agent_identity.TOML).write_text(TOML_TEXT, encoding='utf-8')
+        gd = self.repo / '.git' / 'worktrees' / name
+        gd.mkdir(parents=True)
+        (gd / 'HEAD').write_text('ref: refs/heads/%s\n' % branch, encoding='utf-8')
+        (gd / 'commondir').write_text('../..\n', encoding='utf-8')
+        (self.repo / '.git' / 'packed-refs').write_text('# pack-refs\nfeedbeef refs/heads/%s\n' % branch,
+                                                         encoding='utf-8')
+        (top / '.git').write_text('gitdir: %s\n' % gd, encoding='utf-8')
+        return top
+
+    def resolve(self, cwd, **env):
+        return agent_identity.resolve(cwd, env=dict(env, AGENT_BUS_STATE=str(self.state)))
+
+    def test_minimal_toml_parser_reads_the_subset(self):
+        data = agent_identity.parse_toml_subset(TOML_TEXT + 'count = 3\nflag = true\n')
+        self.assertEqual(data['repo'], 'KSPKontroller')
+        self.assertEqual([e['identity'] for e in data['identity']], ['pc-claude', 'pc-codex', 'pc-redux', 'mac-claude'])
+        self.assertEqual(data['identity'][2]['branch'], 'agent/redux-*')
+        self.assertEqual(data['identity'][3]['count'], 3)
+        for bad in ('repo = "x\nrepo = "y"', 'just text', 'a = "x" y'):
+            with self.assertRaises(agent_identity.ResolutionError):
+                agent_identity.parse_toml_subset(bad)
+
+    def test_subdir_and_branch_matching_most_specific_wins(self):
+        self.assertEqual(self.resolve(self.repo)['identities'], ['pc-claude'])
+        info = self.resolve(self.repo / 'tools')
+        self.assertEqual((info['identities'], info['scope'], info['repo']), (['pc-codex'], 'tools', 'KSPKontroller'))
+        self.assertEqual(self.resolve(self.repo / 'tools' / 'kspsim')['identities'], ['pc-codex'])  # branch main
+        self.assertEqual(info['branch'], 'main')
+        self.assertEqual(info['head'], '1234567890abcdef')
+        wt = self.worktree('redux', 'agent/redux-ui')
+        info = self.resolve(wt / 'tools' / 'kspsim')
+        self.assertEqual((info['identities'], info['branch'], info['head'], info['worktree']),
+                         (['pc-redux'], 'agent/redux-ui', 'feedbeef', str(wt)))
+        self.assertEqual(self.resolve(wt)['identities'], ['pc-claude'])
+        (self.state / 'host').write_text('mac\n', encoding='utf-8')
+        self.assertEqual(self.resolve(self.repo / 'tools')['identities'], ['mac-claude'])
+
+    def test_match_rules(self):
+        m = agent_identity.match
+        entries = [dict(host='pc', identity='pc-a'), dict(host='pc', identity='pc-b', branch='dev'),
+                   dict(host='pc', identity='pc-c', branch='d*')]
+        self.assertEqual(m(entries, 'pc', '', 'dev'), 'pc-b')  # exact branch beats a pattern
+        self.assertEqual(m(entries, 'pc', '', 'dx'), 'pc-c')
+        self.assertEqual(m(entries, 'pc', '', None), 'pc-a')  # detached HEAD: no branch matcher applies
+        with self.assertRaises(agent_identity.ResolutionError):  # a prefix is per path component
+            m([dict(host='pc', identity='pc-a', subdir='to')], 'pc', 'tools', None)
+        with self.assertRaises(agent_identity.ResolutionError):
+            m(entries, 'mac', '', 'dev')
+
+    def test_a_tie_is_an_error_and_resolves_no_identity(self):
+        tie = TOML_TEXT + '\n[[identity]]\nhost = "pc"\nidentity = "pc-other"\nsubdir = "tools"\n'
+        (self.repo / agent_identity.TOML).write_text(tie, encoding='utf-8')
+        info = self.resolve(self.repo / 'tools')
+        self.assertEqual(info['identities'], [])
+        self.assertIn('tie between pc-codex, pc-other', info['error'])
+        self.assertEqual(self.resolve(self.repo)['identities'], ['pc-claude'])  # no tie at the top
+
+    def test_agent_identity_overrides_including_a_comma_list(self):
+        info = self.resolve(self.repo, AGENT_IDENTITY='pc-codex')
+        self.assertEqual((info['identities'], info['source']), (['pc-codex'], 'AGENT_IDENTITY'))
+        info = self.resolve(self.root, AGENT_IDENTITY=' pc-claude, pc-codex ,pc-claude')  # no repo, no host needed
+        self.assertEqual(info['identities'], ['pc-claude', 'pc-codex'])
+        self.assertIn('invalid identity', self.resolve(self.repo, AGENT_IDENTITY='pc-claude,Bad!')['error'])
+
+    def test_host_file(self):
+        self.assertEqual(agent_identity.read_host(self.state), 'pc')
+        (self.state / 'host').unlink()
+        self.assertIsNone(agent_identity.read_host(self.state))
+        self.assertIn('no host file', self.resolve(self.repo)['error'])
+        for bad in ('', '# only a comment\n', 'Not A Host\n'):
+            (self.state / 'host').write_text(bad, encoding='utf-8')
+            with self.assertRaises(agent_identity.ResolutionError):
+                agent_identity.read_host(self.state)
+
+    def test_the_walk_stops_at_a_repo_without_a_toml(self):
+        inner = self.repo_at(self.repo / 'tools' / 'nested', 'main', toml=None)
+        info = self.resolve(inner)
+        self.assertEqual((info['identities'], info['worktree']), ([], str(inner)))
+        self.assertIn('no .agent-bus.toml', info['error'])
+
+    def test_state_dir_per_platform(self):
+        sd = agent_identity.state_dir
+        self.assertEqual(sd({'AGENT_BUS_STATE': '/run/x'}, 'linux'), Path('/run/x'))
+        self.assertEqual(sd({'APPDATA': r'C:\Users\a\AppData\Roaming'}, 'win32'),
+                         Path(r'C:\Users\a\AppData\Roaming') / 'agent-bus')
+        self.assertEqual(sd({}, 'darwin'), Path.home() / '.config' / 'agent-bus')
+        self.assertEqual(sd({}, 'linux'), Path.home() / '.config' / 'agent-bus')
+
+    def test_config_path_state_dir_first_then_build_agent_mailbox(self):
+        tools = self.root / 'tools-home'
+        legacy = self.repo / 'build' / 'agent-mailbox' / 'pc-claude.json'
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text('{}', encoding='utf-8')
+        cp = lambda: agent_identity.config_path('pc-claude', self.state, cwd=self.root, worktree=self.repo,
+                                                tools=tools)
+        self.assertEqual(cp(), legacy.absolute())  # fallback: an existing build/agent-mailbox config
+        (self.state / 'pc-claude.json').write_text('{}', encoding='utf-8')
+        self.assertEqual(cp(), self.state / 'pc-claude.json')  # the state dir wins
+        self.assertEqual(agent_identity.home_path(cp()), self.state / 'pc-claude.home.json')
+        self.assertEqual(agent_identity.config_path('pc-new', self.state, cwd=self.root, tools=tools),
+                         self.state / 'pc-new.json')  # nothing yet: the state dir is where it goes
+
+    def test_whoami_sends_nothing_and_the_cli_picks_the_resolved_config(self):
+        (self.state / 'pc-codex.json').write_text(json.dumps(dict(url='http://127.0.0.1:9', token='t',
+                                                                  peer='pc-codex')), encoding='utf-8')
+        out, cwd = io.StringIO(), os.getcwd()
+        os.chdir(self.repo / 'tools')
+        try:
+            with patch.dict(os.environ, {'AGENT_BUS_STATE': str(self.state)}), \
+                    patch.object(agent_mailbox, 'request', side_effect=AssertionError('whoami sent')), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(agent_mailbox.main(['whoami']), 0)
+                args = agent_mailbox.argparse.Namespace(config=None, identity=None, command='pending')
+                self.assertEqual(agent_mailbox.config_paths(args)[0], [self.state / 'pc-codex.json'])
+                args.identity = 'pc-claude'
+                self.assertEqual(agent_mailbox.config_paths(args)[0], [self.state / 'pc-claude.json'])
+            with patch.dict(os.environ, {'AGENT_BUS_STATE': str(self.state), 'AGENT_IDENTITY': 'pc-a,pc-b'}), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                agent_mailbox.main(['pending'])  # several identities: one command needs one
+        finally:
+            os.chdir(cwd)
+        shown = json.loads(out.getvalue())
+        self.assertEqual(shown['identities'][0]['identity'], 'pc-codex')
+        self.assertTrue(shown['identities'][0]['config_exists'])
 
 
 if __name__ == '__main__':

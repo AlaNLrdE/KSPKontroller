@@ -31,10 +31,18 @@ reused, or the identity's lease idle/gone for LEASE_GRACE), tells the coordinato
    python3 tools/agent_daemon.py --config build/agent-mailbox/pi-claude.json state [--mark-seen]
    python3 tools/agent_daemon.py --config build/agent-mailbox/pi-claude.json run      # the service
    python3 tools/agent_daemon.py --config build/agent-mailbox/pc-claude.json profile  # the rules a run gets
+
+Home pointer (identity resolution, docs/communication.rst): ``agent_mailbox.py claim`` writes
+``<identity>.home.json`` next to the config (worktree, repo, scope, branch, session, pid, time). Before each run
+the daemon reads it and uses its worktree as the run's cwd and allowlist root instead of the fixed work repo; a
+worktree that no longer exists means no run, one INFO 'unhealthy' to all and a local notification. Headless runs
+get ``AGENT_DAEMON_RUN=1`` so a SessionStart hook inside them never claims (and pauses) the identity. ``--config``
+is also looked up in the per-machine state dir (``AGENT_BUS_STATE``, ``%APPDATA%\\agent-bus``, ``~/.config/agent-bus``).
 """
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import os
@@ -314,6 +322,44 @@ New or unseen pending messages: {ids}. Work in {repo}. Reply in English in the m
 
 
 # -- files and state -------------------------------------------------------------------------------------------
+def state_dir():
+    """The per-machine agent-bus state dir (as agent_identity.state_dir; this file is copied alone on Linux)."""
+    if os.environ.get('AGENT_BUS_STATE'):
+        return Path(os.path.expanduser(os.environ['AGENT_BUS_STATE']))
+    if platform_name() == 'windows':
+        return Path(os.environ.get('APPDATA') or Path.home() / 'AppData' / 'Roaming') / 'agent-bus'
+    return Path.home() / '.config' / 'agent-bus'
+
+
+def home_file(config_path):
+    config_path = Path(config_path)
+    return config_path.with_name(config_path.stem + '.home.json')
+
+
+def home_work(config_path):
+    """(worktree, None) from <identity>.home.json, (None, worktree) when that worktree is gone, (None, None)
+    without a usable home pointer (the fixed work repo then applies)."""
+    home = read_json(home_file(config_path), None)
+    if not isinstance(home, dict) or not isinstance(home.get('worktree'), str) or not home['worktree']:
+        return None, None
+    work = Path(home['worktree'])
+    return (work, None) if work.is_dir() else (None, home['worktree'])
+
+
+def report_missing_home(config, identity, state, worktree, system=None):
+    """One INFO 'unhealthy' to all and a local notification per missing worktree; the run is skipped."""
+    if state.get('home_missing') == worktree:
+        return None
+    message_id = 'daemon-home-missing-%s-%s' % (identity, hashlib.sha256(worktree.encode('utf-8')).hexdigest()[:10])
+    text = ('daemon of %s unhealthy: home worktree %s (%s) no longer exists; no headless run until a session '
+            'claims %s again' % (identity, worktree, home_file(config).name, identity))
+    log(text)
+    send(config, 'all', message_id, 'INFO: ' + text)
+    notify_user(config, identity, 'daemon of %s unhealthy' % identity, text[:240], message_id + '-user', system)
+    state['home_missing'] = worktree
+    return message_id
+
+
 def files(config_path):
     config_path = Path(config_path)
     base = config_path.with_name(config_path.stem + '.daemon')
@@ -836,19 +882,22 @@ def run_prompt(identity, ids, profile):
                              pull='|pull --ff-only' if profile['name'] == 'pi' else '')
 
 
-def launch(config, identity, items, f, state, profile):
+def launch(config, identity, items, f, state, profile, work=None):
+    """One headless run in ``work`` (the home pointer's worktree, default the work repo), AGENT_DAEMON_RUN=1."""
+    work = work or WORK
     ids = ', '.join('#%d %s (%s from %s)' % (i['seq'], i['id'], kind(i), i['sender']) for i in items)
     prompt = run_prompt(identity, ids, profile)
     f['runs'].mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
     out = f['runs'] / (stamp + '.log')
-    argv = run_argv(prompt, profile, WORK, config)
-    log('run %s for %s' % (out.name, ids))
+    argv = run_argv(prompt, profile, work, config)
+    log('run %s for %s in %s' % (out.name, ids, work))
     started = time.time()
     try:
         with out.open('w', encoding='utf-8') as sink:
-            rc = subprocess.run(argv, cwd=WORK, stdout=sink, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                timeout=RUN_TIMEOUT, creationflags=NO_WINDOW).returncode
+            rc = subprocess.run(argv, cwd=work, stdout=sink, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                timeout=RUN_TIMEOUT, creationflags=NO_WINDOW,
+                                env=dict(os.environ, AGENT_DAEMON_RUN='1')).returncode
     except subprocess.TimeoutExpired:
         rc = 'timeout'
     except OSError as e:  # claude missing or not executable: a failed run, counted by the health check
@@ -880,8 +929,9 @@ def finish(config, identity, items, f, state, rc, output, name, ids, started, sy
     write_json(f['state'], state)
 
 
-def cycle(config, identity, f, profile):
-    """One collect + pending + maybe a run. False only when collect failed (the caller backs off)."""
+def cycle(config, identity, f, profile, profile_for=None):
+    """One collect + pending + maybe a run. False only when collect failed (the caller backs off).
+    ``profile_for(work)`` builds the profile for a home pointer's worktree other than the work repo."""
     if paused_until(f):
         return True  # never collect while an interactive session owns the identity
     failed = collect(config)
@@ -895,7 +945,16 @@ def cycle(config, identity, f, profile):
         log('ACK #%d %s from %s marked done' % (item['seq'], item['id'], item['sender']))
     items = [i for i in items if not is_ack(i)]
     if select(items, state, identity):
-        launch(config, identity, items, f, state, profile)
+        work, missing = home_work(config)
+        if missing:
+            report_missing_home(config, identity, state, missing)
+            write_json(f['state'], state)
+            return True
+        if state.pop('home_missing', None):
+            write_json(f['state'], state)
+        if work is not None and not same_path(work, WORK) and profile_for is not None:
+            profile = profile_for(work)
+        launch(config, identity, items, f, state, profile, work)
     return True
 
 
@@ -904,6 +963,8 @@ def resolve_config(value):
     path = Path(value)
     if path.is_absolute() or path.exists():
         return path.resolve()
+    if (state_dir() / path.name).is_file():  # the per-machine state dir holds <identity>.json first
+        return (state_dir() / path.name).resolve()
     for base in (TOOLS, WORK):
         if (base / path).exists():
             return (base / path).resolve()
@@ -956,7 +1017,9 @@ def run(args):
             log('watch failed: %r' % e)
             time.sleep(30)
         try:
-            ok = cycle(config, identity, f, profile)
+            ok = cycle(config, identity, f, profile,
+                       lambda work: load_profile(work, config, identity, args.profile, args.profile_file,
+                                                 tools=TOOLS, python=args.python))
         except Exception as e:  # keep listening through server outages
             log('cycle failed: %r' % e)
             ok = False
@@ -976,7 +1039,7 @@ def main(argv=None):
     ap.add_argument('--tools-dir', help='tools home (python, agent_mailbox.py; default AGENT_DAEMON_REPO or this '
                     "script's checkout)")
     ap.add_argument('--repo', '--workdir', dest='repo', help="work repo: the run's cwd, Edit and git -C root "
-                    '(default AGENT_DAEMON_WORK_REPO or the tools home)')
+                    'when no <identity>.home.json names a worktree (default AGENT_DAEMON_WORK_REPO or the tools home)')
     ap.add_argument('--python', help='python the run uses for mailbox commands (default: the tools venv on '
                     'Windows, else python3)')
     sub = ap.add_subparsers(dest='command', required=True)
