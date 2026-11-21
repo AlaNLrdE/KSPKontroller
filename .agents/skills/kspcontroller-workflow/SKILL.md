@@ -18,7 +18,9 @@ description: Step by step workflow for changing the KSPSerialIO plugin or the Ar
 5. From WSL (2026-11-21): `ci` and `tools/verify.py` detect WSL (`is_wsl`, override `KSP_WSL=0/1`), search the
    Windows installs under `/mnt/<drive>`, accept `KSPDIR="C:/..."` (converted by `wsl_path`) and check the game with
    `tasklist.exe`: `pgrep` cannot see the Windows `KSP_x64.exe`, so a pgrep-only check passes with the game open.
-   Keep that in any new running-game check. `./ci verify` from WSL now finds the real install, so its install
+   Keep that in any new running-game check, and make it **fail closed**: if tasklist.exe cannot run under WSL
+   (interop off, /mnt/c not mounted, not on PATH, timeout) the state is unknown, so `ci` dies and verify.py
+   reports "running" (pc-claude review, 2026-11-21); never fall back to pgrep alone. `./ci verify` from WSL now finds the real install, so its install
    and `log:` checks run there too; a DLL built in WSL differs byte-wise from the one built on Windows (embedded
    paths), so `installed == built` fails until the install comes from the same checkout. The board's COM port is
    not visible in WSL without usbipd-win: flash and board tests stay on Windows (`.\ci.cmd`).

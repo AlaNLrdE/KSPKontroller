@@ -364,9 +364,23 @@ ksp_list() {
   done < <(ksp_candidates)
 }
 
+# Under WSL the game is a Windows process: only tasklist.exe sees it. If it cannot run (interop off, /mnt/c not
+# mounted, not on PATH, timeout) the state is unknown and the check fails closed (dies) instead of trusting pgrep.
+wsl_tasklist() {
+  local tl out
+  tl="$(command -v tasklist.exe 2>/dev/null || true)"
+  [ -n "$tl" ] || { [ -x /mnt/c/Windows/System32/tasklist.exe ] && tl=/mnt/c/Windows/System32/tasklist.exe; } || true
+  if [ -n "$tl" ] && out="$(timeout 30 "$tl" 2>/dev/null)" && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+  die "cannot check KSP from WSL: tasklist.exe unavailable (set KSP_WSL=0 only if the game is not a Windows install)"
+}
+
 ksp_running() {
   if command -v tasklist >/dev/null 2>&1; then tasklist 2>/dev/null | grep -qi "KSP_x64.exe"
-  elif is_wsl && tasklist.exe 2>/dev/null | grep -qi "KSP_x64.exe"; then return 0   # the Windows game, seen from WSL
+  elif is_wsl; then
+    local list
+    list="$(wsl_tasklist)" || exit 1
+    printf '%s\n' "$list" | grep -qi "KSP_x64.exe" && return 0
+    pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1  # a Linux game inside WSL too
   else pgrep -f 'KSP\.x86_64|KSP\.app/Contents/MacOS/' >/dev/null 2>&1; fi  # same as tools/verify.py KSP_PROCESS
 }
 

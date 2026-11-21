@@ -87,16 +87,36 @@ class KspProcessPatternTest(unittest.TestCase):
 
         def fake_run(cmd, **kw):
             calls.append(cmd[0])
-            out = "KSP_x64.exe                  1234 Console    1  9,000,000 K\n" if cmd[0] == "tasklist.exe" else ""
-            return mock.Mock(stdout=out, returncode=1)
+            is_tasklist = os.path.basename(cmd[0]) == "tasklist.exe"
+            out = "KSP_x64.exe                  1234 Console    1  9,000,000 K\n" if is_tasklist else ""
+            return mock.Mock(stdout=out, returncode=0 if is_tasklist else 1)
 
+        tl = "/mnt/c/Windows/System32/tasklist.exe"
         with mock.patch.dict(os.environ, {"KSP_WSL": "1"}), mock.patch.object(verify.os, "name", "posix"), \
+                mock.patch.object(verify.shutil, "which", return_value=tl), \
                 mock.patch.object(verify.subprocess, "run", side_effect=fake_run):
             self.assertTrue(verify.ksp_running())
-        self.assertEqual(calls, ["tasklist.exe"])
+        self.assertEqual(calls, [tl])
         with mock.patch.dict(os.environ, {"KSP_WSL": "0"}), mock.patch.object(verify.os, "name", "posix"), \
                 mock.patch.object(verify.subprocess, "run", side_effect=fake_run):
             self.assertFalse(verify.ksp_running())             # plain Linux: only pgrep, which finds nothing
+
+    def test_wsl_fails_closed_when_tasklist_cannot_run(self):
+        """Unknown state under WSL (interop off, timeout) must read as running, never as closed (review 2026-11-21)."""
+        import io
+        from unittest import mock
+        for error in (OSError("interop disabled"), verify.subprocess.TimeoutExpired("tasklist.exe", 30)):
+            with mock.patch.dict(os.environ, {"KSP_WSL": "1"}), mock.patch.object(verify.os, "name", "posix"), \
+                    mock.patch.object(verify.shutil, "which", return_value="/mnt/c/Windows/System32/tasklist.exe"), \
+                    mock.patch.object(verify.subprocess, "run", side_effect=error), \
+                    mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                self.assertTrue(verify.ksp_running(), repr(error))
+                self.assertIn("cannot check KSP from WSL", err.getvalue())
+        with mock.patch.dict(os.environ, {"KSP_WSL": "1"}), mock.patch.object(verify.os, "name", "posix"), \
+                mock.patch.object(verify.shutil, "which", return_value=None), \
+                mock.patch.object(verify.os.path, "isfile", return_value=False), \
+                mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertTrue(verify.ksp_running())                # not on PATH and no /mnt/c: running
 
     def test_ci_uses_the_same_pattern(self):
         with open(os.path.join(verify.ROOT, "ci"), encoding="utf-8") as f:
