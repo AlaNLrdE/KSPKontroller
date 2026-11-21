@@ -47,6 +47,8 @@ BACKUPS_KEPT = 14
 STATES = ('queued', 'delivered', 'archived', 'acked', 'done')
 ORDER = {name: index for index, name in enumerate(STATES)}
 KINDS = ('REQUEST', 'ACK', 'RESULT', 'NOTICE')  # anything else is INFO
+ALLOWLIST = 'allowlist.json'  # next to the journal (and server.json): a JSON list of identities that may register
+GATE_REFUSAL = 'identity not on the allowlist; see agent-bus-handbook docs/onboarding.rst'
 
 
 def valid_identity(name):
@@ -74,6 +76,10 @@ class Conflict(ValueError):
 
 class NotFound(ValueError):
     """Unknown message id (HTTP 404)."""
+
+
+class Forbidden(ValueError):
+    """The register gate refuses a new identity (HTTP 403)."""
 
 
 class LockBusy(Conflict):
@@ -223,9 +229,11 @@ class Journal:
     The first record is a header snapshot (version, last sequence, receipts, locks, agents); each following
     record upserts a message, drops a finished one into a receipt, or changes a lock or an agent. Protocol 2/3
     journals (plain JSONL with an unchecked header) are migrated on load after a backup copy."""
-    def __init__(self, path):
+    def __init__(self, path, allowlist=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # The register gate: re-read on every register so the operator edits it without a restart.
+        self.allowlist_path = Path(allowlist) if allowlist else self.path.parent / ALLOWLIST
         self.backup_dir = self.path.parent / 'backup'
         self.condition = threading.Condition()
         self.messages = {}  # id -> message, in sequence order
@@ -423,6 +431,44 @@ class Journal:
             view['state'] = 'idle' if now - agent['last_seen'] < GONE_AFTER else 'gone'
         return view
 
+    def register_gate(self):
+        """(state, names, problem): ('off', None, None) without an allowlist file, ('on', set, None) for a valid
+        list of HOST-AGENT names, ('invalid', None, reason) otherwise; an invalid file refuses NEW identities."""
+        try:
+            raw = self.allowlist_path.read_bytes()
+        except FileNotFoundError:
+            return 'off', None, None
+        except OSError as error:
+            return 'invalid', None, 'cannot read %s: %s' % (self.allowlist_path.name, error.strerror or error)
+        try:
+            names = json.loads(raw.decode('utf-8-sig'))
+        except (UnicodeDecodeError, ValueError) as error:
+            return 'invalid', None, '%s is not valid JSON: %s' % (self.allowlist_path.name, error)
+        if not isinstance(names, list) or not all(isinstance(n, str) and AGENT.match(n) for n in names):
+            return 'invalid', None, '%s must be a JSON list of HOST-AGENT identities' % self.allowlist_path.name
+        return 'on', set(names), None
+
+    def gate_summary(self):
+        state, names, problem = self.register_gate()
+        if state == 'on':
+            return 'on (%d identities)' % len(names)
+        return 'off' if state == 'off' else 'on, invalid allowlist: new identities refused (%s)' % problem
+
+    def _check_gate(self, identity):
+        """Only NEW identities pass the gate: one already in the journal renews and takes over as before, so
+        seeding or editing the allowlist can never lock out a live agent."""
+        state, names, problem = self.register_gate()
+        if state == 'off' or (state == 'on' and identity in names):
+            return
+        if state == 'invalid':
+            print('MAILBOX register gate: refused new identity %s, %s' % (identity, problem),
+                  file=sys.stderr, flush=True)
+            raise Forbidden('register gate: the server allowlist is invalid (%s); new identities are refused '
+                            'until the operator fixes it' % problem)
+        print('MAILBOX register gate: refused new identity %s (not on the allowlist)' % identity,
+              file=sys.stderr, flush=True)
+        raise Forbidden(GATE_REFUSAL)
+
     def register(self, identity, session, tool, cwd, takeover=False, release=False, now=None):
         now = time.time() if now is None else now
         if not isinstance(identity, str) or not AGENT.match(identity):
@@ -433,6 +479,8 @@ class Journal:
             raise ValueError('tool 1..40 and cwd up to 400 characters required')
         with self.condition:
             old = self.agents.get(identity)
+            if old is None and not release:
+                self._check_gate(identity)
             if old is not None and old.get('retired'):
                 raise Conflict('identity %s was retired by %s on %s; only retire --undo brings it back'
                                % (identity, old.get('retired_by', '?'), iso(old['retired'])))
@@ -915,7 +963,7 @@ class Journal:
         with self.condition:
             active = sum(1 for a in self.agents.values() if self._agent_view(a, now)['state'] == 'active')
             return {'ok': True, 'protocol': PROTOCOL, 'messages': len(self.messages), 'last_seq': self.last_seq,
-                    'agents': active, 'overdue': len(self.overdue(now))}
+                    'agents': active, 'overdue': len(self.overdue(now)), 'register_gate': self.gate_summary()}
 
 
 def make_server(host, port, journal, token, artifact_dir=None):
@@ -946,6 +994,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
                 return self.reply(200, action())
             except NotFound as e:
                 return self.reply(404, {'error': str(e)})
+            except Forbidden as e:
+                return self.reply(403, {'error': str(e)})
             except Conflict as e:
                 return self.reply(409, dict(e.detail, error=str(e)))
             except (ValueError, TypeError) as e:
@@ -973,7 +1023,8 @@ def make_server(host, port, journal, token, artifact_dir=None):
             if url.path == '/locks':
                 return self.guarded(lambda: {'locks': journal.lock('list', None, None)})
             if url.path == '/agents':
-                return self.reply(200, {'agents': journal.agents_list(retired=args.get('retired') == '1')})
+                return self.reply(200, {'agents': journal.agents_list(retired=args.get('retired') == '1'),
+                                        'register_gate': journal.gate_summary()})
             if url.path == '/overdue':
                 return self.reply(200, {'overdue': journal.overdue()})
             if url.path == '/track':
@@ -1364,6 +1415,8 @@ def main(argv=None):
     serve.add_argument('--port', type=int, default=50380)
     serve.add_argument('--journal', default='build/agent-mailbox/shared.jsonl')
     serve.add_argument('--artifacts', default='build/agent-mailbox/evidence')
+    serve.add_argument('--allowlist', help='Register gate file (default: allowlist.json next to the journal); '
+                       'without the file every identity may register')
     reg = sub.add_parser('register', help='Register this identity and take its exclusive session lease')
     reg.add_argument('--tool', help='claude, codex ... (default: the AGENT part of the identity)')
     reg.add_argument('--takeover', action='store_true', help='Only after the old session is confirmed dead')
@@ -1428,9 +1481,10 @@ def main(argv=None):
         return
     config = json.loads(config_path.read_text(encoding='utf-8'))
     if args.command == 'serve':
-        server = make_server(args.bind, args.port, Journal(args.journal), config['token'], args.artifacts)
-        print('MAILBOX protocol %d listening on %s:%s; journal %s' % (PROTOCOL, *server.server_address, args.journal),
-              flush=True)
+        journal = Journal(args.journal, args.allowlist)
+        server = make_server(args.bind, args.port, journal, config['token'], args.artifacts)
+        print('MAILBOX protocol %d listening on %s:%s; journal %s; register gate %s' % (
+            PROTOCOL, *server.server_address, args.journal, journal.gate_summary()), flush=True)
         try:
             server.serve_forever()
         finally:
@@ -1438,7 +1492,9 @@ def main(argv=None):
     elif args.command == 'register':
         print(json.dumps(register(config, config_path, args.tool, args.takeover, args.release)))
     elif args.command == 'agents':
-        for agent in request(config, '/agents' + ('?retired=1' if args.retired else ''))['agents']:
+        listing = request(config, '/agents' + ('?retired=1' if args.retired else ''))
+        print('MAILBOX register gate: %s' % listing.get('register_gate', 'unknown (older server)'))
+        for agent in listing['agents']:
             print('AGENT {identity} {state} tool={tool} cwd={cwd} last={last}{retired}'.format(
                 last=iso(agent['last_seen']), **dict(agent, retired=' RETIRED %s by %s' % (
                     iso(agent['retired']), agent.get('retired_by', '?')) if agent.get('retired') else '')))
@@ -1466,7 +1522,9 @@ def main(argv=None):
         args.out.write_bytes(payload)
         print('Saved evidence to ' + str(args.out))
     elif args.command == 'status':
-        print(json.dumps(request(config, '/health')))
+        health = request(config, '/health')
+        print(json.dumps(health))
+        print('MAILBOX register gate: %s' % health.get('register_gate', 'unknown (older server)'))
         for line in show_overdue(request(config, '/overdue')['overdue']):
             print(line)
     elif args.command == 'overdue':

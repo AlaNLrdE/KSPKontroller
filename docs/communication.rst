@@ -327,6 +327,20 @@ separately. ``/health`` reports ``"protocol": 4``.
   another session takes the identity only with ``register --takeover``, once the old agent is confirmed gone; the
   old session is then refused. ``agents`` lists identity, tool, directory, last heartbeat and state: ``active``
   (lease alive), ``idle`` (expired less than an hour ago) or ``gone`` (released or older).
+* **Register gate for new identities (mailbox #807).** When ``allowlist.json`` exists in the server data folder
+  (next to ``server.json`` and the journal; ``serve --allowlist PATH`` names another file), it must hold a JSON
+  list of HOST-AGENT identities, for example ``["pi-claude", "pc-claude", "mac-claude"]``. ``register`` of an
+  identity the journal has never seen and that is not on the list is refused with HTTP 403 and
+  ``identity not on the allowlist; see agent-bus-handbook docs/onboarding.rst``; the client prints that message
+  and exits with status 1. The server re-reads the file on every new registration, so the operator edits it
+  without a restart. Without the file there is no gate (the earlier behaviour). The gate applies to NEW identities
+  only: an identity already registered in the journal renews its lease, re-registers and takes over exactly as
+  before even when it is missing from the list, so seeding the file can never lock out a live agent; to remove an
+  identity for good, ``retire`` it. A file that cannot be read, is not valid JSON, or is not a list of HOST-AGENT
+  names fails closed: new identities get HTTP 403 naming the problem, the server logs a ``MAILBOX register gate:``
+  line on stderr (the unit's journal) and keeps serving everyone else. ``status`` and ``agents`` print
+  ``MAILBOX register gate: off``, ``on (N identities)`` or ``on, invalid allowlist: ...``; ``/health`` and
+  ``/agents`` carry the same text as ``register_gate``, and ``serve`` prints it at start.
 * **Addressing expanded at send time.** ``--to`` takes one registered identity, a comma list, a host group
   (``mac``, ``pc``, ``pi``: every agent registered on that host when the message is sent) or ``all``. The server
   stores the explicit recipient list (the sender excluded) with the message, so a broadcast gives each agent its
