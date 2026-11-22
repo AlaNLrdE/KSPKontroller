@@ -52,6 +52,14 @@ for each flash (CLAUDE.md rule 1); a request like "disable it in the Arduino" is
 
 ## Facts learned (with where)
 
+- `~/dev` is a `repo` workspace (2026-11-22, mailbox #1109): a `repo init -g` with a bad group list
+  (`default/ksp2,...`, slash instead of comma) followed by `repo sync` rewrote every checkout. The git stores in
+  `~/dev/.repo/projects` + `project-objects` (branches, unpushed commits, `.claude/worktrees`) survived, but the
+  ignored `build/` (venv, builds, perf, worktree-archive, mailbox configs/history) was lost and each checkout was
+  left detached at the manifest revision. Recover: `git checkout main`, `python3 -m venv build/venv` +
+  `pip install -r tools/requirements.txt -r docs/requirements.txt`, recreate the mailbox configs. Always pass groups
+  comma-separated and including `default`; check `git -C ~/dev/.repo/manifests config --get manifest.groups`.
+
 - A serial write blocked the main thread ~20 ms five times a second; moved to a background writer thread (0.19.3.4).
 - The UNO R4 only transmits while the host asserts DTR, and only answers at 115200 baud (0.19.3.1).
 - The board froze three times with USB still enumerated and Windows seeing COM5; once the staging was *not* the
